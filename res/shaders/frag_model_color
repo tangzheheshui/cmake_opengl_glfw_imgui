@@ -1,0 +1,57 @@
+#version 330 core
+out vec4 FragColor;
+
+in vec3 pFragPos;
+in vec3 pNormal; 
+
+struct Materail {
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+    float shininess;
+    float shininess_strength;
+};
+
+struct Light {
+    bool is_open;
+    vec3 position;
+    vec3 direction;
+    float cosTheta;
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+};
+
+uniform Materail uMaterail;
+uniform Light uLight;
+uniform vec3 uCameraPos;
+
+void main()
+{
+    vec3 result;
+    if (uLight.is_open) {
+        vec3 normal = normalize(pNormal);
+        vec3 dirLight = normalize(uLight.position.xyz - pFragPos);
+        float cos = dot(-dirLight, normalize(uLight.direction));
+            
+        // ambient
+        result += uLight.ambient * uMaterail.ambient;
+    
+        if (cos > uLight.cosTheta) {
+            // diffuse
+            float diff = max(dot(dirLight, normal), 0.0);
+            result += uLight.diffuse * uMaterail.diffuse * diff;
+            
+            // specular
+            vec3 viewDir = normalize(uCameraPos - pFragPos);
+            vec3 halfwayDir = normalize(dirLight + viewDir);   
+            float spec = pow(max(dot(normal, halfwayDir), 0.0), uMaterail.shininess);
+            vec3 specular = uLight.specular * (spec * uMaterail.specular);
+            result += specular;
+        }
+    } else {
+        result = uMaterail.diffuse;
+    }
+    
+    FragColor = vec4(result, 1.0);
+}
