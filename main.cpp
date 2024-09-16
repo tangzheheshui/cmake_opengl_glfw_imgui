@@ -34,7 +34,6 @@ float lastX = 800.0f / 2.0;
 float lastY = 600.0 / 2.0;
 float fov = 45.0f;
 
-
 int main()
 {
     // glfw: initialize and configure
@@ -68,7 +67,7 @@ int main()
 
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
-    InputProcessMng::setFrameBufferSize(width, height);
+    InputProcessMng::getInstance().setFrameBufferSize(width, height);
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
@@ -193,7 +192,7 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn)
 // ----------------------------------------------------------------------
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 {
-    InputProcessMng::processScroll(xoffset, yoffset);
+    InputProcessMng::getInstance().onMouseMiddleScroll(xoffset, yoffset);
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -204,15 +203,35 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     }
     else if (action == GLFW_RELEASE)
     {
-        InputProcessMng::processKeyRelease(key);
+        if (GLFW_KEY_C == key)
+        {
+            InputProcessMng::getInstance().onKeyRelease_C();
+        }
     }
 }
 
 // 鼠标点击回调函数
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        double xpos, ypos;
-        glfwGetCursorPos(window, &xpos, &ypos);
-        InputProcessMng::processMouseLeftKeyUp(xpos, ypos);
+    double xpos, ypos;
+    glfwGetCursorPos(window, &xpos, &ypos);
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        if (action == GLFW_RELEASE)
+        {
+            InputProcessMng::getInstance().onMouseLeftUp(xpos, ypos);
+        }
+    }
+
+    else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+        if (action == GLFW_PRESS)
+        {
+            InputProcessMng::getInstance().onMouseRightDown(xpos, ypos);
+        }
+    }
+    else if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
+        if (action == GLFW_PRESS)
+        {
+            InputProcessMng::getInstance().onMouseMiddleDown(xpos, ypos);
+        }
     }
 }

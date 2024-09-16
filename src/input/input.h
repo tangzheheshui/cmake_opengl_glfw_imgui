@@ -8,24 +8,41 @@
 #ifndef input_hpp
 #define input_hpp
 
+// 鼠标键盘管理的单例类
 class InputProcessMng {
 public:
-    static void setFrameBufferSize(int w, int h);
+    static InputProcessMng& getInstance();
+    InputProcessMng(const InputProcessMng&) = delete;
+    InputProcessMng& operator=(const InputProcessMng&) = delete;
+
+    void setFrameBufferSize(int w, int h);
     
-    // 左键点击抬起
-    static void processMouseLeftKeyUp(double x, double y);
-    
-    // 键盘按键抬起
-    static void processKeyRelease(int key);
-    
-    // 鼠标滚轮
-    static void processScroll(double xOffset, double yOffset);
+#pragma region mouse_event
+    // 左键up
+    void onMouseLeftUp(double x, double y);
+
+    void onMouseRightDown(double x, double y);
+
+    // 滚轮滚动
+    void onMouseMiddleScroll(double xOffset, double yOffset);
+
+    // 滚轮点击
+    void onMouseMiddleDown(double x, double y);
     
     // 鼠标移动
-    static void processMouseMove(double x, double y);
+    void onMouseMove(double x, double y);
+#pragma endregion
+
+#pragma region keyboard_event
+    void onKeyRelease_C();
+#pragma endregion
+
 private:
-    inline static int _frameWidth = 0;
-    inline static int _frameHeight = 0;
+    InputProcessMng() {}
+    ~InputProcessMng() {}
+private:
+    int _frameWidth = 0;
+    int _frameHeight = 0;
 };
 
 #endif /* input_hpp */
