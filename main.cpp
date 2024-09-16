@@ -19,8 +19,8 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
 
 // settings
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
+const unsigned int SCR_WIDTH = 1600;
+const unsigned int SCR_HEIGHT = 1000;
 
 // camera
 glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f, 3.0f);
@@ -63,8 +63,8 @@ int main()
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetKeyCallback(window, key_callback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    glfwSetInputMode(window, GLFW_CURSOR_HIDDEN, GLFW_CURSOR_HIDDEN);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    //glfwSetInputMode(window, GLFW_CURSOR_HIDDEN, GLFW_CURSOR_HIDDEN);
+    //glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
@@ -78,7 +78,7 @@ int main()
         return -1;
     }    
 
-    Camera::GetCamera().setPosition({ 0,0,20 });
+    Camera::GetCamera().setPosition({ 0,0,40 });
     auto a = Scene::getScene();
     // ≥ı ºªØ ImGui
     IMGUI_CHECKVERSION();
@@ -116,11 +116,6 @@ int main()
             // ‰÷»æ ImGui
             ImGui::Render();
         }
-
-        // render
-        // ------
-        glClearColor(0.f, 0.3f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
