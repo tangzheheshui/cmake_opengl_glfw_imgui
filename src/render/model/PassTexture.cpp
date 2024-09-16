@@ -5,10 +5,10 @@
 //  Created by liuhaifeng02 on 2024/1/22.
 //
 
-#include "PassTexture.hpp"
-#include "image.hpp"
+#include "PassTexture.h"
+#include "image.h"
 #include "../Light.h"
-#include "../scene.hpp"
+#include "../scene.h"
 
 Shader* PassTexture::getShader(uint32_t flags) {
     bool shadow = (flags & DrawOption::DRAW_SHADOW);

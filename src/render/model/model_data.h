@@ -10,7 +10,7 @@
 
 #include <glm/detail/type_quat.hpp>
 #include <glm/gtx/quaternion.hpp>
-#include "image.hpp"
+#include "image.h"
 
 #define MAX_BONE_INFLUENCE 4
 

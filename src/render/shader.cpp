@@ -5,7 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/1.
 //
 
-#include "shader.hpp"
+#include "shader.h"
 
 #include <glad/glad.h>
 #include <fstream>

@@ -5,13 +5,13 @@
 //  Created by liuhaifeng02 on 2024/3/2.
 //
 
-#include "input.hpp"
+#include "input.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <fstream>
-#include "camera.hpp"
-#include "scene.hpp"
+#include "camera.h"
+#include "scene.h"
 
 void InputProcessMng::setFrameBufferSize(int w, int h) {
     _frameWidth = w;
@@ -29,12 +29,12 @@ void InputProcessMng::processKeyRelease(int key) {
         unsigned char* pixels = new unsigned char[width * height * 3]; // 假设使用 RGB 颜色格式
         glReadPixels(0, 0, width, height, GL_BGR, GL_UNSIGNED_BYTE, pixels);
 
-        // 写入图像数据到文�?
+        // 写入图像数据到文�?
         std::string rootPath = "/Users/liuhaifeng/personal/OpenglLearnMac/OpenglLearn/screen_picture/";
         std::ofstream imageFile(rootPath + "output_image.bmp", std::ios::binary);
         if (imageFile.is_open())
         {
-            // BMP 文件�?
+            // BMP 文件�?
             char bmpHeader[54] = {0};
             bmpHeader[0] = 'B';
             bmpHeader[1] = 'M';
@@ -46,7 +46,7 @@ void InputProcessMng::processKeyRelease(int key) {
             bmpHeader[5] = (fileSize >> 24) & 0xFF;
             bmpHeader[10] = 54;
             
-            // 图像信息�?
+            // 图像信息�?
             bmpHeader[14] = 40;
             bmpHeader[18] = width & 0xFF;
             bmpHeader[19] = (width >> 8) & 0xFF;
@@ -59,7 +59,7 @@ void InputProcessMng::processKeyRelease(int key) {
             bmpHeader[26] = 1;
             bmpHeader[28] = 24;
             
-            // 写入文件�?
+            // 写入文件�?
             imageFile.write(bmpHeader, 54);
             
             // 写入图像数据

@@ -12,7 +12,7 @@
 #include <vector>
 #include <glad/glad.h>
 #include <glm/glm.hpp>
-#include "math/matrix.hpp"
+#include "math/matrix.h"
 
 namespace fs = std::filesystem;
 

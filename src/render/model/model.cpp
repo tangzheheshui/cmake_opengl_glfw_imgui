@@ -5,15 +5,15 @@
 //  Created by liuhaifeng02 on 2024/1/3.
 //
 
-#include "model.hpp"
+#include "model.h"
 #include "core/taskQueue.h"
 #include <iostream>
 #include <filesystem>
-#include "core/math/math.hpp"
+#include "core/math/math.h"
 
 void Model::LoadFile(const std::string &path) {
     if (!m_filepath.empty()) {
-        assert(0); // 不允许变更模型信息
+        assert(0); // 不允许变更模型信�?
         return;
     }
     // Load the model file.
@@ -96,7 +96,7 @@ void Model::processAnimation(const aiScene* scene) {
             
             animation.nodeAnims.push_back(nodeAni);
         }
-        // 目前只取一个动画
+        // 目前只取一个动�?
         m_model_data.animation = animation;
         break;
     }

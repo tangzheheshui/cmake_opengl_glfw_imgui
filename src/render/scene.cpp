@@ -5,14 +5,14 @@
 //  Created by liuhaifeng02 on 2024/1/25.
 //
 
-#include "scene.hpp"
+#include "scene.h"
 #include <glm/glm.hpp>
 #include <vector>
-#include "model/model.hpp"
-#include "object/ImageRectangle.hpp"
-#include "object/Line.hpp"
-#include "object/Sky.hpp"
-#include "image.hpp"
+#include "model/model.h"
+#include "object/ImageRectangle.h"
+#include "object/Line.h"
+#include "object/Sky.h"
+#include "image.h"
 #include "Light.h"
 #include "core/taskQueue.h"
 

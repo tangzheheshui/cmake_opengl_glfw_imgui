@@ -8,7 +8,7 @@
 #ifndef PassColor_hpp
 #define PassColor_hpp
 
-#include "pass.hpp"
+#include "pass.h"
 
 class PassColor : public RenderPass {
 public:

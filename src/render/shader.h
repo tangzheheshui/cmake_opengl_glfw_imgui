@@ -12,7 +12,7 @@
 #include <map>
 #include <vector>
 #include <glm/mat4x4.hpp>
-#include "math/matrix.hpp"
+#include "math/matrix.h"
 
 class Shader {
 public:

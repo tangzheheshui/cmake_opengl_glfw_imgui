@@ -5,10 +5,10 @@
 //  Created by liuhaifeng02 on 2024/4/7.
 //
 
-#include "Sky.hpp"
-#include "render/shader.hpp"
-#include "render/camera.hpp"
-#include "render/image.hpp"
+#include "Sky.h"
+#include "render/shader.h"
+#include "render/camera.h"
+#include "render/image.h"
 
 bool Sky::draw() {
     float skyboxVertices[] = {

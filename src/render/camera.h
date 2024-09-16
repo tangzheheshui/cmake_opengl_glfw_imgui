@@ -10,7 +10,7 @@
 
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
-#include "math/matrix.hpp"
+#include "math/matrix.h"
 
 class Camera {
 public:

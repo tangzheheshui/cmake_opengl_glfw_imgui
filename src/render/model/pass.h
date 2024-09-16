@@ -11,10 +11,10 @@
 #include <vector>
 #include "glm/glm.hpp"
 #include <glad/glad.h>
-#include "camera.hpp"
-#include "shader.hpp"
+#include "camera.h"
+#include "shader.h"
 #include "model_data.h"
-#include "math/matrix.hpp"
+#include "math/matrix.h"
 
 class RenderPass {
 public:

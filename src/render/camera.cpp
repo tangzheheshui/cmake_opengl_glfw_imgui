@@ -5,7 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/2.
 //
     
-#include "camera.hpp"
+#include "camera.h"
 
 const float YAW         = 0.0f;
 const float PITCH       =  0.0f;

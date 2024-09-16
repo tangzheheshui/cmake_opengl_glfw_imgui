@@ -12,7 +12,7 @@
 #include <mutex>
 #include <map>
 #include "BaseDraw.h"
-#include "shader.hpp"
+#include "shader.h"
 
 static const std::string STR_DEPTH_TEXTURE = "depth_texture";
 static const std::string STR_TEXTURE_PATH = "E:/project/cmake_opengl_glfw_imgui/res/textures/";

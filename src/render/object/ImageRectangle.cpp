@@ -5,11 +5,11 @@
 //  Created by liuhaifeng02 on 2024/1/25.
 //
 
-#include "ImageRectangle.hpp"
-#include "../image.hpp"
-#include "../shader.hpp"
-#include "../camera.hpp"
-#include "../scene.hpp"
+#include "ImageRectangle.h"
+#include "../image.h"
+#include "../shader.h"
+#include "../camera.h"
+#include "../scene.h"
 #include "../Light.h"
 
 bool ImageRectangle::draw() {
@@ -96,10 +96,10 @@ bool ImageRectangle::draw() {
     // auto cam_pos = Camera::GetCamera().getPossition();
     shader->setFloat3("uCameraPos", 15, 15, 0);
     
-    // 透明度
+    // 透明�?
     shader->setFloat("uAlpha", getAlpha());
     
-    // 开启混合
+    // 开启混�?
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glEnable(GL_BLEND);

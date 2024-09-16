@@ -7,9 +7,9 @@
 
 #include <iostream>
 
-#include "render/scene.hpp"
-#include "camera.hpp"
-#include "input/input.hpp"
+#include "render/scene.h"
+#include "camera.h"
+#include "input/input.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);

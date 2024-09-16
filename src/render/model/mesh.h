@@ -14,8 +14,8 @@
 #include "assimp/Importer.hpp"
 #include "assimp/scene.h"
 #include "assimp/postprocess.h" 
-#include "PassColor.hpp"
-#include "PassTexture.hpp"
+#include "PassColor.h"
+#include "PassTexture.h"
 #include "glm/glm.hpp"
 #include "model_data.h"
 

@@ -15,7 +15,13 @@ include_directories(3rdparty/imgui)
 include_directories(3rdparty/)
 include_directories(src/)
 include_directories(src/core/)
-include_directories(src/render/)
+include_directories(src/render/
+)
+
+# 收集所有的头文件
+file(GLOB_RECURSE HEADER_FILES
+"${CMAKE_SOURCE_DIR}/src/*.h"
+)
 
 # 源文件
 set(SRC_PTAH ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -31,10 +37,19 @@ ${SRC_LIST1}
 ${SRC_LIST2} 
 ${SRC_LIST3} 
 ${SRC_LIST4}
-${SRC_LIST5})
+${SRC_LIST5}
+${HEADER_FILES}
+)
 
 # 可执行文件
-add_executable(my_app main.cpp ${SRC_LIST1} ${SRC_LIST2} ${SRC_LIST3} ${SRC_LIST4} ${SRC_LIST5})
+add_executable(my_app main.cpp 
+${SRC_LIST1} 
+${SRC_LIST2} 
+${SRC_LIST3}
+${SRC_LIST4} 
+${SRC_LIST5}
+${HEADER_FILES}
+)
 
 # 链接库
 target_link_libraries(my_app glad)

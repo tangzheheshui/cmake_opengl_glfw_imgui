@@ -5,15 +5,15 @@
 //  Created by liuhaifeng02 on 2024/1/3.
 //
 
-#include "mesh.hpp"
+#include "mesh.h"
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include "shader.hpp"
-#include "image.hpp"
-#include "camera.hpp"
+#include "shader.h"
+#include "image.h"
+#include "camera.h"
 
 Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
     if (!meshData) {

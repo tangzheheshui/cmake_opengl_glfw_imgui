@@ -8,7 +8,7 @@
 #ifndef PassTexture_hpp
 #define PassTexture_hpp
 
-#include "pass.hpp"
+#include "pass.h"
 
 class PassTexture : public RenderPass {
 public:

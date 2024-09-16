@@ -5,7 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/1.
 //
 
-#include "image.hpp"
+#include "image.h"
 
 #include <iostream>
 #include <fstream>

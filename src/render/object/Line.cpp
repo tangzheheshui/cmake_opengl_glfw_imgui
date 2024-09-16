@@ -5,10 +5,10 @@
 //  Created by liuhaifeng02 on 2024/1/25.
 //
 
-#include "Line.hpp"
+#include "Line.h"
 #include <glad/glad.h>
-#include "../shader.hpp"
-#include "../camera.hpp"
+#include "../shader.h"
+#include "../camera.h"
 
 void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsigned int> &indices) {
     m_points = points;

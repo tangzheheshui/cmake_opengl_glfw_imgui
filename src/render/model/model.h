@@ -8,16 +8,16 @@
 #ifndef model_hpp
 #define model_hpp
 
-#include "mesh.hpp"
+#include "mesh.h"
 #include <map>
 #include <vector>
 #include <glm/glm.hpp>
 #include "model_data.h"
 #include "../BaseDraw.h"
 #include <time.h>
-#include "math/matrix.hpp"
-#include "aabb.hpp"
-#include "image.hpp"
+#include "math/matrix.h"
+#include "aabb.h"
+#include "image.h"
 
 class AssimpGLMHelpers
 {

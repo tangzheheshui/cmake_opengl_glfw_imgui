@@ -5,7 +5,7 @@
 //  Created by liuhaifeng02 on 2024/2/24.
 //
 
-#include "matrix.hpp"
+#include "matrix.h"
 #include <cmath>
 #include <iostream>
 

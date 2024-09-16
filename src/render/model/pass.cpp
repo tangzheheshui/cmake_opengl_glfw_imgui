@@ -5,10 +5,10 @@
 //  Created by liuhaifeng02 on 2024/1/22.
 //
 
-#include "pass.hpp"
-#include "../scene.hpp"
+#include "pass.h"
+#include "../scene.h"
 #include "../Light.h"
-#include "image.hpp"
+#include "image.h"
 
 RenderPass::RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
     m_mesh_data = meshData;
