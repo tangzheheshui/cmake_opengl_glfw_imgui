@@ -25,6 +25,14 @@ aux_source_directory(${SRC_PTAH}/render/object SRC_LIST3)
 aux_source_directory(${SRC_PTAH}/input SRC_LIST4)
 aux_source_directory(${SRC_PTAH}/core/math SRC_LIST5)
 
+# 按文件的物理路径分组（不影响编译）
+source_group(TREE "${CMAKE_SOURCE_DIR}" FILES 
+${SRC_LIST1} 
+${SRC_LIST2} 
+${SRC_LIST3} 
+${SRC_LIST4}
+${SRC_LIST5})
+
 # 可执行文件
 add_executable(my_app main.cpp ${SRC_LIST1} ${SRC_LIST2} ${SRC_LIST3} ${SRC_LIST4} ${SRC_LIST5})
 
