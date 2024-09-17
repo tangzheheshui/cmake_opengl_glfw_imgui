@@ -1,15 +1,13 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-
 #include "3rdparty/imgui/imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
-
 #include <iostream>
-
 #include "render/scene.h"
 #include "camera_old.h"
 #include "input/input.h"
+#include "RenderSystem.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -89,8 +87,9 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    // render loop
-    // -----------
+    // 初始化渲染引擎
+    RenderSystem::getInstance().init();
+
     while (!glfwWindowShouldClose(window))
     {
         // input
@@ -100,6 +99,9 @@ int main()
         Scene::getScene().update();
         Scene::getScene().drawShadow();
         Scene::getScene().draw();
+
+        RenderSystem::getInstance().update();
+        RenderSystem::getInstance().draw();
 
         {
             // 启动新的 ImGui 帧
