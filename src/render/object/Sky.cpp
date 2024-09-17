@@ -7,7 +7,7 @@
 
 #include "Sky.h"
 #include "render/shader.h"
-#include "render/camera.h"
+#include "render/camera_old.h"
 #include "render/image.h"
 
 bool Sky::draw() {

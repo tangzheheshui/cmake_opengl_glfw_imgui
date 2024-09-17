@@ -8,7 +8,7 @@
 #include <iostream>
 
 #include "render/scene.h"
-#include "camera.h"
+#include "camera_old.h"
 #include "input/input.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);

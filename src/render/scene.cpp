@@ -15,6 +15,7 @@
 #include "image.h"
 #include "Light.h"
 #include "core/taskQueue.h"
+#include "camera.h"
 
 const GLuint SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
 const unsigned int SCR_WIDTH = 800;
@@ -38,6 +39,17 @@ Scene::Scene() {
     fs::path pathPic("E:/project/cmake_opengl_glfw_imgui/res");
     loadTexture(pathPic);
     createObjs();
+
+    // Па»ъ
+    m_camera = std::make_shared<CCamera>();
+    m_camera->setTarget({0, 0, 0});
+    m_camera->setPos({0, 40, 40});
+    m_camera->setUp({0, 1, 0});
+    m_camera->setFov(60);
+    m_camera->setNearfar({0.1, 500});
+    m_camera->setAspect(SCR_WIDTH / SCR_HEIGHT);
+    m_camera->updateViewMatrix();
+    m_camera->updateProjMatrix();
 }
 
 void Scene::loadTexture(const fs::path& dirPath) {

@@ -20,6 +20,7 @@ class BaseDraw;
 class Line;
 class Shader;
 class ImageRectangle;
+class CCamera;
 
 class Scene {
 private:
@@ -34,6 +35,10 @@ public:
     void update();
     void setLightUniform(Shader* shader);
     void processMouseClick(double x, double y);
+    // Ïà»ú¿ØÖÆ
+    void cameraZoom(float scale);
+    void cameraRotate();
+    void cameraDrag();
 private:
     std::shared_ptr<Line> getTestLine();
     std::vector<std::shared_ptr<ImageRectangle>> createGlass();
@@ -50,6 +55,7 @@ private:
     GLuint _atomic_counter;
     GLuint _texture_blend;
     GLuint _pbo_head_pointer;
+    std::shared_ptr<CCamera> m_camera;
 };
 
 #endif /* scene_hpp */

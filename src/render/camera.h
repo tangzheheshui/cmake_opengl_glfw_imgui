@@ -1,52 +1,50 @@
-//
-//  camera.hpp
-//  OpenglLearn
-//
-//  Created by liuhaifeng02 on 2024/1/2.
-//
+// camera
 
-#ifndef camera_hpp
-#define camera_hpp
+#pragma once
 
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
 #include "math/matrix.h"
 
-class Camera {
+class CCamera {
 public:
-    Camera();
-    void setPosition(glm::vec3 pos);
-    void setYaw(float yaw);
-    void setPitch(float pitch);
+    CCamera();
+
+    void setPos(const glm::vec3 &);
+    glm::vec3 getPos() const;
+
+    void setTarget(const glm::vec3&);
+    glm::vec3 getTarget() const;
+
+    void setUp(const glm::vec3&);
+    glm::vec3 getUp() const;
+
     void setFov(float fov);
+    float getFov() const;
     
-    float getYaw() { return _yaw; }
-    float getPitch() { return _pitch; }
-    float getFov() { return _fov; }
-    glm::vec3 getPossition() { return _position; }
+    void setAspect(float);
+    float getAspect() const;
+
+    void setNearfar(const glm::vec2&);
+    glm::vec2 getNearfar() const;
+
+    void updateViewMatrix();
+
+    void updateProjMatrix();
+
+    glm::mat4 GetVPMatrix();
+    glm::mat4 GetViewMatrix();
+    glm::mat4 GetProjectMatrix();
     
-    void caculate();
-    Matrix GetVPMatrix();
-    Matrix GetViewMatrix();
-    Matrix GetProjectMatrix();
-    static Camera& GetCamera();
-    static Matrix LookAt(const glm::vec3 &eye, const glm::vec3 &center, const glm::vec3 &up);
-    static Matrix ortho(float left, float right, float bottom, float top, float near, float far);
-    static Matrix perspective(float fov, float aspect, float near, float far);
-    static void screenToWorld(const glm::vec2 &screen, glm::vec3 &world);
+    void screenToWorld(const glm::vec2 &screen, glm::vec3 &world);
 private:
     glm::vec3 _position;
-    glm::vec3 _front;
+    glm::vec3 _target;
     glm::vec3 _up;
-    glm::vec3 _right;
-    const glm::vec3 _worldUp = {0, 1, 0};
-    // euler Angles
-    float _yaw;
-    float _pitch;
+    glm::vec2 _nearfar;
+    float _aspect;
     float _fov;
-    float _near;
-    float _far;
-    bool _needCal = true;
+    glm::mat4 _viewMatrix;
+    glm::mat4 _projMatrix;
 };
 
-#endif /* camera_hpp */

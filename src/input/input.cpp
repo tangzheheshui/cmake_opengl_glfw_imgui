@@ -10,7 +10,7 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <fstream>
-#include "camera.h"
+#include "camera_old.h"
 #include "scene.h"
 
 InputProcessMng& InputProcessMng::getInstance() {
