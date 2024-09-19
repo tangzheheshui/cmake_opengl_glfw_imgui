@@ -14,8 +14,6 @@
 #include <glm/glm.hpp>
 #include "math/matrix.h"
 
-namespace fs = std::filesystem;
-
 class BaseDraw;
 class Line;
 class Shader;
@@ -26,7 +24,6 @@ class Scene {
 private:
     Scene();
     void createObjs();
-    void loadTexture(const fs::path& dirPath);
 public:
     static Scene& getScene();
     static Matrix GetLightVPMatrix();

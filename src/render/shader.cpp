@@ -12,13 +12,11 @@
 #include <sstream>
 #include <iostream>
 
-const std::string g_file_path = "E:/project/cmake_opengl_glfw_imgui/res/shaders/";
-
 Shader::Shader(const std::string &vertPath, const std::string &fragPath, const std::string &geomPath) {
     std::ifstream vertFile;
     std::ifstream fragFile;
-    vertFile.open(g_file_path + vertPath);
-    fragFile.open(g_file_path + fragPath);
+    vertFile.open(vertPath);
+    fragFile.open(fragPath);
     std::string strVert;
     std::string strFrag;
     if (vertFile.is_open() && fragFile.is_open()) {
@@ -66,7 +64,7 @@ Shader::Shader(const std::string &vertPath, const std::string &fragPath, const s
     
     if (!geomPath.empty()) {
         std::ifstream geomFile;
-        geomFile.open(g_file_path + geomPath);
+        geomFile.open(geomPath);
         std::string str;
         if (geomFile.is_open()) {
             std::stringstream vShaderStream;
@@ -148,52 +146,52 @@ ShaderCache& ShaderCache::GetInstance() {
     return instance;
 }
 
-ShaderCache::ShaderCache() {
-    if (auto shader = new Shader("vert_color", "frag_color")) {
+void ShaderCache::init(const std::string& path) {
+    if (auto shader = new Shader(path+"vert_color", path+"frag_color")) {
         m_map_shader.insert(std::make_pair(ShaderType::Color, shader));
     }
-    
-    if (auto shader = new Shader("vert_image", "frag_image")) {
+
+    if (auto shader = new Shader(path + "vert_image", path + "frag_image")) {
         m_map_shader.insert(std::make_pair(ShaderType::Image, shader));
     }
-    
-    if (auto shader = new Shader("vert_model", "frag_model")) {
+
+    if (auto shader = new Shader(path + "vert_model", path + "frag_model")) {
         m_map_shader.insert(std::make_pair(ShaderType::Model_Texture, shader));
     }
-    
-    if (auto shader = new Shader("vert_model_color", "frag_model_color")) {
+
+    if (auto shader = new Shader(path + "vert_model_color", path + "frag_model_color")) {
         m_map_shader.insert(std::make_pair(ShaderType::Model_Color, shader));
     }
-    
-    if (auto shader = new Shader("vert_shadow_color", "frag_shadow")) {
+
+    if (auto shader = new Shader(path + "vert_shadow_color", path + "frag_shadow")) {
         m_map_shader.insert(std::make_pair(ShaderType::Shadow_Color, shader));
     }
-    
-    if (auto shader = new Shader("vert_shadow", "frag_shadow")) {
+
+    if (auto shader = new Shader(path + "vert_shadow", path + "frag_shadow")) {
         m_map_shader.insert(std::make_pair(ShaderType::Shadow_Texture, shader));
     }
-    
-    if (auto shader = new Shader("vert_deepImage", "frag_deepImage")) {
+
+    if (auto shader = new Shader(path + "vert_deepImage", path + "frag_deepImage")) {
         m_map_shader.insert(std::make_pair(ShaderType::Debug_DeepTexture, shader));
     }
-    
-    if (auto shader = new Shader("vert_ground_normal", "frag_ground_normal")) {
+
+    if (auto shader = new Shader(path + "vert_ground_normal", path + "frag_ground_normal")) {
         m_map_shader.insert(std::make_pair(ShaderType::Ground, shader));
     }
-    
-    if (auto shader = new Shader("vert_model_color_anim", "frag_model_color")) {
+
+    if (auto shader = new Shader(path + "vert_model_color_anim", path + "frag_model_color")) {
         m_map_shader.insert(std::make_pair(ShaderType::Model_Color_Anim, shader));
     }
-    
-    if (auto shader = new Shader("vert_model_anim", "frag_model")) {
+
+    if (auto shader = new Shader(path + "vert_model_anim", path + "frag_model")) {
         m_map_shader.insert(std::make_pair(ShaderType::Model_Texture_Anim, shader));
     }
-    
-    if (auto shader = new Shader("vert_sky", "frag_sky")) {
+
+    if (auto shader = new Shader(path + "vert_sky", path + "frag_sky")) {
         m_map_shader.insert(std::make_pair(ShaderType::Sky, shader));
     }
-    
-    if (auto shader = new Shader("model_multiview.vert", "frag_model", "model_multiview.geom")) {
+
+    if (auto shader = new Shader(path + "model_multiview.vert", path + "frag_model", path + "model_multiview.geom")) {
         m_map_shader.insert(std::make_pair(ShaderType::Model_Texture_MultiView, shader));
     }
 }

@@ -55,8 +55,9 @@ class ShaderCache {
 public:
     static ShaderCache& GetInstance();
     Shader* GetShader(ShaderType type);
+    void init(const std::string &);
 private:
-    ShaderCache();
+    ShaderCache() {}
 private:
     std::map<ShaderType, Shader*> m_map_shader;
 };

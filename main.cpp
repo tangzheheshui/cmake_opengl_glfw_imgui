@@ -4,7 +4,7 @@
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
 #include <iostream>
-#include "render/scene.h"
+#include <filesystem>
 #include "camera_old.h"
 #include "input/input.h"
 #include "RenderSystem.h"
@@ -76,7 +76,7 @@ int main()
     }    
 
     Camera::GetCamera().setPosition({ 0,0,40 });
-    auto a = Scene::getScene();
+    
     // 初始化 ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -87,18 +87,17 @@ int main()
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
+    // 获取根目录
+    std::filesystem::path current_path = std::filesystem::current_path();
+    std::string proPath = current_path.string();
+    proPath = proPath.substr(0, proPath.length() - std::strlen("build"));
     // 初始化渲染引擎
-    RenderSystem::getInstance().init();
+    RenderSystem::getInstance().init(proPath);
 
     while (!glfwWindowShouldClose(window))
     {
         // input
-        // -----
         processInput(window);
-
-        Scene::getScene().update();
-        Scene::getScene().drawShadow();
-        Scene::getScene().draw();
 
         RenderSystem::getInstance().update();
         RenderSystem::getInstance().draw();
