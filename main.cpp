@@ -90,7 +90,8 @@ int main()
     // 获取根目录
     std::filesystem::path current_path = std::filesystem::current_path();
     std::string proPath = current_path.string();
-    proPath = proPath.substr(0, proPath.length() - std::strlen("build"));
+    size_t pos =  proPath.find("/build");
+    proPath = proPath.substr(0, pos);
     // 初始化渲染引擎
     RenderSystem::getInstance().init(proPath);
 

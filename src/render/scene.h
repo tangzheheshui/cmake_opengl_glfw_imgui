@@ -36,6 +36,8 @@ public:
     void cameraZoom(float scale);
     void cameraRotate();
     void cameraDrag();
+    void setRootPath(const std::string &path) { m_root_path = path; }
+    void init();
 private:
     std::shared_ptr<Line> getTestLine();
     std::vector<std::shared_ptr<ImageRectangle>> createGlass();
@@ -53,6 +55,7 @@ private:
     GLuint _texture_blend;
     GLuint _pbo_head_pointer;
     std::shared_ptr<CCamera> m_camera;
+    std::string m_root_path;
 };
 
 #endif /* scene_hpp */

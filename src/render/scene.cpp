@@ -32,9 +32,6 @@ Scene::Scene() {
     
     // 创建alpha链表纹理
     creatBlendTexture();
-    
-    // 加载贴图
-    createObjs();
 
     // ���
     m_camera = std::make_shared<CCamera>();
@@ -48,6 +45,10 @@ Scene::Scene() {
     m_camera->updateProjMatrix();
 }
 
+void Scene::init() {
+    createObjs();
+}
+
 std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
     std::vector<std::shared_ptr<ImageRectangle>> vec_obj;
     vec_obj.push_back(std::make_shared<ImageRectangle>());
@@ -55,9 +56,9 @@ std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
     vec_obj.push_back(std::make_shared<ImageRectangle>());
     float ground_width = 5;
     
-    vec_obj[0]->setImagePath("window.png", "", "");
-    vec_obj[1]->setImagePath("block.png", "", "");
-    vec_obj[2]->setImagePath("grass.png", "", "");
+    vec_obj[0]->setImagePath(m_root_path + "res/textures/window.png", "", "");
+    vec_obj[1]->setImagePath(m_root_path + "res/textures/block.png", "", "");
+    vec_obj[2]->setImagePath(m_root_path + "res/textures/grass.png", "", "");
     TaskQueue::instance().pushTask([vec_obj, ground_width](){
         for (int i = 0; i < vec_obj.size(); i++) {
             auto obj = std::dynamic_pointer_cast<ImageRectangle>(vec_obj[i]);
@@ -103,7 +104,7 @@ void Scene::createObjs() {
     // 地面
     std::shared_ptr<ImageRectangle> objGround = std::make_shared<ImageRectangle>();
     float ground_width = 10;
-    objGround->setImagePath("bricks2.jpg", "bricks2_normal.jpg", "bricks2_disp.jpg");
+    objGround->setImagePath(m_root_path + "res/textures/bricks2.jpg", m_root_path + "res/textures/bricks2_normal.jpg", m_root_path + "res/textures/bricks2_disp.jpg");
     
     objGround->setSetp(5, 5);
     glm::vec3 p1(-ground_width, 0,  ground_width);
@@ -129,7 +130,7 @@ void Scene::createObjs() {
     
     // 鸭子
     std::shared_ptr<Model> objDuck = std::make_shared<Model>();
-    objDuck->LoadFile("E:/project/cmake_opengl_glfw_imgui/res/model/duck.dae");
+    objDuck->LoadFile(m_root_path + "/res/model/duck.dae");
     TaskQueue::instance().pushTask([start](){
     });
     
@@ -147,7 +148,7 @@ void Scene::createObjs() {
     
     // 光源模型
     std::shared_ptr<Model> objLight = std::make_shared<Model>();
-    objLight->LoadFile("E:/project/cmake_opengl_glfw_imgui/res/model/OBJ/box.obj");
+    objLight->LoadFile(m_root_path + "/res/model/OBJ/box.obj");
     
     objLight->setCount(1);
     objLight->setLightOpen(false);

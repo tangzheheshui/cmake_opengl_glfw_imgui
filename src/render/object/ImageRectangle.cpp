@@ -215,7 +215,7 @@ ImageRectangle::~ImageRectangle() {
 }
 
 void ImageRectangle::setImagePath(const std::string &diffuseMap, const std::string &normalMap, const std::string &heightMap) {
-    m_image_diffuse = STR_TEXTURE_PATH + diffuseMap;
-    m_image_normal = STR_TEXTURE_PATH + normalMap;
-    m_image_height = STR_TEXTURE_PATH + heightMap;
+    m_image_diffuse = diffuseMap;
+    m_image_normal = normalMap;
+    m_image_height = heightMap;
 }

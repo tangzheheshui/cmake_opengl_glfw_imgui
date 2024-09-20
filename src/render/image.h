@@ -15,7 +15,6 @@
 #include "shader.h"
 
 static const std::string STR_DEPTH_TEXTURE = "depth_texture";
-static const std::string STR_TEXTURE_PATH = "E:/project/cmake_opengl_glfw_imgui/res/textures/";
 typedef std::shared_ptr<std::vector<unsigned char>> ImageBuffer;
 
 struct Texture {
@@ -33,7 +32,7 @@ public:
         std::call_once(_callOnce, [&]() { _instance = new TextureMng; });
         return *_instance;
     }
-
+    void setRootPath(const std::string &path) { m_root_path = path; }
     void loadTexture(const std::string &filename);
     unsigned int getTexture(const std::string &filename);
     unsigned int getCubeTexture(std::array<std::string, 6> faces);
@@ -54,6 +53,7 @@ private:
     std::map<std::string, unsigned int> m_map_tetures;
     std::map<std::string, Texture> m_map_tex_data;
     mutable std::mutex m_mutux;
+    std::string m_root_path;
 };
 
 #endif /* image_hpp */

@@ -17,14 +17,16 @@ RenderSystem::~RenderSystem() {
 
 void RenderSystem::init(const std::string& rootPath) {
     // 加载纹理
-    std::filesystem::path pathTex(rootPath + "res");
+    TextureMng::getInstance().setRootPath(rootPath + "/res/textures/");
+    std::filesystem::path pathTex(rootPath + "/res/textures/");
     loadTexture(pathTex);
 
     // 加载着色器
     ShaderCache::GetInstance().init(rootPath + "/res/shaders/");
 
 	// 初始化场景
-	auto a = Scene::getScene();
+    Scene::getScene().setRootPath(rootPath);
+    Scene::getScene().init();
 }
 
 void RenderSystem::update() {

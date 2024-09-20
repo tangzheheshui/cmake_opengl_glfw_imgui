@@ -134,7 +134,7 @@ unsigned int TextureMng::getCubeTexture(std::array<std::string, 6> faces) {
     int width, height, nrChannels;
     for (unsigned int i = 0; i < faces.size(); i++)
     {
-        auto file = STR_TEXTURE_PATH + faces[i];
+        auto file = m_root_path + faces[i];
         unsigned char *data = stbi_load(file.c_str(), &width, &height, &nrChannels, 0);
         if (data)
         {
@@ -143,6 +143,7 @@ unsigned int TextureMng::getCubeTexture(std::array<std::string, 6> faces) {
         }
         else
         {
+            assert(0);
             std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
             stbi_image_free(data);
             glDeleteTextures(1, &textureID);
