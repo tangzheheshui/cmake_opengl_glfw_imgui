@@ -56,9 +56,9 @@ std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
     vec_obj.push_back(std::make_shared<ImageRectangle>());
     float ground_width = 5;
     
-    vec_obj[0]->setImagePath(m_root_path + "res/textures/window.png", "", "");
-    vec_obj[1]->setImagePath(m_root_path + "res/textures/block.png", "", "");
-    vec_obj[2]->setImagePath(m_root_path + "res/textures/grass.png", "", "");
+    vec_obj[0]->setImagePath(m_root_path + "/res/textures/window.png", "", "");
+    vec_obj[1]->setImagePath(m_root_path + "/res/textures/block.png", "", "");
+    vec_obj[2]->setImagePath(m_root_path + "/res/textures/grass.png", "", "");
     TaskQueue::instance().pushTask([vec_obj, ground_width](){
         for (int i = 0; i < vec_obj.size(); i++) {
             auto obj = std::dynamic_pointer_cast<ImageRectangle>(vec_obj[i]);
@@ -104,7 +104,7 @@ void Scene::createObjs() {
     // 地面
     std::shared_ptr<ImageRectangle> objGround = std::make_shared<ImageRectangle>();
     float ground_width = 10;
-    objGround->setImagePath(m_root_path + "res/textures/bricks2.jpg", m_root_path + "res/textures/bricks2_normal.jpg", m_root_path + "res/textures/bricks2_disp.jpg");
+    objGround->setImagePath(m_root_path + "/res/textures/bricks2.jpg", m_root_path + "/res/textures/bricks2_normal.jpg", m_root_path + "/res/textures/bricks2_disp.jpg");
     
     objGround->setSetp(5, 5);
     glm::vec3 p1(-ground_width, 0,  ground_width);
@@ -116,7 +116,7 @@ void Scene::createObjs() {
     
     // 背包
     std::shared_ptr<Model> objModel = std::make_shared<Model>();
-    //objModel->LoadFile("/Users/liuhaifeng/personal/OpenglLearnMac/OpenglLearn/res/model/backpack/backpack.obj");
+    objModel->LoadFile(m_root_path + "/res/model/backpack/backpack.obj");
     
     objModel->setCount(3);
     objModel->setPosition(0, {0, 1, 0});
@@ -158,7 +158,7 @@ void Scene::createObjs() {
     
     // 天空�?
     std::shared_ptr<Sky> objSky = std::make_shared<Sky>();
-    objSky->setCubeImage({"skybox/right.jpg", "skybox/left.jpg", "skybox/top.jpg", "skybox/bottom.jpg", "skybox/front.jpg", "skybox/back.jpg"});
+    objSky->setCubeImage({"/skybox/right.jpg", "/skybox/left.jpg", "/skybox/top.jpg", "/skybox/bottom.jpg", "/skybox/front.jpg", "/skybox/back.jpg"});
     // debug deep
 //    std::shared_ptr<Image> objImage = std::make_shared<Image>();
 //    objImage->setTextureID(GetShadowTexture());
@@ -166,15 +166,15 @@ void Scene::createObjs() {
     
     // push 
     m_vec_drawobj.push_back(objGround);
-    //m_vec_drawobj.push_back(objDuck);
-    //m_vec_drawobj.push_back(objModel);
-    //m_vec_drawobj.push_back(objLight);
+    m_vec_drawobj.push_back(objDuck);
+    m_vec_drawobj.push_back(objModel);
+    m_vec_drawobj.push_back(objLight);
     m_vec_drawobj.push_back(line_x);
     m_vec_drawobj.push_back(line_y);
     m_vec_drawobj.push_back(line_z);
     //m_vec_drawobj.push_back(objImage);
-    //auto glass = createGlass();
-    //m_vec_drawobj_blend.insert(m_vec_drawobj_blend.end(), glass.begin(), glass.end());
+    auto glass = createGlass();
+    m_vec_drawobj_blend.insert(m_vec_drawobj_blend.end(), glass.begin(), glass.end());
     
     // 最后绘制天空盒
     m_vec_drawobj.push_back(objSky);

@@ -17,8 +17,8 @@ RenderSystem::~RenderSystem() {
 
 void RenderSystem::init(const std::string& rootPath) {
     // 加载纹理
-    TextureMng::getInstance().setRootPath(rootPath + "/res/textures/");
-    std::filesystem::path pathTex(rootPath + "/res/textures/");
+    TextureMng::getInstance().setRootPath(rootPath + "/res/textures");
+    std::filesystem::path pathTex(rootPath + "/res");
     loadTexture(pathTex);
 
     // 加载着色器

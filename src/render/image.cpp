@@ -47,6 +47,7 @@ void TextureMng::loadTexture(const std::string &filename) {
     {
         std::lock_guard<std::mutex> gurad(m_mutux);
         m_map_tex_data[filename] = tex;
+        //printf("add filename = %s\n", filename.c_str());
     }
 }
 
