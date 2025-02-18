@@ -116,7 +116,7 @@ void Scene::createObjs() {
     
     // 背包
     std::shared_ptr<Model> objModel = std::make_shared<Model>();
-    objModel->LoadFile(m_root_path + "/res/model/backpack/backpack.obj");
+    objModel->LoadFile(m_root_path + "/res/model/duck.dae");
     
     objModel->setCount(3);
     objModel->setPosition(0, {0, 1, 0});
@@ -148,7 +148,7 @@ void Scene::createObjs() {
     
     // 光源模型
     std::shared_ptr<Model> objLight = std::make_shared<Model>();
-    objLight->LoadFile(m_root_path + "/res/model/OBJ/box.obj");
+    objLight->LoadFile(m_root_path + "/res/model/duck.dae");
     
     objLight->setCount(1);
     objLight->setLightOpen(false);
