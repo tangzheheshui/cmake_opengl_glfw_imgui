@@ -24,7 +24,6 @@ void InputProcessMng::setFrameBufferSize(int w, int h) {
 }
 
 void InputProcessMng::onMouseLeftUp(double x, double y) {
-    Scene::getScene().processMouseClick(x, y);
 }
 
 void InputProcessMng::onMouseRightDown(double x, double y) {

@@ -67,7 +67,7 @@ struct NodeAnim {
     glm::mat4 getPosition(float ratio) {
         int index = ratio * positions.size();
         index = (index == positions.size()) ? (index-1) : index;
-        printf("getposition, index = %d, total_size = %d\n", index, positions.size());
+        printf("getposition, index = %d, total_size = %zu\n", index, positions.size());
         return glm::translate(glm::mat4(1.0f), positions[index].position);
     }
     

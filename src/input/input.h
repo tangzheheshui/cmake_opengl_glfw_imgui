@@ -12,6 +12,8 @@
 class InputProcessMng {
 public:
     static InputProcessMng& getInstance();
+    InputProcessMng() = default;
+    ~InputProcessMng() = default;
     InputProcessMng(const InputProcessMng&) = delete;
     InputProcessMng& operator=(const InputProcessMng&) = delete;
 
@@ -20,15 +22,12 @@ public:
 #pragma region mouse_event
     // 左键up
     void onMouseLeftUp(double x, double y);
-
+    // 右键up
     void onMouseRightDown(double x, double y);
-
     // 滚轮滚动
     void onMouseMiddleScroll(double xOffset, double yOffset);
-
     // 滚轮点击
     void onMouseMiddleDown(double x, double y);
-    
     // 鼠标移动
     void onMouseMove(double x, double y);
 #pragma endregion
@@ -37,9 +36,6 @@ public:
     void onKeyRelease_C();
 #pragma endregion
 
-private:
-    InputProcessMng() {}
-    ~InputProcessMng() {}
 private:
     int _frameWidth = 0;
     int _frameHeight = 0;

@@ -6,7 +6,6 @@
 #include <iostream>
 #include <filesystem>
 #include "camera_old.h"
-#include "input/input.h"
 #include "RenderSystem.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -65,7 +64,7 @@ int main()
 
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
-    InputProcessMng::getInstance().setFrameBufferSize(width, height);
+    //InputProcessMng::getInstance().setFrameBufferSize(width, height);
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
@@ -156,6 +155,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 
 void mouse_callback(GLFWwindow* window, double xposIn, double yposIn)
 {
+    RenderSystem::getInstance().onMouseMove(xposIn, yposIn);
     float xpos = static_cast<float>(xposIn);
     float ypos = static_cast<float>(yposIn);
 
@@ -194,7 +194,7 @@ void mouse_callback(GLFWwindow* window, double xposIn, double yposIn)
 // ----------------------------------------------------------------------
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 {
-    InputProcessMng::getInstance().onMouseMiddleScroll(xoffset, yoffset);
+    RenderSystem::getInstance().onMouseMiddleScroll(xoffset, yoffset);
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -207,7 +207,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     {
         if (GLFW_KEY_C == key)
         {
-            InputProcessMng::getInstance().onKeyRelease_C();
+            //RenderSystem::getInstance().onKeyRelease_C();
         }
     }
 }
@@ -220,20 +220,20 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_RELEASE)
         {
-            InputProcessMng::getInstance().onMouseLeftUp(xpos, ypos);
+            RenderSystem::getInstance().onMouseLeftUp(xpos, ypos);
         }
     }
 
     else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
         if (action == GLFW_PRESS)
         {
-            InputProcessMng::getInstance().onMouseRightDown(xpos, ypos);
+            RenderSystem::getInstance().onMouseRightDown(xpos, ypos);
         }
     }
     else if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
         if (action == GLFW_PRESS)
         {
-            InputProcessMng::getInstance().onMouseMiddleDown(xpos, ypos);
+            RenderSystem::getInstance().onMouseMiddleDown(xpos, ypos);
         }
     }
 }

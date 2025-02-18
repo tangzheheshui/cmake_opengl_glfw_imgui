@@ -404,7 +404,7 @@ void Model::update() {
         clock_t det = (clock() - m_clock);
         clock_t cur = det % (5 * CLOCKS_PER_SEC);
         m_anim_ratio = cur / (5.0 * CLOCKS_PER_SEC);
-        printf("update ratio, m_anim_ratio = %f, cur = %d\n", m_anim_ratio, cur);
+        printf("update ratio, m_anim_ratio = %f, cur = %zu\n", m_anim_ratio, cur);
         updateNode(m_model_data.nodes.front().get(), nullptr);
     }
 }

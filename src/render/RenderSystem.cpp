@@ -3,6 +3,7 @@
 #include "render/pass/SkyPass.h"
 #include "render/pass/ShadowPass.h"
 #include "render/pass/NormalPass.h"
+#include "input/input.h"
 #include "image.h"
 
 const unsigned int SCR_WIDTH = 800;
@@ -14,7 +15,8 @@ RenderSystem& RenderSystem::getInstance() {
 }
 
 RenderSystem::RenderSystem() {
-
+    mMngInput = std::make_unique<InputProcessMng>();
+    mCurScene = std::make_shared<Scene>();
 }
 
 RenderSystem::~RenderSystem() {
@@ -31,10 +33,9 @@ void RenderSystem::init(const std::string& rootPath) {
     ShaderCache::GetInstance().init(rootPath + "/res/shaders/");
 
 	// ��ʼ������
-    Scene::getScene().setRootPath(rootPath);
-    Scene::getScene().init();
+    mCurScene->setRootPath(rootPath);
+    mCurScene->init();
     
-    //mCurScene = Scene::getScene();
     // 创建pass
     auto skyPass = std::make_shared<CSkyPass>();
     m_vec_renderpass.push_back(skyPass);
@@ -55,14 +56,10 @@ void RenderSystem::BeginDraw() {
 }
 
 void RenderSystem::draw() {
-	//Scene::getScene().update();
-	//Scene::getScene().drawShadow();
-	//Scene::getScene().draw();
-
     // 新架构的代码
     for (auto pass : m_vec_renderpass)
     {
-        pass->draw(&Scene::getScene());
+        pass->draw(mCurScene.get());
     }
 }
 
@@ -79,4 +76,24 @@ void RenderSystem::loadTexture(const std::filesystem::path& dirPath) {
             }
         }
     }
+}
+
+void RenderSystem::onMouseMiddleScroll(double x, double y) {
+    
+}
+
+void RenderSystem::onMouseLeftUp(double x, double y) {
+    
+}
+
+void RenderSystem::onMouseRightDown(double x, double y) {
+    
+}
+
+void RenderSystem::onMouseMiddleDown(double x, double y) {
+    
+}
+
+void RenderSystem::onMouseMove(double x, double y) {
+    
 }

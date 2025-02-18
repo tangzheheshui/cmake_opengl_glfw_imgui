@@ -68,8 +68,13 @@ bool RenderPass::Draw(const std::vector<Matrix> &matModel, uint32_t flags, int n
         // 灯光
         bool lightOpen = flags&DrawOption::LIGHT_OPEN;
         shader->setBool("uLight.is_open", lightOpen);
-        Scene scene = Scene::getScene();
-        scene.setLightUniform(shader);
+        auto light = Light::GlobalLight();
+        shader->setFloat4("uLight.position", light.position.x, light.position.y, light.position.z, 1);
+        shader->setFloat3("uLight.direction", light.direction.x, light.direction.y, light.direction.z);
+        shader->setFloat("uLight.cosTheta", light.cosTheta);
+        shader->setFloat3("uLight.ambient", light.ambient.x, light.ambient.y, light.ambient.z);
+        shader->setFloat3("uLight.diffuse", light.diffuse.x, light.diffuse.y, light.diffuse.z);
+        shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
         
         // 材质
         shader->setFloat3("uMaterail.ambient", m_materail->ambient.r, m_materail->ambient.g, m_materail->ambient.b);

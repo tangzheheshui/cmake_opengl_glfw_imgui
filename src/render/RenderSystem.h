@@ -11,6 +11,7 @@ class ShaderMng;
 class Scene;
 class RenderPass;
 class IRenderPass;
+class InputProcessMng;
 
 class RenderSystem {
 public:
@@ -22,6 +23,13 @@ public:
 	void update();
     void BeginDraw();
 	void draw();
+#pragma region mouse_event
+    void onMouseMiddleScroll(double x, double y); // 滚轮滚动
+    void onMouseLeftUp(double x, double y);      // 左键up
+    void onMouseRightDown(double x, double y);   // 左键up
+    void onMouseMiddleDown(double x, double y);  // 滚轮点击
+    void onMouseMove(double x, double y);       // 鼠标移动
+#pragma endregion
 private:
 	RenderSystem();
 	~RenderSystem();
@@ -30,5 +38,6 @@ private:
 	std::shared_ptr<TextureMng> m_texMng;
 	std::shared_ptr<ShaderMng> m_shaderMng;
 	std::shared_ptr<Scene> mCurScene;
+    std::unique_ptr<InputProcessMng> mMngInput;
 	std::vector<std::shared_ptr<IRenderPass>> m_vec_renderpass;
 }; 

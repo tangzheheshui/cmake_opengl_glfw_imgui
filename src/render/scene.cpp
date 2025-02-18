@@ -27,22 +27,15 @@ Scene& Scene::getScene() {
 }
 
 Scene::Scene() {
-    // 创建阴影贴图
-    glGenFramebuffers(1, &_depthMapFBO);
-    
-    // 创建alpha链表纹理
-    creatBlendTexture();
-
-    // ���
-    m_camera = std::make_shared<CCamera>();
-    m_camera->setTarget({0, 0, 0});
-    m_camera->setPos({0, 40, 40});
-    m_camera->setUp({0, 1, 0});
-    m_camera->setFov(60);
-    m_camera->setNearfar({0.1, 500});
-    m_camera->setAspect(SCR_WIDTH / SCR_HEIGHT);
-    m_camera->updateViewMatrix();
-    m_camera->updateProjMatrix();
+//    m_camera = std::make_shared<CCamera>();
+//    m_camera->setTarget({0, 0, 0});
+//    m_camera->setPos({0, 40, 40});
+//    m_camera->setUp({0, 1, 0});
+//    m_camera->setFov(60);
+//    m_camera->setNearfar({0.1, 500});
+//    m_camera->setAspect(SCR_WIDTH / SCR_HEIGHT);
+//    m_camera->updateViewMatrix();
+//    m_camera->updateProjMatrix();
 }
 
 void Scene::init() {
@@ -247,77 +240,6 @@ void Scene::setLightUniform(Shader* shader) {
     shader->setFloat3("uLight.ambient", light.ambient.x, light.ambient.y, light.ambient.z);
     shader->setFloat3("uLight.diffuse", light.diffuse.x, light.diffuse.y, light.diffuse.z);
     shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
-}
-
-void Scene::processMouseClick(double x, double y) {
-    // 计算射线
-    glm::vec3 worldNear;
-    Camera::screenToWorld({x, y}, worldNear);
-    
-    glm::vec3 cameraPos = Camera::GetCamera().getPossition();
-    
-    float deep = -2.f;
-    for (auto obj : m_vec_drawobj) {
-        if (auto modelObj = std::dynamic_pointer_cast<Model>(obj)) {
-            modelObj->isClick(cameraPos, worldNear, deep);
-        }
-    }
-}
-
-void Scene::creatBlendTexture() {
-    // 2D纹理
-    GLuint _texture_blend;
-    glGenTextures(1, &_texture_blend);
-    glBindTexture(GL_TEXTURE_2D, _texture_blend);
-    glTexImage2D(GL_TEXTURE_2D, 0, 
-                 GL_R32UI,
-                 SHADOW_WIDTH,
-                 SHADOW_WIDTH,
-                 0,
-                 GL_RED_INTEGER,
-                 GL_UNSIGNED_INT,
-                 NULL);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    
-    // pbo
-    int totalsize = SHADOW_WIDTH * SHADOW_HEIGHT * sizeof(GLuint);
-    glGenBuffers(1, &_pbo_head_pointer);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, _pbo_head_pointer);
-    glBufferData(GL_PIXEL_UNPACK_BUFFER, totalsize, NULL, GL_STATIC_DRAW);
-    GLuint* data = (GLuint*)glMapBuffer(GL_PIXEL_UNPACK_BUFFER, GL_WRITE_ONLY);
-    memset(data, 0xfFF, totalsize);
-    glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-//    
-//    // 原子计数�?
-    GLuint _atomic_counter;
-    glGenBuffers(1, &_atomic_counter);
-    glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, _atomic_counter);
-    glBufferData(GL_ATOMIC_COUNTER_BUFFER, sizeof(GLuint), 0, GL_DYNAMIC_COPY);
-    
-    // 创建一个较大的buffer，存储每个像素的颜色深度信息
-    GLuint _fragment_alpha_buffer;
-    glGenBuffers(1, &_fragment_alpha_buffer);
-    glBindBuffer(GL_TEXTURE_BUFFER, _fragment_alpha_buffer);
-    glBufferData(GL_TEXTURE_BUFFER, 
-                 2 * SHADOW_WIDTH * SHADOW_HEIGHT * sizeof(glm::vec4),
-                 NULL,
-                 GL_DYNAMIC_COPY);
-}
-
-void Scene::clearBlendTexture() {
-    // 原子计数
-    const GLuint zero = 0;
-    glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, _atomic_counter);
-    glBufferSubData(GL_ATOMIC_COUNTER_BUFFER, 0, sizeof(zero), &zero);
-    
-    // 清空
-    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, _pbo_head_pointer);
-    glBindTexture(GL_TEXTURE_2D, _texture_blend);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_RED_INTEGER, GL_UNSIGNED_INT, NULL);
-    
-    // 读写
-    glBindImageTexture(0, _texture_blend, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32UI);
 }
 
 void Scene::set4Viewport() {
