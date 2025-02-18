@@ -13,7 +13,6 @@
 
 #include "shader.h"
 #include "image.h"
-#include "camera.h"
 
 Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
     if (!meshData) {

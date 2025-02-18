@@ -167,7 +167,7 @@ void Scene::createObjs() {
     // push 
     m_vec_drawobj.push_back(objGround);
     m_vec_drawobj.push_back(objDuck);
-    m_vec_drawobj.push_back(objModel);
+    //m_vec_drawobj.push_back(objModel);
     m_vec_drawobj.push_back(objLight);
     m_vec_drawobj.push_back(line_x);
     m_vec_drawobj.push_back(line_y);
@@ -177,58 +177,8 @@ void Scene::createObjs() {
     m_vec_drawobj_blend.insert(m_vec_drawobj_blend.end(), glass.begin(), glass.end());
     
     // 最后绘制天空盒
-    m_vec_drawobj.push_back(objSky);
-}
-
-void Scene::update() {
-    for (auto obj : m_vec_drawobj) {
-        obj->update();
-    }
-}
-
-void Scene::draw() {
-    glViewport(0, 0, SCR_WIDTH*2, SCR_HEIGHT*2);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
-    glDisable(GL_BLEND);
-    
-    // set4Viewport();
-    for (auto obj : m_vec_drawobj) {
-        obj->draw();
-    }
-    
-    // 半透明渲染到贴图上
-    for (auto obj : m_vec_drawobj_blend) {
-        obj->draw();
-    }
-    
-    // 渲染半透明效果
-    
-    // 画debug�?
-    auto testLine = getTestLine();
-    //testLine->draw();
-}
-
-void Scene::drawShadow() {
-    // attach到fbo
-    glBindFramebuffer(GL_FRAMEBUFFER, _depthMapFBO);
-    auto _depthTexture = TextureMng::getInstance().getTexture(STR_DEPTH_TEXTURE);
-    assert(_depthTexture);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, _depthTexture, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    
-    // bind
-    glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
-    glBindFramebuffer(GL_FRAMEBUFFER, _depthMapFBO);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    
-    // draw
-    for (auto obj : m_vec_drawobj) {
-        obj->drawShadow();
-    }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    //m_vec_drawobj.push_back(objSky);
+    SetSkyBox(objSky);
 }
 
 Matrix Scene::GetLightVPMatrix() {
