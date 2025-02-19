@@ -13,6 +13,8 @@
 #include <glm/glm.hpp>
 #include "../core/math/matrix.h"
 
+static uint16_t _staticID = 0;
+
 class BaseDraw {
 public:
     BaseDraw() {
@@ -21,6 +23,7 @@ public:
             glGenBuffers(1, &_VBO);
             glGenBuffers(1, &_EBO);
         }
+        _ID = _staticID++;
     }
     ~BaseDraw() {
         if (_VAO > 0) {
@@ -37,6 +40,7 @@ public:
     }
     virtual bool draw(const Matrix &mtx) = 0;
     virtual bool drawShadow() { return false; }
+    virtual bool drawPick() { return false; }
     virtual void update() {}
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) { return false; }
 public:
@@ -47,6 +51,8 @@ public:
     
     void setAlpha(float alpha) { _alpha = alpha; }
     float getAlpha() { return _alpha; }
+    
+    uint16_t GetID() { return _ID; }
 protected:
     unsigned int _VAO = 0;
     unsigned int _VBO = 0;
@@ -55,6 +61,7 @@ protected:
 private:
     bool _lightOpen = true;
     float _alpha = 1.0f;
+    uint16_t _ID;
 };
 
 #endif /* BaseDraw_h */

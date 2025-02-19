@@ -3,6 +3,7 @@
 #include "render/pass/SkyPass.h"
 #include "render/pass/ShadowPass.h"
 #include "render/pass/NormalPass.h"
+#include "render/pass/PickPass.h"
 #include "image.h"
 #include "camera/camera_old.h"
 #include "camera/CameraController.h"
@@ -43,6 +44,9 @@ void RenderSystem::init(const std::string& rootPath) {
     
     auto skyPass = std::make_shared<CSkyPass>(mRenderContent);
     m_vec_renderpass.push_back(skyPass);
+    
+    auto pickPass = std::make_shared<CPickPass>(mRenderContent);
+    m_vec_renderpass.push_back(pickPass);
 }
 
 void RenderSystem::update() {

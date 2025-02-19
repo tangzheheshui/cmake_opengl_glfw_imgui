@@ -194,6 +194,10 @@ void ShaderCache::init(const std::string& path) {
     if (auto shader = new Shader(path + "model_multiview.vert", path + "frag_model", path + "model_multiview.geom")) {
         m_map_shader.insert(std::make_pair(ShaderType::Model_Texture_MultiView, shader));
     }
+    
+    if (auto shader = new Shader(path + "vert_pick", path + "frag_pick")) {
+        m_map_shader.insert(std::make_pair(ShaderType::Pick, shader));
+    }
 }
 
 Shader* ShaderCache::GetShader(ShaderType type) {

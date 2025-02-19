@@ -367,6 +367,16 @@ bool Model::drawShadow() {
     return true;
 }
 
+bool Model::drawPick() {
+    uint32_t flags = 0;
+    flags |= DrawOption::DRAW_PICK;
+    Matrix mtx;
+    for (auto mesh : m_mesh) {
+        mesh->DrawPick(m_vec_modelMat, mtx, GetID());
+    }
+    return true;
+}
+
 void Model::updateNode(Node* node, Node* nodeParent) {
     if (!node) {
         return;

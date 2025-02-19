@@ -56,6 +56,7 @@ public:
     void LoadFile(const std::string &path);
     virtual bool draw(const Matrix &mtx) override;
     virtual bool drawShadow() override;
+    virtual bool drawPick() override;
     virtual void update() override;
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) override;
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) override;

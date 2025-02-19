@@ -32,3 +32,10 @@ bool Mesh::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t
     return true;
 }
 
+bool Mesh::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID) {
+    if (m_pass) {
+         m_pass->DrawPick(matModel, mtx, pickID);
+    }
+    return true;
+}
+

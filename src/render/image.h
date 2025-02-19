@@ -15,6 +15,7 @@
 #include "shader.h"
 
 static const std::string STR_DEPTH_TEXTURE = "depth_texture";
+static const std::string STR_PICK_TEXTURE = "pick_texture";
 typedef std::shared_ptr<std::vector<unsigned char>> ImageBuffer;
 
 struct Texture {

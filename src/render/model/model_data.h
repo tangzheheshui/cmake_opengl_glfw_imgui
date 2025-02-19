@@ -122,6 +122,7 @@ enum DrawOption : char {
     DRAW_SHADOW = (1<<0),
     LIGHT_OPEN  = (1<<1),
     MULTI_VIEWPORT = (1<<2),
+    DRAW_PICK = (1<<3),
 };
 
 #endif /* model_data_h */

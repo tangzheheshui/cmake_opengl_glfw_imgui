@@ -49,6 +49,7 @@ enum class ShaderType {
     Model_Color_Anim,
     Model_Texture_Anim,
     Sky,
+    Pick,
 };
 
 class ShaderCache {
