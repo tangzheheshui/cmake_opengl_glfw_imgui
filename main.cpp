@@ -84,7 +84,9 @@ int main()
     // 获取根目录
     std::filesystem::path current_path = std::filesystem::current_path();
     std::string proPath = current_path.string();
-    size_t pos =  proPath.find("/build");
+    char sep = std::filesystem::path::preferred_separator;
+    std::string buildFolder = std::string(1, sep) + "build";
+    size_t pos =  proPath.find(buildFolder);
     proPath = proPath.substr(0, pos);
     // 初始化渲染引擎
     int width, height;

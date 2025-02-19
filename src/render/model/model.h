@@ -18,6 +18,7 @@
 #include "math/matrix.h"
 #include "aabb.h"
 #include "image.h"
+#include <filesystem>
 
 class AssimpGLMHelpers
 {
@@ -81,7 +82,7 @@ private:
 private:
     std::vector<Matrix> m_vec_modelMat;
     std::map<std::string, Texture> m_map_tempTexture;
-    std::string m_filepath;
+    std::filesystem::path m_filepath;
     std::vector<std::shared_ptr<Mesh>> m_mesh;
     ModelData m_model_data;
     std::shared_ptr<std::vector<glm::mat4>> m_FinalBoneMatrices;

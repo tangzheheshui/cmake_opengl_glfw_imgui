@@ -30,8 +30,7 @@ void Model::LoadFile(const std::string &path) {
     }
     
     // retrieve the directory path of the filepath
-    m_filepath = path.substr(0, path.find_last_of('/') + 1);
-    
+    m_filepath = std::filesystem::path(path).parent_path();
     processTexture(scene);
     
     // 解析材质
@@ -345,7 +344,7 @@ std::vector<Texture> Model::loadMaterialTextures(aiMaterial *mat, aiTextureType 
                 pos = filename.find_last_of('/');
             }
             auto name = filename.substr(pos+1, filename.length() - pos);
-            texture.filepath = m_filepath + name;
+            texture.filepath = (m_filepath / name).string();
         }
         m_map_tempTexture[filename] = texture;
         textures.push_back(texture);

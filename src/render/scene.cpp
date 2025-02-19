@@ -85,7 +85,10 @@ void Scene::createObjs() {
     // 地面
     std::shared_ptr<ImageRectangle> objGround = std::make_shared<ImageRectangle>();
     float ground_width = 10;
-    objGround->setImagePath(m_root_path + "/res/textures/bricks2.jpg", m_root_path + "/res/textures/bricks2_normal.jpg", m_root_path + "/res/textures/bricks2_disp.jpg");
+    auto texPath = std::filesystem::path(m_root_path) / "res" / "textures";
+    objGround->setImagePath((texPath / "bricks2.jpg").string(),
+        (texPath / "bricks2_normal.jpg").string(),
+        (texPath / "bricks2_disp.jpg").string());
     
     objGround->setSetp(5, 5);
     glm::vec3 p1(-ground_width, 0,  ground_width);
@@ -111,7 +114,8 @@ void Scene::createObjs() {
     
     // 鸭子
     std::shared_ptr<Model> objDuck = std::make_shared<Model>();
-    objDuck->LoadFile(m_root_path + "/res/model/duck.dae");
+    //objDuck->LoadFile(m_root_path + "/res/model/duck.dae");
+    objDuck->LoadFile((std::filesystem::path(m_root_path) / "res" / "model" / "duck.dae").string());
     TaskQueue::instance().pushTask([start](){
     });
     
@@ -129,8 +133,8 @@ void Scene::createObjs() {
     
     // 光源模型
     std::shared_ptr<Model> objLight = std::make_shared<Model>();
-    objLight->LoadFile(m_root_path + "/res/model/duck.dae");
-    
+    //objLight->LoadFile(m_root_path + "/res/model/duck.dae");
+    objLight->LoadFile((std::filesystem::path(m_root_path) / "res" / "model" / "duck.dae").string());
     objLight->setCount(1);
     objLight->setLightOpen(false);
     auto lightPos = Light::GlobalLight().position;

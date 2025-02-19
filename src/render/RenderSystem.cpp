@@ -1,9 +1,9 @@
 #include "RenderSystem.h"
 #include "render/scene.h"
-#include "render/pass/SkyPass.h"
-#include "render/pass/ShadowPass.h"
-#include "render/pass/NormalPass.h"
-#include "render/pass/PickPass.h"
+#include "pass/SkyPass.h"
+#include "pass/ShadowPass.h"
+#include "pass/NormalPass.h"
+#include "pass/PickPass.h"
 #include "image.h"
 #include "camera/camera_old.h"
 #include "camera/CameraController.h"
@@ -24,8 +24,9 @@ RenderSystem::~RenderSystem() {
 
 void RenderSystem::init(const std::string& rootPath) {
     // ��������
-    TextureMng::getInstance().setRootPath(rootPath + "/res/textures");
-    std::filesystem::path pathTex(rootPath + "/res");
+    std::filesystem::path pathRoot = std::filesystem::path(rootPath) / "res"/ "textures";
+    TextureMng::getInstance().setRootPath(pathRoot.string());
+    std::filesystem::path pathTex = std::filesystem::path(rootPath) / "res";
     loadTexture(pathTex);
 
     // ������ɫ��
