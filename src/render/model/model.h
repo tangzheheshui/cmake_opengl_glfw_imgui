@@ -54,7 +54,7 @@ class Model : public BaseDraw {
 public:
     using BaseDraw::BaseDraw;
     void LoadFile(const std::string &path);
-    virtual bool draw() override;
+    virtual bool draw(const Matrix &mtx) override;
     virtual bool drawShadow() override;
     virtual void update() override;
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) override;

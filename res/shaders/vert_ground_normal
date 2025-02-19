@@ -27,12 +27,12 @@ uniform Light uLight;
 uniform vec3 uCameraPos;
 
 uniform mat4 uModel;
-uniform mat4 uVP;
+uniform mat4 uViewProj;
 uniform mat4 uLightSpaceMatrix;
 
 void main()
 {
-    gl_Position = uVP * uModel * vec4(aPos, 1.0);
+    gl_Position = uViewProj * uModel * vec4(aPos, 1.0);
     vs_out.TexCoord = aTexCoord;
     vs_out.FragPosLightSpace = uLightSpaceMatrix * uModel * vec4(aPos, 1.0);
     

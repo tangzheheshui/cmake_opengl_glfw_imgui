@@ -11,7 +11,7 @@
 #include <vector>
 #include "glm/glm.hpp"
 #include <glad/glad.h>
-#include "camera_old.h"
+#include "camera/camera_old.h"
 #include "shader.h"
 #include "model_data.h"
 #include "math/matrix.h"
@@ -33,7 +33,7 @@ public:
         }
     }
     
-    bool Draw(const std::vector<Matrix> &matModel, uint32_t flags, int numViewpoit);
+    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit);
 protected:
     virtual Shader* getShader(uint32_t flags) { return nullptr; }
     virtual void setup(const std::vector<Matrix> &matModel, uint32_t flags) {}

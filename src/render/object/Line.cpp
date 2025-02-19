@@ -8,14 +8,14 @@
 #include "Line.h"
 #include <glad/glad.h>
 #include "../shader.h"
-#include "../camera_old.h"
+#include "../camera/camera_old.h"
 
 void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsigned int> &indices) {
     m_points = points;
     m_indices = indices;
 }
 
-bool Line::draw() {
+bool Line::draw(const Matrix &mtx) {
     auto shader = ShaderCache::GetInstance().GetShader(ShaderType::Color);
     if (!shader) {
         return false;
@@ -26,8 +26,7 @@ bool Line::draw() {
     calculate();
     
     // 矩阵
-    auto mpMatrix = Camera::GetCamera().GetVPMatrix();
-    shader->setMat4("uMatrixMVP", mpMatrix);
+    shader->setMat4("uMatrixMVP", mtx);
     
     // 颜色
     shader->setFloat3("uColor", m_color.r, m_color.g, m_color.b);

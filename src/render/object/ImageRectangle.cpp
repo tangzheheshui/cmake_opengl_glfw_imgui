@@ -8,11 +8,11 @@
 #include "ImageRectangle.h"
 #include "../image.h"
 #include "../shader.h"
-#include "../camera_old.h"
+#include "../camera/camera_old.h"
 #include "../scene.h"
 #include "../Light.h"
 
-bool ImageRectangle::draw() {
+bool ImageRectangle::draw(const Matrix &mtx) {
     int texture_normal = TextureMng::getInstance().getTexture(m_image_normal);
     bool has_normal = (texture_normal > 0);
     
@@ -84,8 +84,7 @@ bool ImageRectangle::draw() {
     // 矩阵
     Matrix model;
     shader->setMat4("uModel", model);
-    auto mpMatrix = Camera::GetCamera().GetVPMatrix();
-    shader->setMat4("uVP", mpMatrix);
+    shader->setMat4("uViewProj", mtx);
     shader->setMat4("uLightSpaceMatrix", Scene::GetLightVPMatrix());
     
     // 灯光
@@ -98,7 +97,6 @@ bool ImageRectangle::draw() {
     shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
     
     // 相机位置
-    // auto cam_pos = Camera::GetCamera().getPossition();
     shader->setFloat3("uCameraPos", 15, 15, 0);
     
     // 透明�?

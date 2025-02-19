@@ -5,20 +5,25 @@
 #include "../object/Sky.h"
 #include "../model/model.h"
 
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
+CNormalPass::CNormalPass(std::shared_ptr<RenderContext> content) 
+: IRenderPass(content) {
+    
+}
 
 void CNormalPass::draw(Scene* pScene) {
     if (!pScene) {
         return;
     }
     
-    glViewport(0, 0, SCR_WIDTH*2, SCR_HEIGHT*2);
+    glViewport(0, 0, mRenderContent->screenWidth, mRenderContent->screenHeight);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
     glDisable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // 矩阵
+    auto mpMatrix = pScene->GetActiveCamera()->GetVPMatrix();
     
     for (auto obj : pScene->GetObjs()) {
-        obj->draw();
+        obj->draw(mpMatrix);
     }
 }

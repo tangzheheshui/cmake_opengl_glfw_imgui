@@ -12,12 +12,13 @@
 #include <string>
 #include <vector>
 #include "../BaseDraw.h"
+#include "../../core/math/matrix.h"
 
 class ImageRectangle : public BaseDraw {
 public:
     ImageRectangle() {}
     ~ImageRectangle();
-    virtual bool draw() override;
+    virtual bool draw(const Matrix &mtx) override;
     void setPoints(const glm::vec3 &pos1, const glm::vec3 &pos2, const glm::vec3 &pos3, const glm::vec3 &pos4);
     void setImagePath(const std::string &diffuseMap, const std::string &normalMap, const std::string &heightMap);
     void setSetp(float w, float h);

@@ -11,5 +11,4 @@ void main()
     pCoord = aPos;
     vec4 pos = uProjMat * mat4(mat3(uViewMat)) * vec4(aPos, 1.0);
     gl_Position = pos.xyww;
-         //gl_Position = vec4(aPos, 1);
 }

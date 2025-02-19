@@ -9,7 +9,7 @@ layout (location = 5) in mat4 aInstanceMatrix;
 const int MAX_BONES = 100;
 const int MAX_BONE_INFLUENCE = 4;
 
-uniform mat4 uMatrixVP;
+uniform mat4 uViewProj;
 uniform mat4 uFinalBonesMatrices[MAX_BONES];
 
 out VS_OUT
@@ -40,5 +40,5 @@ void main()
     vs_out.pMatNormal = mat3(transpose(inverse(aInstanceMatrix)));
     vs_out.pNormal = vs_out.pMatNormal * aNormal;
     vs_out.pTexCoord = aTexCoord;
-    gl_Position = uMatrixVP * aInstanceMatrix * totalPosition;// vec4(aPos, 1.0);
+    gl_Position = uViewProj * aInstanceMatrix * totalPosition;// vec4(aPos, 1.0);
 }

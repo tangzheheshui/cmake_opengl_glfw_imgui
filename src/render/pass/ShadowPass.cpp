@@ -7,7 +7,8 @@
 
 const GLuint SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
 
-CShadowPass::CShadowPass() {  
+CShadowPass::CShadowPass(std::shared_ptr<RenderContext> content)
+: IRenderPass(content) {  
     glGenFramebuffers(1, &_depthMapFBO);
 }
 

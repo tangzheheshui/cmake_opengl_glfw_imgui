@@ -9,8 +9,6 @@
 
 const float YAW         = 0.0f;
 const float PITCH       =  0.0f;
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
 
 Camera::Camera() 
 : _yaw(YAW)
@@ -42,11 +40,16 @@ void Camera::setFov(float fov) {
     _needCal = true;
 }
 
+void Camera::setViewport(int w, int h) {
+    _viewPortWidth = w;
+    _viewPortHeight = h;
+}
+
 Matrix Camera::GetVPMatrix() {
     caculate();
     
     Matrix lookat = LookAt(_position, glm::vec3(0), _worldUp);
-    Matrix projection = Camera::perspective(degrees_to_radians(_fov), (float)SCR_WIDTH / (float)SCR_HEIGHT, _near, _far);
+    Matrix projection = Camera::perspective(degrees_to_radians(_fov), (float)_viewPortWidth / (float)_viewPortHeight, _near, _far);
     return projection * lookat;
 }
 
@@ -58,7 +61,7 @@ Matrix Camera::GetViewMatrix() {
 
 Matrix Camera::GetProjectMatrix() {
     caculate();
-    Matrix projection = Camera::perspective(degrees_to_radians(_fov), (float)SCR_WIDTH / (float)SCR_HEIGHT, _near, _far);
+    Matrix projection = Camera::perspective(degrees_to_radians(_fov), (float)_viewPortWidth / (float)_viewPortHeight, _near, _far);
     return projection;
 }
 
@@ -150,7 +153,7 @@ Matrix Camera::perspective(float fov, float aspect, float near, float far) {
 }
 
 void Camera::screenToWorld(const glm::vec2 &screen, glm::vec3 &world) {
-    glm::vec4 proj(screen.x * 2 / SCR_WIDTH - 1, screen.y * 2 / SCR_HEIGHT, -1, 1);
+    glm::vec4 proj(screen.x * 2 / _viewPortWidth - 1, screen.y * 2 / _viewPortHeight, -1, 1);
     glm::mat4 vpMat = Matrix::toMatrix(GetCamera().GetVPMatrix());
     glm::vec4 worldNear = glm::inverse(vpMat) * proj;
     world = {worldNear.x / worldNear.w, worldNear.y / worldNear.w, worldNear.z / worldNear.w};

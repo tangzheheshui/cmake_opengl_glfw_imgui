@@ -4,7 +4,7 @@ layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoord;
 layout (location = 3) in mat4 aInstanceMatrix;
 
-uniform mat4 uMatrixVP;
+uniform mat4 uViewProj;
 
 out VS_OUT
 {
@@ -20,5 +20,5 @@ void main()
     vs_out.pMatNormal = mat3(transpose(inverse(aInstanceMatrix)));
     vs_out.pNormal = vs_out.pMatNormal * aNormal;
     vs_out.pTexCoord = aTexCoord;
-    gl_Position = uMatrixVP * aInstanceMatrix * vec4(aPos, 1.0);
+    gl_Position = uViewProj * aInstanceMatrix * vec4(aPos, 1.0);
 }

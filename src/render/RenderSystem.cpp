@@ -3,11 +3,9 @@
 #include "render/pass/SkyPass.h"
 #include "render/pass/ShadowPass.h"
 #include "render/pass/NormalPass.h"
-#include "input/input.h"
 #include "image.h"
-
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
+#include "camera/camera_old.h"
+#include "camera/CameraController.h"
 
 RenderSystem& RenderSystem::getInstance() {
 	static RenderSystem instance;
@@ -15,8 +13,8 @@ RenderSystem& RenderSystem::getInstance() {
 }
 
 RenderSystem::RenderSystem() {
-    mMngInput = std::make_unique<InputProcessMng>();
     mCurScene = std::make_shared<Scene>();
+    mRenderContent = std::make_shared<RenderContext>();
 }
 
 RenderSystem::~RenderSystem() {
@@ -37,14 +35,14 @@ void RenderSystem::init(const std::string& rootPath) {
     mCurScene->init();
     
     // 创建pass
-    auto skyPass = std::make_shared<CSkyPass>();
-    m_vec_renderpass.push_back(skyPass);
-
-    auto shadowPass = std::make_shared<CShadowPass>();
+    auto shadowPass = std::make_shared<CShadowPass>(mRenderContent);
     m_vec_renderpass.push_back(shadowPass);
 
-    auto normalPass = std::make_shared<CNormalPass>();
+    auto normalPass = std::make_shared<CNormalPass>(mRenderContent);
     m_vec_renderpass.push_back(normalPass);
+    
+    auto skyPass = std::make_shared<CSkyPass>(mRenderContent);
+    m_vec_renderpass.push_back(skyPass);
 }
 
 void RenderSystem::update() {
@@ -79,21 +77,44 @@ void RenderSystem::loadTexture(const std::filesystem::path& dirPath) {
 }
 
 void RenderSystem::onMouseMiddleScroll(double x, double y) {
-    
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseMiddleScroll(x, y);
+}
+
+void RenderSystem::onMouseLeftDown(double x, double y) {
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseLeftDown(x, y);
 }
 
 void RenderSystem::onMouseLeftUp(double x, double y) {
-    
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseLeftUp(x, y);
 }
 
 void RenderSystem::onMouseRightDown(double x, double y) {
-    
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseRightDown(x, y);
+}
+
+void RenderSystem::onMouseRightUp(double x, double y) {
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseRightUp(x, y);
 }
 
 void RenderSystem::onMouseMiddleDown(double x, double y) {
-    
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseMiddleDown(x, y);
 }
 
 void RenderSystem::onMouseMove(double x, double y) {
+    auto cameraController = mCurScene->GetActiveCameraController();
+    cameraController->onMouseMove(x, y);
+}
+
+void RenderSystem::onWindowSizeChanged(int x, int y) {
+    mRenderContent->screenWidth = x;
+    mRenderContent->screenHeight = y;
     
+    auto camera = mCurScene->GetActiveCamera();
+    camera->setViewport(x, y);
 }

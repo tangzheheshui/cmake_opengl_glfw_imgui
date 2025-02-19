@@ -15,7 +15,7 @@ RenderPass::RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Mater
     m_materail = matData;
 }
 
-bool RenderPass::Draw(const std::vector<Matrix> &matModel, uint32_t flags, int numViewpoit) {
+bool RenderPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit) {
     bool bDrawShadow = (flags & DrawOption::DRAW_SHADOW);
     auto shader = getShader(flags);
     if (!shader) {
@@ -58,8 +58,7 @@ bool RenderPass::Draw(const std::vector<Matrix> &matModel, uint32_t flags, int n
         }
         
         // 矩阵
-        auto mpMatrix = Camera::GetCamera().GetVPMatrix();
-        shader->setMat4("uMatrixVP", mpMatrix);
+        shader->setMat4("uViewProj", mtx);
         
         if (numViewpoit > 1) {
             shader->setMat4Array("uMatrixModel", matModel);

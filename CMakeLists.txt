@@ -29,7 +29,7 @@ aux_source_directory(${SRC_PTAH}/render SRC_LIST1)
 aux_source_directory(${SRC_PTAH}/render/model SRC_LIST2)
 aux_source_directory(${SRC_PTAH}/render/object SRC_LIST3)
 aux_source_directory(${SRC_PTAH}/render/pass SRC_PASS_LIST)
-aux_source_directory(${SRC_PTAH}/input SRC_LIST4)
+aux_source_directory(${SRC_PTAH}/render/camera SRC_LIST4)
 aux_source_directory(${SRC_PTAH}/core/math SRC_LIST5)
 
 # 按文件的物理路径分组（不影响编译）

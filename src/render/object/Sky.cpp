@@ -7,10 +7,14 @@
 
 #include "Sky.h"
 #include "render/shader.h"
-#include "render/camera_old.h"
+#include "render/camera/camera_old.h"
 #include "render/image.h"
 
-bool Sky::draw() {
+bool Sky::draw(const Matrix &mtx) {
+    return false;
+}
+
+bool Sky::draw(const Matrix &viewMat, const Matrix &projMat) {
     float skyboxVertices[] = {
         // positions          
         -1.0f,  1.0f, -1.0f,
@@ -81,10 +85,8 @@ bool Sky::draw() {
     shader->setInt("uTexture", 0);
     
     // 矩阵
-    auto mpMatrix = Camera::GetCamera().GetViewMatrix();
-    shader->setMat4("uViewMat", mpMatrix);
-    mpMatrix = Camera::GetCamera().GetProjectMatrix();
-    shader->setMat4("uProjMat", mpMatrix);
+    shader->setMat4("uViewMat", viewMat);
+    shader->setMat4("uProjMat", projMat);
     
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);

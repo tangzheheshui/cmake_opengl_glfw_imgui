@@ -5,7 +5,7 @@
 #include "backends/imgui_impl_opengl3.h"
 #include <iostream>
 #include <filesystem>
-#include "camera_old.h"
+#include "camera/camera_old.h"
 #include "RenderSystem.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -16,8 +16,8 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
 
 // settings
-const unsigned int SCR_WIDTH = 1600;
-const unsigned int SCR_HEIGHT = 1000;
+const unsigned int SCR_WIDTH = 800;
+const unsigned int SCR_HEIGHT = 500;
 
 // camera
 glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f, 3.0f);
@@ -61,9 +61,6 @@ int main()
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     //glfwSetInputMode(window, GLFW_CURSOR_HIDDEN, GLFW_CURSOR_HIDDEN);
     //glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
-    int width, height;
-    glfwGetFramebufferSize(window, &width, &height);
     //InputProcessMng::getInstance().setFrameBufferSize(width, height);
 
     // glad: load all OpenGL function pointers
@@ -73,8 +70,6 @@ int main()
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }    
-
-    Camera::GetCamera().setPosition({ 0,0,40 });
     
     // 初始化 ImGui
     IMGUI_CHECKVERSION();
@@ -92,8 +87,10 @@ int main()
     size_t pos =  proPath.find("/build");
     proPath = proPath.substr(0, pos);
     // 初始化渲染引擎
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
     RenderSystem::getInstance().init(proPath);
-
+    RenderSystem::getInstance().onWindowSizeChanged(width, height);
     while (!glfwWindowShouldClose(window))
     {
         // input
@@ -150,44 +147,13 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
     // make sure the viewport matches the new window dimensions; note that width and 
     // height will be significantly larger than specified on retina displays.
-    glViewport(0, 0, width, height);
+    RenderSystem::getInstance().onWindowSizeChanged(width, height);
+    
 }
 
 void mouse_callback(GLFWwindow* window, double xposIn, double yposIn)
 {
     RenderSystem::getInstance().onMouseMove(xposIn, yposIn);
-    float xpos = static_cast<float>(xposIn);
-    float ypos = static_cast<float>(yposIn);
-
-    if (firstMouse)
-    {
-        lastX = xpos;
-        lastY = ypos;
-        firstMouse = false;
-    }
-
-    float xoffset = xpos - lastX;
-    float yoffset = lastY - ypos; // reversed since y-coordinates go from bottom to top
-    lastX = xpos;
-    lastY = ypos;
-
-    float sensitivity = 0.1f; // change this value to your liking
-    xoffset *= sensitivity;
-    yoffset *= sensitivity;
-
-    float yaw = Camera::GetCamera().getYaw();
-    yaw += xoffset;
-    float pitch = Camera::GetCamera().getPitch();
-    pitch += yoffset;
-
-    // make sure that when pitch is out of bounds, screen doesn't get flipped
-    if (pitch > 89.0f)
-        pitch = 89.0f;
-    if (pitch < -89.0f)
-        pitch = -89.0f;
-
-    Camera::GetCamera().setPitch(pitch);
-    Camera::GetCamera().setYaw(yaw);
 }
 
 // glfw: whenever the mouse scroll wheel scrolls, this callback is called
@@ -222,10 +188,18 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
         {
             RenderSystem::getInstance().onMouseLeftUp(xpos, ypos);
         }
+        else if (action == GLFW_PRESS)
+        {
+            RenderSystem::getInstance().onMouseLeftDown(xpos, ypos);
+        }
     }
 
     else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-        if (action == GLFW_PRESS)
+        if (action == GLFW_RELEASE)
+        {
+            RenderSystem::getInstance().onMouseRightUp(xpos, ypos);
+        }
+        else if (action == GLFW_PRESS)
         {
             RenderSystem::getInstance().onMouseRightDown(xpos, ypos);
         }

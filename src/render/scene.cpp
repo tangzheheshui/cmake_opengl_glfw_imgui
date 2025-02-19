@@ -15,11 +15,8 @@
 #include "image.h"
 #include "Light.h"
 #include "core/taskQueue.h"
-#include "camera.h"
-
-const GLuint SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
+#include "camera/camera.h"
+#include "camera/CameraController.h"
 
 Scene& Scene::getScene() {
     static Scene instance;
@@ -27,15 +24,6 @@ Scene& Scene::getScene() {
 }
 
 Scene::Scene() {
-//    m_camera = std::make_shared<CCamera>();
-//    m_camera->setTarget({0, 0, 0});
-//    m_camera->setPos({0, 40, 40});
-//    m_camera->setUp({0, 1, 0});
-//    m_camera->setFov(60);
-//    m_camera->setNearfar({0.1, 500});
-//    m_camera->setAspect(SCR_WIDTH / SCR_HEIGHT);
-//    m_camera->updateViewMatrix();
-//    m_camera->updateProjMatrix();
 }
 
 void Scene::init() {
@@ -172,6 +160,12 @@ void Scene::createObjs() {
     // 最后绘制天空盒
     //m_vec_drawobj.push_back(objSky);
     SetSkyBox(objSky);
+    
+    // camera
+    mCameraActive = std::make_shared<Camera>();
+    mCameraActive->setPosition({ 0,0,40 });
+    
+    mCameraController = std::make_shared<CCameraController>(mCameraActive);
 }
 
 Matrix Scene::GetLightVPMatrix() {
@@ -230,24 +224,4 @@ std::shared_ptr<Line> Scene::getTestLine() {
     lineObj->setData(frustumVertices, indexs);
     lineObj->setColor({0, 1, 1});
     return lineObj;
-}
-
-void Scene::setLightUniform(Shader* shader) {
-    auto light = Light::GlobalLight();
-    shader->setFloat4("uLight.position", light.position.x, light.position.y, light.position.z, 1);
-    shader->setFloat3("uLight.direction", light.direction.x, light.direction.y, light.direction.z);
-    shader->setFloat("uLight.cosTheta", light.cosTheta);
-    shader->setFloat3("uLight.ambient", light.ambient.x, light.ambient.y, light.ambient.z);
-    shader->setFloat3("uLight.diffuse", light.diffuse.x, light.diffuse.y, light.diffuse.z);
-    shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
-}
-
-void Scene::set4Viewport() {
-    const float w = SCR_WIDTH;
-    const float h = SCR_HEIGHT;
-    
-    glViewportIndexedf(0, 0, 0, w, h);
-    glViewportIndexedf(1, w, 0, w, h);
-    glViewportIndexedf(2, 0, h, w, h);
-    glViewportIndexedf(3, w, h, w, h);
 }

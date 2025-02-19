@@ -360,8 +360,9 @@ void Model::genMesh() {
 bool Model::drawShadow() {
     uint32_t flags = 0;
     flags |= DrawOption::DRAW_SHADOW;
+    Matrix mtx;
     for (auto mesh : m_mesh) {
-        mesh->Draw(m_vec_modelMat, flags);
+        mesh->Draw(m_vec_modelMat, mtx, flags);
     }
     return true;
 }
@@ -409,7 +410,7 @@ void Model::update() {
     }
 }
 
-bool Model::draw() {
+bool Model::draw(const Matrix &mtx) {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     
@@ -424,7 +425,7 @@ bool Model::draw() {
     
     for (auto mesh : m_mesh) {
         mesh->setBoneMat(m_FinalBoneMatrices);
-        mesh->Draw(m_vec_modelMat, flags, m_nMultiViewport);
+        mesh->Draw(m_vec_modelMat, mtx, flags, m_nMultiViewport);
     }
     glDisable(GL_CULL_FACE);
     return true;

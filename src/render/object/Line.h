@@ -18,7 +18,7 @@ public:
     void setData(const std::vector<glm::vec3> &points, const std::vector<unsigned int> &indices);
     void setColor(const glm::vec3 &color) { m_color = color;}
     void setWidth(float width) { m_fWidth = width; }
-    virtual bool draw() override;
+    virtual bool draw(const Matrix &mtx) override;
 private:
     void calculate();
 private:

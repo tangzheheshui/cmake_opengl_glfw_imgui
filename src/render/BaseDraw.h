@@ -11,6 +11,7 @@
 #include <glad/glad.h>
 #include <vector>
 #include <glm/glm.hpp>
+#include "../core/math/matrix.h"
 
 class BaseDraw {
 public:
@@ -34,7 +35,7 @@ public:
             glDeleteBuffers(1, &_EBO);
         }
     }
-    virtual bool draw() = 0;
+    virtual bool draw(const Matrix &mtx) = 0;
     virtual bool drawShadow() { return false; }
     virtual void update() {}
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) { return false; }
