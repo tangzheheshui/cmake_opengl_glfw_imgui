@@ -135,7 +135,7 @@ unsigned int TextureMng::getCubeTexture(std::array<std::string, 6> faces) {
     int width, height, nrChannels;
     for (unsigned int i = 0; i < faces.size(); i++)
     {
-        auto file = m_root_path + faces[i];
+        auto& file = faces[i];
         unsigned char *data = stbi_load(file.c_str(), &width, &height, &nrChannels, 0);
         if (data)
         {

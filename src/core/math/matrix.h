@@ -9,7 +9,8 @@
 #define matrix_hpp
 
 #include <glm/glm.hpp>
-#include <corecrt_math_defines.h>
+
+#define M_PI        3.14159265358979323846264338327950288   /* pi             */
 
 static float degrees_to_radians(float degrees) {
     return degrees * M_PI / 180.0;

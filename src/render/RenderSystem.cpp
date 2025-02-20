@@ -23,14 +23,13 @@ RenderSystem::~RenderSystem() {
 }
 
 void RenderSystem::init(const std::string& rootPath) {
-    // ��������
-    std::filesystem::path pathRoot = std::filesystem::path(rootPath) / "res"/ "textures";
-    TextureMng::getInstance().setRootPath(pathRoot.string());
-    std::filesystem::path pathTex = std::filesystem::path(rootPath) / "res";
+    // 加载纹理
+    auto pathTex = std::filesystem::path(rootPath) / "res";
     loadTexture(pathTex);
 
     // ������ɫ��
-    ShaderCache::GetInstance().init(rootPath + "/res/shaders/");
+    auto shaderPath = std::filesystem::path(rootPath) / "res" / "shaders";
+    ShaderCache::GetInstance().init(shaderPath.string() + std::string(1, std::filesystem::path::preferred_separator));
 
 	// ��ʼ������
     mCurScene->setRootPath(rootPath);

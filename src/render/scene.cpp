@@ -117,7 +117,7 @@ void Scene::createObjs() {
     //objDuck->LoadFile(m_root_path + "/res/model/duck.dae");
     objDuck->LoadFile((std::filesystem::path(m_root_path) / "res" / "model" / "duck.dae").string());
     TaskQueue::instance().pushTask([start](){
-    });
+    }); 
     
     //objDuck->setMultiViewportNum(2);
     objDuck->setCount(4);
@@ -141,9 +141,17 @@ void Scene::createObjs() {
     objLight->setPosition(0, {lightPos.x, lightPos.y, lightPos.z});
     objLight->setScale(0, 0.5);
     
-    // 天空�?
+    //
+    auto skyboxPath = texPath / "skybox";
     std::shared_ptr<Sky> objSky = std::make_shared<Sky>();
-    objSky->setCubeImage({"/skybox/right.jpg", "/skybox/left.jpg", "/skybox/top.jpg", "/skybox/bottom.jpg", "/skybox/front.jpg", "/skybox/back.jpg"});
+    objSky->setCubeImage({
+        (skyboxPath / "right.jpg").string(),
+        (skyboxPath / "left.jpg").string(),
+        (skyboxPath / "top.jpg").string(),
+        (skyboxPath / "bottom.jpg").string(),
+        (skyboxPath / "front.jpg").string(),
+        (skyboxPath / "back.jpg").string()
+    });
     // debug deep
 //    std::shared_ptr<Image> objImage = std::make_shared<Image>();
 //    objImage->setTextureID(GetShadowTexture());
@@ -229,3 +237,4 @@ std::shared_ptr<Line> Scene::getTestLine() {
     lineObj->setColor({0, 1, 1});
     return lineObj;
 }
+
