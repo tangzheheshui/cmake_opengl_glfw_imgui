@@ -82,37 +82,57 @@ void RenderSystem::loadTexture(const std::filesystem::path& dirPath) {
 
 void RenderSystem::onMouseMiddleScroll(double x, double y) {
     auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseMiddleScroll(x, y);
+    cameraController->onMouseScale(y);
 }
 
 void RenderSystem::onMouseLeftDown(double x, double y) {
-    auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseLeftDown(x, y);
+    mMouseState.isMouseLeftPressed = true;
+    mMouseState.pressPos =  mMouseState.lastPos = {x, y};
+    mMouseState.pressTime = std::chrono::high_resolution_clock::now();
 }
 
 void RenderSystem::onMouseLeftUp(double x, double y) {
-    auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseLeftUp(x, y);
+    mMouseState.isMouseLeftPressed = false;
+    
+    // 点击的时间间隔
+    auto releaseTime = std::chrono::high_resolution_clock::now();
+    double duration = std::chrono::duration<double, std::milli>(releaseTime - mMouseState.pressTime).count();
+
+    // 计算移动距离
+    double dx = x - mMouseState.pressPos.x;
+    double dy = y - mMouseState.pressPos.y;
+    double distance = std::sqrt(dx * dx + dy * dy);
+
+    // 判断是否为 Click（时间短 & 移动距离小）
+    if (duration < 200 && distance < 5) {  // 200ms内 & 移动距离 < 5 像素
+        printf("Click detected at (%.1f, %.1f)\n", x, y);
+    } 
 }
 
 void RenderSystem::onMouseRightDown(double x, double y) {
-    auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseRightDown(x, y);
 }
 
 void RenderSystem::onMouseRightUp(double x, double y) {
-    auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseRightUp(x, y);
 }
 
 void RenderSystem::onMouseMiddleDown(double x, double y) {
-    auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseMiddleDown(x, y);
 }
 
 void RenderSystem::onMouseMove(double x, double y) {
+    if (!mMouseState.isMouseLeftPressed) {
+        return;
+    }
+
+    float xoffset = x - mMouseState.lastPos.x;
+    float yoffset = y - mMouseState.lastPos.y;
+    mMouseState.lastPos = {x, y};
+
+    float sensitivity = 0.1f;
+    xoffset *= sensitivity;
+    yoffset *= sensitivity;
+    
     auto cameraController = mCurScene->GetActiveCameraController();
-    cameraController->onMouseMove(x, y);
+    cameraController->onMouseDrag(xoffset, yoffset);
 }
 
 void RenderSystem::onWindowSizeChanged(int x, int y) {

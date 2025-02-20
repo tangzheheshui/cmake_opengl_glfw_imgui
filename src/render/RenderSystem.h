@@ -13,6 +13,20 @@ class RenderPass;
 class IRenderPass;
 class RenderContext;
 
+struct Point2D {
+    double x{};
+    double y{};
+};
+
+struct MouseState {
+    Point2D pressPos;
+    Point2D releasePos;
+    Point2D lastPos;
+    std::chrono::high_resolution_clock::time_point pressTime;
+    bool isDragging = false;
+    bool isMouseLeftPressed = false;
+};
+
 class RenderSystem {
 public:
 	static RenderSystem& getInstance();
@@ -43,4 +57,5 @@ private:
 	std::shared_ptr<Scene> mCurScene;
 	std::vector<std::shared_ptr<IRenderPass>> m_vec_renderpass;
     std::shared_ptr<RenderContext> mRenderContent;
+    MouseState mMouseState;
 }; 

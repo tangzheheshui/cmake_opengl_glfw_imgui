@@ -7,27 +7,11 @@
     
 #include "CameraController.h"
 #include "camera_old.h"
+#include <iostream>
 
-void CCameraController::onMouseLeftDown(double x, double y) {
-    mMouseLeftPressed = true;
-    mPosLast = {x, y};
-}
-
-void CCameraController::onMouseLeftUp(double x, double y) {
-    mMouseLeftPressed = false;
-}
-
-void CCameraController::onMouseRightDown(double x, double y) {
-
-}
-
-void CCameraController::onMouseRightUp(double x, double y) {
- 
-}
-
-void CCameraController::onMouseMiddleScroll(double xOffset, double yOffset) {
+void CCameraController::onMouseScale(double scale) {
     float fov = m_camera->getFov();
-    fov += (float)yOffset;
+    fov += (float)scale;
     if (fov < 3.0f)
         fov = 3.0f;
     if (fov > 90.0f)
@@ -36,27 +20,11 @@ void CCameraController::onMouseMiddleScroll(double xOffset, double yOffset) {
     m_camera->setFov(fov);
 }
 
-void CCameraController::onMouseMiddleDown(double x, double y) {
-
-}
-
-void CCameraController::onMouseMove(double x, double y) {
-    if (!mMouseLeftPressed) {
-        return;
-    }
-
-    float xoffset = x - mPosLast.x;
-    float yoffset = y - mPosLast.y;
-    mPosLast = {x, y};
-
-    float sensitivity = 0.1f;
-    xoffset *= sensitivity;
-    yoffset *= sensitivity;
-
+void CCameraController::onMouseDrag(double x, double y) {
     float yaw = m_camera->getYaw();
-    yaw -= xoffset;
+    yaw -= x;
     float pitch = m_camera->getPitch();
-    pitch += yoffset;
+    pitch += y;
 
     if (pitch > 89.0f)
         pitch = 89.0f;
