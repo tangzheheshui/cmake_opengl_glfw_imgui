@@ -310,8 +310,7 @@ void testRenderSystem(const std::string &rootPath) {
     });
     
     // obj
-    pScene->AddObj(objGround);
-    pScene->AddObj(objGround);
+    //pScene->AddObj(objGround);
     pScene->AddObj(objDuck);
     pScene->AddObj(objLight);
     pScene->AddObj(line_x);

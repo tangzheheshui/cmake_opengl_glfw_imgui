@@ -67,11 +67,15 @@ bool FontManager::LoadCharacter(uint32_t unicode) {
 
     FT_Bitmap& bitmap = face->glyph->bitmap;
 
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); //禁用字节对齐限制
+
     // 创建纹理
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, bitmap.width, bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE, bitmap.buffer);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
@@ -82,7 +86,7 @@ bool FontManager::LoadCharacter(uint32_t unicode) {
         bitmap.rows,
         face->glyph->bitmap_left,
         face->glyph->bitmap_top,
-        face->glyph->advance.x >> 6 // 转换为像素
+        face->glyph->advance.x // 转换为像素
     };
 
     characters[unicode] = character;

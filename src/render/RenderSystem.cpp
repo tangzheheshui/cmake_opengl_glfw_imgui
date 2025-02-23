@@ -51,7 +51,8 @@ void RenderSystem::init(const std::string& rootPath) {
     m_vec_renderpass.push_back(pickPass);
 
     // 加载字体
-    m_fontMng->LoadFont(std::filesystem::path(rootPath) / "res" / "font" / "roboto.ttf", 48);
+    auto fontPath = std::filesystem::path(rootPath) / "res" / "font" / "arial.ttf";
+    m_fontMng->LoadFont(fontPath.string(), 48);
 }
 
 void RenderSystem::update() {
