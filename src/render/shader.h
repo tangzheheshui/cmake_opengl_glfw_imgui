@@ -50,6 +50,7 @@ enum class ShaderType {
     Model_Texture_Anim,
     Sky,
     Pick,
+    Text,
 };
 
 class ShaderCache {

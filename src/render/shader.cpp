@@ -198,6 +198,10 @@ void ShaderCache::init(const std::string& path) {
     if (auto shader = new Shader(path + "vert_pick", path + "frag_pick")) {
         m_map_shader.insert(std::make_pair(ShaderType::Pick, shader));
     }
+    
+    if (auto shader = new Shader(path + "vert_font", path + "frag_font")) {
+        m_map_shader.insert(std::make_pair(ShaderType::Text, shader));
+    }
 }
 
 Shader* ShaderCache::GetShader(ShaderType type) {

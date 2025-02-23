@@ -7,6 +7,7 @@
 #include "image.h"
 #include "camera/camera_old.h"
 #include "camera/CameraController.h"
+#include "FontManager.h"
 
 RenderSystem& RenderSystem::getInstance() {
 	static RenderSystem instance;
@@ -16,6 +17,7 @@ RenderSystem& RenderSystem::getInstance() {
 RenderSystem::RenderSystem() {
     mCurScene = std::make_shared<Scene>();
     mRenderContent = std::make_shared<RenderContext>();
+    m_fontMng = std::make_shared<FontManager>();
 }
 
 RenderSystem::~RenderSystem() {
@@ -47,6 +49,9 @@ void RenderSystem::init(const std::string& rootPath) {
     
     auto pickPass = std::make_shared<CPickPass>(mRenderContent);
     m_vec_renderpass.push_back(pickPass);
+
+    // 加载字体
+    m_fontMng->LoadFont(std::filesystem::path(rootPath) / "res" / "font" / "roboto.ttf", 48);
 }
 
 void RenderSystem::update() {

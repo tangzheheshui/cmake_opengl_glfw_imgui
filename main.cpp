@@ -7,6 +7,15 @@
 #include <filesystem>
 #include "camera/camera_old.h"
 #include "RenderSystem.h"
+#include "scene.h"
+#include "object/Line.h"
+#include "object/Sky.h"
+#include "object/Text.h"
+#include "object/ImageRectangle.h"
+#include "model/model.h"
+#include "Light.h"
+#include "taskQueue.h"
+#include "FontManager.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -14,7 +23,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void processInput(GLFWwindow* window);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
-
+void testRenderSystem(const std::string &rootPath);
 // settings
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 500;
@@ -71,28 +80,31 @@ int main()
         return -1;
     }    
     
-    // ³õÊ¼»¯ ImGui
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     ImGui::StyleColorsDark();
 
-    // ³õÊ¼»¯ ImGui Æ½Ì¨/äÖÈ¾Æ÷°ó¶¨
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ ImGui Æ½Ì¨/ï¿½ï¿½È¾ï¿½ï¿½ï¿½ï¿½
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    // »ñÈ¡¸ùÄ¿Â¼
+    // ï¿½ï¿½È¡ï¿½ï¿½Ä¿Â¼
     std::filesystem::path current_path = std::filesystem::current_path();
     std::string proPath = current_path.string();
     char sep = std::filesystem::path::preferred_separator;
     std::string buildFolder = std::string(1, sep) + "build";
     size_t pos =  proPath.find(buildFolder);
     proPath = proPath.substr(0, pos);
-    // ³õÊ¼»¯äÖÈ¾ÒıÇæ
+    // ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½È¾ï¿½ï¿½ï¿½ï¿½
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
     RenderSystem::getInstance().init(proPath);
     RenderSystem::getInstance().onWindowSizeChanged(width, height);
+
+    // ä½¿ç”¨rendersysytemçš„å„ç§æ¥å£
+    testRenderSystem(proPath);
     while (!glfwWindowShouldClose(window))
     {
         // input
@@ -102,17 +114,17 @@ int main()
         RenderSystem::getInstance().draw();
 
         {
-            // Æô¶¯ĞÂµÄ ImGui Ö¡
+            // ï¿½ï¿½ï¿½ï¿½ï¿½Âµï¿½ ImGui Ö¡
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            // Ê¾Àı UI
+            // Ê¾ï¿½ï¿½ UI
             ImGui::Begin("Hello, world!");
             ImGui::Text("This is some useful text.");
             ImGui::End();
 
-            // äÖÈ¾ ImGui
+            // ï¿½ï¿½È¾ ImGui
             ImGui::Render();
         }
 
@@ -124,7 +136,7 @@ int main()
         glfwPollEvents();
     }
 
-    // ÇåÀí
+    // ï¿½ï¿½ï¿½ï¿½
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -180,7 +192,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     }
 }
 
-// Êó±êµã»÷»Øµ÷º¯Êı
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½ï¿½ï¿½
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
@@ -212,4 +224,107 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
             RenderSystem::getInstance().onMouseMiddleDown(xpos, ypos);
         }
     }
+}
+
+void testRenderSystem(const std::string &rootPath) {
+    auto pScene = RenderSystem::getInstance().GetCurScene();
+    if (!pScene)
+    {
+        return;
+    }
+    
+    // ç»˜åˆ¶åæ ‡è½´
+    std::vector<unsigned int> indices = {0, 1};
+    
+    float len = 15;
+    glm::vec3 pZero = {0, 0, 0};
+    glm::vec3 pX = {len, 0, 0};
+    glm::vec3 pY = {0, len, 0};
+    glm::vec3 pZ = {0, 0, len};
+    // 3ä¸ªè½´
+    std::shared_ptr<Line> line_x = std::make_shared<Line>();
+    std::shared_ptr<Line> line_y = std::make_shared<Line>();
+    std::shared_ptr<Line> line_z = std::make_shared<Line>();
+    line_x->setData({pZero, pX}, indices);
+    line_y->setData({pZero, pY}, indices);
+    line_z->setData({pZero, pZ}, indices);
+    
+    // é¢œè‰²
+    line_x->setColor({1, 0, 0});
+    line_y->setColor({0, 1, 0});
+    line_z->setColor({0, 0, 1});
+    
+    auto start = std::chrono::high_resolution_clock::now();
+    // åœ°é¢
+    std::shared_ptr<ImageRectangle> objGround = std::make_shared<ImageRectangle>();
+    float ground_width = 10;
+    auto texPath = std::filesystem::path(rootPath) / "res" / "textures";
+    objGround->setImagePath((texPath / "bricks2.jpg").string(),
+        (texPath / "bricks2_normal.jpg").string(),
+        (texPath / "bricks2_disp.jpg").string());
+    
+    objGround->setSetp(5, 5);
+    glm::vec3 p1(-ground_width, 0,  ground_width);
+    glm::vec3 p2(ground_width, 0,  ground_width);
+    glm::vec3 p3(ground_width, 0, -ground_width);
+    glm::vec3 p4(-ground_width, 0, -ground_width);
+    objGround->setPoints(p1, p2, p3, p4);
+    objGround->calculate();
+    
+    // é¸­å­
+    std::shared_ptr<Model> objDuck = std::make_shared<Model>();
+    objDuck->LoadFile((std::filesystem::path(rootPath) / "res" / "model" / "duck.dae").string());
+    TaskQueue::instance().pushTask([start](){
+    }); 
+    
+    objDuck->setCount(4);
+    objDuck->setPosition(0, {0, 0, 2});
+    objDuck->setScale(0, 0.01);
+    objDuck->setPosition(1, {-2, 0, 2});
+    objDuck->setScale(1, 0.01);
+    objDuck->setPosition(2, {2, 0, 2});
+    objDuck->setScale(2, 0.01);
+    objDuck->setPosition(3, {0, 0, -2});
+    objDuck->setScale(3, 0.01);
+    objDuck->setRotateY(3, 90);
+    
+    // å…‰æºæ¨¡å‹
+    std::shared_ptr<Model> objLight = std::make_shared<Model>();
+    objLight->LoadFile((std::filesystem::path(rootPath) / "res" / "model" / "duck.dae").string());
+    objLight->setCount(1);
+    objLight->setLightOpen(false);
+    auto lightPos = Light::GlobalLight().position;
+    objLight->setPosition(0, {lightPos.x, lightPos.y, lightPos.z});
+    objLight->setScale(0, 0.5);
+    
+    //
+    auto skyboxPath = texPath / "skybox";
+    std::shared_ptr<Sky> objSky = std::make_shared<Sky>();
+    objSky->setCubeImage({
+        (skyboxPath / "right.jpg").string(),
+        (skyboxPath / "left.jpg").string(),
+        (skyboxPath / "top.jpg").string(),
+        (skyboxPath / "bottom.jpg").string(),
+        (skyboxPath / "front.jpg").string(),
+        (skyboxPath / "back.jpg").string()
+    });
+    
+    // obj
+    pScene->AddObj(objGround);
+    pScene->AddObj(objGround);
+    pScene->AddObj(objDuck);
+    pScene->AddObj(objLight);
+    pScene->AddObj(line_x);
+    pScene->AddObj(line_y);
+    pScene->AddObj(line_z);
+    
+    // å¤©ç©ºç›’
+    pScene->SetSkyBox(objSky);
+
+    // æ–‡å­—
+    auto& renderSys = RenderSystem::getInstance();
+    auto fontMng = renderSys.GetFontMng();
+    std::shared_ptr<CText> objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
+    objText->SetText("test");
+    pScene->AddObj(objText);
 }

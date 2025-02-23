@@ -24,10 +24,12 @@ Scene& Scene::getScene() {
 }
 
 Scene::Scene() {
+    mCameraActive = std::make_shared<Camera>();
+    mCameraActive->setPosition({ 0,0,40 });
+    mCameraController = std::make_shared<CCameraController>(mCameraActive);
 }
 
 void Scene::init() {
-    createObjs();
 }
 
 std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
@@ -59,126 +61,6 @@ std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
     return vec_obj;
 }
 
-void Scene::createObjs() {
-    // 绘制坐标�?
-    std::vector<unsigned int> indices = {0, 1};
-    
-    float len = 15;
-    glm::vec3 pZero = {0, 0, 0};
-    glm::vec3 pX = {len, 0, 0};
-    glm::vec3 pY = {0, len, 0};
-    glm::vec3 pZ = {0, 0, len};
-    // 3个轴
-    std::shared_ptr<Line> line_x = std::make_shared<Line>();
-    std::shared_ptr<Line> line_y = std::make_shared<Line>();
-    std::shared_ptr<Line> line_z = std::make_shared<Line>();
-    line_x->setData({pZero, pX}, indices);
-    line_y->setData({pZero, pY}, indices);
-    line_z->setData({pZero, pZ}, indices);
-    
-    // 颜色
-    line_x->setColor({1, 0, 0});
-    line_y->setColor({0, 1, 0});
-    line_z->setColor({0, 0, 1});
-    
-    auto start = std::chrono::high_resolution_clock::now();
-    // 地面
-    std::shared_ptr<ImageRectangle> objGround = std::make_shared<ImageRectangle>();
-    float ground_width = 10;
-    auto texPath = std::filesystem::path(m_root_path) / "res" / "textures";
-    objGround->setImagePath((texPath / "bricks2.jpg").string(),
-        (texPath / "bricks2_normal.jpg").string(),
-        (texPath / "bricks2_disp.jpg").string());
-    
-    objGround->setSetp(5, 5);
-    glm::vec3 p1(-ground_width, 0,  ground_width);
-    glm::vec3 p2(ground_width, 0,  ground_width);
-    glm::vec3 p3(ground_width, 0, -ground_width);
-    glm::vec3 p4(-ground_width, 0, -ground_width);
-    objGround->setPoints(p1, p2, p3, p4);
-    objGround->calculate();
-    
-    // 背包
-    std::shared_ptr<Model> objModel = std::make_shared<Model>();
-    objModel->LoadFile(m_root_path + "/res/model/duck.dae");
-    
-    objModel->setCount(3);
-    objModel->setPosition(0, {0, 1, 0});
-    objModel->setScale(0, 0.5);
-    
-    objModel->setPosition(1, {-4, 1, 0});
-    objModel->setScale(1, 0.5);
-    
-    objModel->setPosition(2, {4, 1, 0});
-    objModel->setScale(2, 0.5);
-    
-    // 鸭子
-    std::shared_ptr<Model> objDuck = std::make_shared<Model>();
-    //objDuck->LoadFile(m_root_path + "/res/model/duck.dae");
-    objDuck->LoadFile((std::filesystem::path(m_root_path) / "res" / "model" / "duck.dae").string());
-    TaskQueue::instance().pushTask([start](){
-    }); 
-    
-    //objDuck->setMultiViewportNum(2);
-    objDuck->setCount(4);
-    objDuck->setPosition(0, {0, 0, 2});
-    objDuck->setScale(0, 0.01);
-    objDuck->setPosition(1, {-2, 0, 2});
-    objDuck->setScale(1, 0.01);
-    objDuck->setPosition(2, {2, 0, 2});
-    objDuck->setScale(2, 0.01);
-    objDuck->setPosition(3, {0, 0, -2});
-    objDuck->setScale(3, 0.01);
-    objDuck->setRotateY(3, 90);
-    
-    // 光源模型
-    std::shared_ptr<Model> objLight = std::make_shared<Model>();
-    //objLight->LoadFile(m_root_path + "/res/model/duck.dae");
-    objLight->LoadFile((std::filesystem::path(m_root_path) / "res" / "model" / "duck.dae").string());
-    objLight->setCount(1);
-    objLight->setLightOpen(false);
-    auto lightPos = Light::GlobalLight().position;
-    objLight->setPosition(0, {lightPos.x, lightPos.y, lightPos.z});
-    objLight->setScale(0, 0.5);
-    
-    //
-    auto skyboxPath = texPath / "skybox";
-    std::shared_ptr<Sky> objSky = std::make_shared<Sky>();
-    objSky->setCubeImage({
-        (skyboxPath / "right.jpg").string(),
-        (skyboxPath / "left.jpg").string(),
-        (skyboxPath / "top.jpg").string(),
-        (skyboxPath / "bottom.jpg").string(),
-        (skyboxPath / "front.jpg").string(),
-        (skyboxPath / "back.jpg").string()
-    });
-    // debug deep
-//    std::shared_ptr<Image> objImage = std::make_shared<Image>();
-//    objImage->setTextureID(GetShadowTexture());
-//    objImage->setShaderType(ShaderType::Debug_DeepTexture);
-    
-    // push 
-    m_vec_drawobj.push_back(objGround);
-    m_vec_drawobj.push_back(objDuck);
-    //m_vec_drawobj.push_back(objModel);
-    m_vec_drawobj.push_back(objLight);
-    m_vec_drawobj.push_back(line_x);
-    m_vec_drawobj.push_back(line_y);
-    m_vec_drawobj.push_back(line_z);
-    //m_vec_drawobj.push_back(objImage);
-    auto glass = createGlass();
-    m_vec_drawobj_blend.insert(m_vec_drawobj_blend.end(), glass.begin(), glass.end());
-    
-    // 最后绘制天空盒
-    //m_vec_drawobj.push_back(objSky);
-    SetSkyBox(objSky);
-    
-    // camera
-    mCameraActive = std::make_shared<Camera>();
-    mCameraActive->setPosition({ 0,0,40 });
-    
-    mCameraController = std::make_shared<CCameraController>(mCameraActive);
-}
 
 Matrix Scene::GetLightVPMatrix() {
     if (_lightVPMatrix) {
@@ -203,19 +85,19 @@ std::shared_ptr<Line> Scene::getTestLine() {
     matVP = glm::inverse(matVP);
     std::vector<glm::vec3> frustumVertices;
     
-    // 近裁剪面的四个顶�?
+    // 近裁剪面的四个顶�?
     frustumVertices.push_back(glm::vec3(-1, -1, -1));  // 左下
     frustumVertices.push_back(glm::vec3(1, -1, -1));   // 右下
     frustumVertices.push_back(glm::vec3(1, 1, -1));    // 右上
     frustumVertices.push_back(glm::vec3(-1, 1, -1));   // 左上
     
-    // 远裁剪面的四个顶�?
+    // 远裁剪面的四个顶�?
     frustumVertices.push_back(glm::vec3(-1, -1, 1));   // 左下
     frustumVertices.push_back(glm::vec3(1, -1, 1));    // 右下
     frustumVertices.push_back(glm::vec3(1, 1, 1));     // 右上
     frustumVertices.push_back(glm::vec3(-1, 1, 1));    // 左上
     
-    // 将顶点从 NDC 空间转换到世界空�?
+    // 将顶点从 NDC 空间转换到世界空�?
     for (glm::vec3& vertex : frustumVertices) {
         glm::vec4 worldVertex = matVP * glm::vec4(vertex, 1.0f);
         vertex = glm::vec3(worldVertex) / worldVertex.w;
@@ -236,5 +118,9 @@ std::shared_ptr<Line> Scene::getTestLine() {
     lineObj->setData(frustumVertices, indexs);
     lineObj->setColor({0, 1, 1});
     return lineObj;
+}
+
+void Scene::AddObj(std::shared_ptr<BaseDraw> obj) {
+    m_vec_drawobj.push_back(obj);
 }
 

@@ -1,0 +1,16 @@
+#version 330 core
+
+in vec2 pCoord;
+out vec4 FragColor;
+
+uniform sampler2D uTexture;
+uniform vec3 uColor;
+
+void main()
+{
+    vec4 color = texture(uTexture, pCoord);  // 获取纹理颜色
+    if (color.a < 0.1) {
+        discard;  // 如果透明度很低，丢弃当前片段（避免渲染透明部分）
+    }
+    FragColor = vec4(uColor, 1.0) * color;  // 通过纹理颜色和文本颜色混合
+}

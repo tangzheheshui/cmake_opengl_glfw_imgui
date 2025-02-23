@@ -12,6 +12,7 @@ class Scene;
 class RenderPass;
 class IRenderPass;
 class RenderContext;
+class FontManager;
 
 struct Point2D {
     double x{};
@@ -37,6 +38,9 @@ public:
 	void update();
     void BeginDraw();
 	void draw();
+public:
+    std::shared_ptr<Scene> GetCurScene() { return mCurScene; }
+    std::shared_ptr<FontManager> GetFontMng() { return m_fontMng; }
 #pragma region mouse_event
     void onMouseMiddleScroll(double x, double y); // 滚轮滚动
     void onMouseLeftDown(double x, double y);    // 左键down
@@ -53,6 +57,7 @@ private:
 	void loadTexture(const std::filesystem::path& dirPath);
 private:
 	std::shared_ptr<TextureMng> m_texMng;
+    std::shared_ptr<FontManager> m_fontMng;
 	std::shared_ptr<ShaderMng> m_shaderMng;
 	std::shared_ptr<Scene> mCurScene;
 	std::vector<std::shared_ptr<IRenderPass>> m_vec_renderpass;

@@ -9,14 +9,7 @@ add_subdirectory(3rdparty/glfw)
 add_subdirectory(3rdparty/glad)
 add_subdirectory(3rdparty/imgui)
 add_subdirectory(3rdparty/assimp)
-
-# 包含头文件路径
-include_directories(3rdparty/imgui)
-include_directories(3rdparty/)
-include_directories(src/)
-include_directories(src/core/)
-include_directories(src/render/
-)
+add_subdirectory(3rdparty/freetype)
 
 # 收集所有的头文件
 file(GLOB_RECURSE HEADER_FILES
@@ -43,6 +36,15 @@ ${HEADER_FILES}
 ${SRC_PASS_LIST}
 )
 
+# 包含头文件路径
+include_directories(3rdparty/imgui)
+include_directories(3rdparty)
+include_directories(3rdparty/freetype/include)
+include_directories(src/)
+include_directories(src/core/)
+include_directories(src/render/)
+include_directories(src/render/camera/)
+
 # 可执行文件
 add_executable(my_app main.cpp 
 ${SRC_LIST1} 
@@ -59,3 +61,4 @@ target_link_libraries(my_app glad)
 target_link_libraries(my_app glfw)
 target_link_libraries(my_app imgui)
 target_link_libraries(my_app assimp)
+target_link_libraries(my_app freetype)

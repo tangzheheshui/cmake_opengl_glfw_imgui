@@ -31,11 +31,12 @@ public:
     void init();
     std::shared_ptr<Camera> GetActiveCamera() { return mCameraActive; }
     std::shared_ptr<CCameraController> GetActiveCameraController() { return mCameraController; }
+
     std::shared_ptr<Sky> GetSkyBox() { return mSkyBox; }
     void SetSkyBox(std::shared_ptr<Sky> sky) { mSkyBox = sky; }
+
     std::vector<std::shared_ptr<BaseDraw>> GetObjs() { return m_vec_drawobj; }
-private:
-    void createObjs();
+    void AddObj(std::shared_ptr<BaseDraw> obj);
 private:
     std::shared_ptr<Line> getTestLine();
     std::vector<std::shared_ptr<ImageRectangle>> createGlass();
