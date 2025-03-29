@@ -52,7 +52,7 @@ bool CText::draw(const Matrix &mtx) {
 
     float x = 0;
     float y = 0;
-    float scale = 0.5f;
+    float scale = 0.1f;
     // 遍历字符串并绘制每个字符
     for (char c : m_str) {
         auto ch = pFontMng->GetCharacter(c);  // 获取字符的字形信息

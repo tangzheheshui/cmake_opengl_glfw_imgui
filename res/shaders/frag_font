@@ -6,7 +6,7 @@ out vec4 FragColor;
 uniform sampler2D uTexture;
 uniform vec3 uColor;
 
-void main()
+void main1()
 {
     vec4 color = texture(uTexture, pCoord);  // 获取纹理颜色
     if (color.r < 0.1) {
@@ -15,5 +15,20 @@ void main()
     else {
         FragColor = vec4(uColor, color.a); 
     }
-    
+}
+
+void main()
+{
+    float edge = 0.5;
+    float smooth1 = 0.f;
+    // 读取 SDF 数据 (范围 [0, 1])
+    float distance = texture(uTexture, pCoord).r;
+    if (distance < 0.01) {
+        //discard;  
+    }
+    // 使用 smoothstep 实现平滑边缘
+    float alpha = smoothstep(edge - smooth1, edge + smooth1, distance);
+
+    // 输出颜色，带透明度
+    FragColor = vec4(uColor, alpha);
 }

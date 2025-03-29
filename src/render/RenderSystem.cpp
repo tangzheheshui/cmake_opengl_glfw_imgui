@@ -52,7 +52,7 @@ void RenderSystem::init(const std::string& rootPath) {
 
     // 加载字体
     auto fontPath = std::filesystem::path(rootPath) / "res" / "font" / "arial.ttf";
-    m_fontMng->LoadFont(fontPath.string(), 48);
+    m_fontMng->LoadFont(fontPath.string(), 64);
 }
 
 void RenderSystem::update() {

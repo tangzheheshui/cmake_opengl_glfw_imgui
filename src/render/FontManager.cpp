@@ -53,6 +53,55 @@ const Character* FontManager::GetCharacter(uint32_t unicode) {
     return &characters[unicode]; // 返回加载后的字符
 }
 
+// SDF 生成函数
+std::vector<uint8_t> GenerateSDF(const FT_Bitmap& bitmap, float spread = 2)
+{
+    const int width = bitmap.width;
+    const int height = bitmap.rows;
+
+    std::vector<uint8_t> sdfData(width * height, 0);
+
+    // 定义最大搜索半径 (可调)
+    const float maxDist = std::sqrt(static_cast<float>(spread * spread + spread * spread));
+
+    // 遍历每个像素
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+
+            // 获取当前像素的灰度值 (0-255)
+            const bool inside = bitmap.buffer[y * bitmap.pitch + x] > 0;
+
+            float minDist = maxDist;
+
+            // 扫描邻域 (计算最短距离)
+            for (int dy = -spread; dy <= spread; ++dy) {
+                for (int dx = -spread; dx <= spread; ++dx) {
+                    int nx = x + dx;
+                    int ny = y + dy;
+
+                    if (nx < 0 || nx >= width || ny < 0 || ny >= height)
+                        continue;
+
+                    const bool neighborInside = bitmap.buffer[ny * bitmap.pitch + nx] > 0;
+
+                    if (inside != neighborInside) {
+                        float dist = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+                        minDist = std::min(minDist, dist);
+                    }
+                }
+            }
+
+            // 距离场归一化为 [0, 255]
+            float normalizedDist = (minDist / maxDist) * 128.0f;
+            sdfData[y * width + x] = inside ?
+                static_cast<uint8_t>(128 + normalizedDist) : // 字体内
+                static_cast<uint8_t>(128 - normalizedDist);  // 字体外
+        }
+    }
+
+    return sdfData;
+}
+
 bool FontManager::LoadCharacter(uint32_t unicode) {
     // 如果该字符已加载，则直接返回
     if (characters.find(unicode) != characters.end()) {
@@ -69,11 +118,16 @@ bool FontManager::LoadCharacter(uint32_t unicode) {
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1); //禁用字节对齐限制
 
+    auto data = GenerateSDF(bitmap, 3);
+    unsigned char* tmpBuffer = data.data();
+    if (0) {
+        tmpBuffer = bitmap.buffer;
+    }
     // 创建纹理
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, bitmap.width, bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE, bitmap.buffer);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, bitmap.width, bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE, tmpBuffer);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
