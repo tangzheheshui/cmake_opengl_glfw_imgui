@@ -20,7 +20,7 @@ void main1()
 void main()
 {
     float edge = 0.5;
-    float smooth1 = 0.f;
+    float smooth1 = 0.1f;
     // 读取 SDF 数据 (范围 [0, 1])
     float distance = texture(uTexture, pCoord).r;
     if (distance < 0.01) {

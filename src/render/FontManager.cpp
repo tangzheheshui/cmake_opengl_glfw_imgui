@@ -62,17 +62,22 @@ std::vector<uint8_t> GenerateSDF(const FT_Bitmap& bitmap, float spread = 2)
     std::vector<uint8_t> sdfData(width * height, 0);
 
     // 定义最大搜索半径 (可调)
-    const float maxDist = std::sqrt(static_cast<float>(spread * spread + spread * spread));
+    const float maxDist = 2*std::sqrt(static_cast<float>(spread * spread + spread * spread));
 
     // 遍历每个像素
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
 
+            int index = y * width + x;
             // 获取当前像素的灰度值 (0-255)
             const bool inside = bitmap.buffer[y * bitmap.pitch + x] > 0;
+            if (inside) {
+                sdfData[index] = 255;
+                continue;
+            }
 
             float minDist = maxDist;
-
+            bool outside = true;
             // 扫描邻域 (计算最短距离)
             for (int dy = -spread; dy <= spread; ++dy) {
                 for (int dx = -spread; dx <= spread; ++dx) {
@@ -84,18 +89,22 @@ std::vector<uint8_t> GenerateSDF(const FT_Bitmap& bitmap, float spread = 2)
 
                     const bool neighborInside = bitmap.buffer[ny * bitmap.pitch + nx] > 0;
 
-                    if (inside != neighborInside) {
+                    if (neighborInside) {
                         float dist = std::sqrt(static_cast<float>(dx * dx + dy * dy));
                         minDist = std::min(minDist, dist);
+                        outside = false;
                     }
                 }
             }
 
             // 距离场归一化为 [0, 255]
-            float normalizedDist = (minDist / maxDist) * 128.0f;
-            sdfData[y * width + x] = inside ?
-                static_cast<uint8_t>(128 + normalizedDist) : // 字体内
-                static_cast<uint8_t>(128 - normalizedDist);  // 字体外
+            if (outside) {
+                sdfData[index] = 0;
+            }
+            else {
+                float normalizedDist = (minDist / maxDist) * 128.0f;
+                sdfData[index] = static_cast<uint8_t>(128 - normalizedDist);
+            }
         }
     }
 
@@ -118,7 +127,7 @@ bool FontManager::LoadCharacter(uint32_t unicode) {
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1); //禁用字节对齐限制
 
-    auto data = GenerateSDF(bitmap, 3);
+    auto data = GenerateSDF(bitmap, 4);
     unsigned char* tmpBuffer = data.data();
     if (0) {
         tmpBuffer = bitmap.buffer;
