@@ -17,6 +17,11 @@
 #include "core/taskQueue.h"
 //#include "camera/camera.h"
 #include "camera/CameraController.h"
+#include "math/vector2.h"
+#include "math/vector3.h"
+#include "math/vector4.h"
+#include "math/mat4.h"
+#include "camera.h"
 
 Scene& Scene::getScene() {
     static Scene instance;
@@ -30,6 +35,12 @@ Scene::Scene() {
 }
 
 void Scene::init() {
+    math::vec2 vec2;
+    math::vec3 vec3;
+    math::vec4 vec4;
+    math::mat4 mat;
+    scene::Camera camera;
+    
 }
 
 std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
