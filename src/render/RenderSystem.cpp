@@ -41,18 +41,18 @@ void RenderSystem::init(const std::string& rootPath) {
     auto shadowPass = std::make_shared<CShadowPass>(mRenderContent);
     m_vec_renderpass.push_back(shadowPass);
 
-    auto normalPass = std::make_shared<CNormalPass>(mRenderContent);
-    m_vec_renderpass.push_back(normalPass);
-    
     auto skyPass = std::make_shared<CSkyPass>(mRenderContent);
     m_vec_renderpass.push_back(skyPass);
+
+    auto normalPass = std::make_shared<CNormalPass>(mRenderContent);
+    m_vec_renderpass.push_back(normalPass);
     
     auto pickPass = std::make_shared<CPickPass>(mRenderContent);
     m_vec_renderpass.push_back(pickPass);
 
     // 加载字体
     auto fontPath = std::filesystem::path(rootPath) / "res" / "font" / "arial.ttf";
-    m_fontMng->LoadFont(fontPath.string(), 48);
+    m_fontMng->LoadFont(fontPath.string(), 64);
 }
 
 void RenderSystem::update() {

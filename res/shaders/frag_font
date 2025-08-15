@@ -6,7 +6,7 @@ out vec4 FragColor;
 uniform sampler2D uTexture;
 uniform vec3 uColor;
 
-void main()
+void main1()
 {
     vec4 color = texture(uTexture, pCoord);  // 获取纹理颜色
     if (color.r < 0.1) {
@@ -15,5 +15,35 @@ void main()
     else {
         FragColor = vec4(uColor, color.a); 
     }
-    
 }
+
+void main()
+{
+    float edge = 0.5;
+    float smooth1 = 0.1f;
+    float outlineSize = 1.f;  // 描边厚度
+
+    // 读取 SDF 数据 (范围 [0, 1])
+    float distance = texture(uTexture, pCoord).r;
+    if (distance < 0.01) {
+        discard;
+    }
+
+    // 计算描边区域的透明度
+    float outlineEdge = edge + outlineSize;
+    float outlineAlpha = smoothstep(outlineEdge - smooth1, outlineEdge + smooth1, distance);
+
+    // 计算文字区域的透明度
+    float alpha = smoothstep(edge - smooth1, edge + smooth1, distance);
+
+    // 颜色混合（黑色描边 + 文字颜色）
+    vec3 outlineColor = vec3(0.0, 1.0, 0.0);  // 黑色描边
+    vec3 finalColor = mix(outlineColor, uColor.rgb, alpha);
+
+    // 最终透明度，确保描边和文字区域都可见
+    float finalAlpha = max(outlineAlpha, alpha);
+
+    // 输出颜色
+    FragColor = vec4(finalColor, finalAlpha);
+}
+

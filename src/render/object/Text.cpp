@@ -48,11 +48,12 @@ bool CText::draw(const Matrix &mtx) {
     glBindVertexArray(_VAO);
 
     glEnable(GL_BLEND);
+    //glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     float x = 0;
     float y = 0;
-    float scale = 0.5f;
+    float scale = 0.1f;
     // 遍历字符串并绘制每个字符
     for (char c : m_str) {
         auto ch = pFontMng->GetCharacter(c);  // 获取字符的字形信息
