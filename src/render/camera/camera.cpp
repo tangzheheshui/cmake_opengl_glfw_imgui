@@ -139,8 +139,7 @@ void Camera::updateProjectionMatrix() const {
             m_projectionMatrix = math::mat4::perspective(m_fov, m_aspect, m_near, m_far);
             break;
         case ProjectionType::Orthographic:
-            m_projectionMatrix = math::mat4::orthographic(
-                                                          m_left, m_right, m_bottom, m_top, m_near, m_far);
+            m_projectionMatrix = math::mat4::orthographic(m_left, m_cam_right, m_bottom, m_top, m_near, m_far);
             break;
     }
     m_projectionDirty = false;

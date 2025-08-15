@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.14)
 project(my_app)
 
+if (MSVC)
+    ADD_COMPILE_OPTIONS(/source-charset:utf-8)
+endif()
+
 # 设置 C++ 标准
 set(CMAKE_CXX_STANDARD 17)
 

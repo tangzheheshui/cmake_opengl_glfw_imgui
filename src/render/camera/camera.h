@@ -47,8 +47,8 @@ public:
     void moveUp(float distance);
     
 private:
-    void updateViewMatrix();
-    void updateProjectionMatrix();
+    void updateViewMatrix() const;
+    void updateProjectionMatrix() const;
     
     // 相机参数
     math::vec3 m_position;
@@ -66,7 +66,7 @@ private:
         };
         struct {
             float m_left;
-            float m_right;
+            float m_cam_right;
             float m_bottom;
             float m_top;
         };
