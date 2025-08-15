@@ -80,15 +80,15 @@ int main()
         return -1;
     }    
     
-    // ��ʼ�� ImGui
+    // 初始化ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     ImGui::StyleColorsDark();
 
-    // ��ʼ�� ImGui ƽ̨/��Ⱦ����
+    // 绑定imgui到glfw和opengl
     ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 130");
+    ImGui_ImplOpenGL3_Init("#version 330");
 
     // ��ȡ��Ŀ¼
     std::filesystem::path current_path = std::filesystem::current_path();
@@ -110,25 +110,28 @@ int main()
         // input
         processInput(window);
 
-        RenderSystem::getInstance().update();
-        RenderSystem::getInstance().draw();
-
+        // 渲染系统
         {
-            // �����µ� ImGui ֡
+            RenderSystem::getInstance().update();
+            RenderSystem::getInstance().draw();
+        }
+
+        // Imgui
+        {
+            // 开始imgui帧
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
 
-            // ʾ�� UI
+            // 绘制imgui控件
             ImGui::Begin("Hello, world!");
             ImGui::Text("This is some useful text.");
             ImGui::End();
 
-            // ��Ⱦ ImGui
+            // 绘制 ImGui
             ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
-
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -136,7 +139,7 @@ int main()
         glfwPollEvents();
     }
 
-    // ����
+    // 清理
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
