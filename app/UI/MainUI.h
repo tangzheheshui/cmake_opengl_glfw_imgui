@@ -1,11 +1,45 @@
 #pragma once
 #include "imgui.h"
+#ifdef _WIN32
+#include <windows.h>  // Windows 编码转换 API
+#else
+#include <iconv.h>    // Linux/macOS 编码转换
+#include <errno.h>
+#endif
+// 跨平台确保字符串为 UTF-8 编码
+std::string EnsureUTF8(const std::string& str) {
+#ifdef _WIN32
+    // --- Windows 部分（GBK → UTF-8）---
+    if (str.empty()) return str;
+
+    // Step 1: 获取字符串长度（GBK → UTF-16）
+    int wlen = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) return str;
+
+    // Step 2: 转换到 UTF-16
+    std::vector<wchar_t> utf16Buf(wlen);
+    MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, utf16Buf.data(), wlen);
+
+    // Step 3: 获取 UTF-16 → UTF-8 长度
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, utf16Buf.data(), -1, nullptr, 0, nullptr, nullptr);
+    if (ulen <= 0) return str;
+
+    // Step 4: 转换到 UTF-8
+    std::vector<char> utf8Buf(ulen);
+    WideCharToMultiByte(CP_UTF8, 0, utf16Buf.data(), -1, utf8Buf.data(), ulen, nullptr, nullptr);
+
+    return std::string(utf8Buf.data());
+#else
+    // --- Linux/macOS 部分（假设输入已是 UTF-8）---
+    return str;
+#endif
+}
 
 void RenderUI()
 {
-    ImGui::Begin("功能列表", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::Begin(EnsureUTF8("功能列表").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize);
     // 核心渲染功能
-    if (ImGui::TreeNode("1. 核心渲染")) {
+    if (ImGui::TreeNode(EnsureUTF8("1. 核心渲染").c_str())) {
         ImGui::BulletText("基础渲染管线");
         ImGui::BulletText("顶点/片段着色器支持");
         ImGui::BulletText("多重采样抗锯齿(MSAA)");
