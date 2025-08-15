@@ -15,7 +15,7 @@
 #include "image.h"
 #include "Light.h"
 #include "core/taskQueue.h"
-#include "camera/camera.h"
+//#include "camera/camera.h"
 #include "camera/CameraController.h"
 
 Scene& Scene::getScene() {

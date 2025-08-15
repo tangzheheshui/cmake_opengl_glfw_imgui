@@ -16,6 +16,7 @@
 #include "Light.h"
 #include "taskQueue.h"
 #include "FontManager.h"
+#include "UI/mainUI.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -85,6 +86,63 @@ int main()
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     ImGui::StyleColorsDark();
+    
+    // 设置中文
+    {
+        // 1. 清除默认字体
+        io.Fonts->Clear();
+        
+        // 2. 尝试加载系统中文字体
+        ImFont* font = nullptr;
+        
+        // Windows字体路径
+        const char* windows_fonts[] = {
+            "C:/Windows/Fonts/simhei.ttf",
+            "C:/Windows/Fonts/msyh.ttc",
+            nullptr
+        };
+        
+        // macOS字体路径
+        const char* mac_fonts[] = {
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            nullptr
+        };
+        
+        // Linux字体路径
+        const char* linux_fonts[] = {
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            nullptr
+        };
+        
+        // 根据系统尝试加载
+        #ifdef _WIN32
+        for (int i = 0; windows_fonts[i]; i++) {
+            font = io.Fonts->AddFontFromFileTTF(windows_fonts[i], 18.0f, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+            if (font) break;
+        }
+        #elif __APPLE__
+        for (int i = 0; mac_fonts[i]; i++) {
+            font = io.Fonts->AddFontFromFileTTF(mac_fonts[i], 18.0f, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+            if (font) break;
+        }
+        #else
+        for (int i = 0; linux_fonts[i]; i++) {
+            font = io.Fonts->AddFontFromFileTTF(linux_fonts[i], 18.0f, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+            if (font) break;
+        }
+        #endif
+        
+        // 3. 如果都失败，使用默认字体+中文补充
+        if (!font) {
+            io.Fonts->AddFontDefault();
+            font = io.Fonts->AddFontFromFileTTF("simhei.ttf", 18.0f, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+        }
+        
+        // 4. 重建字体纹理
+        io.Fonts->Build();    
+    }
 
     // 绑定imgui到glfw和opengl
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -124,9 +182,7 @@ int main()
             ImGui::NewFrame();
 
             // 绘制imgui控件
-            ImGui::Begin("Hello, world!");
-            ImGui::Text("This is some useful text.");
-            ImGui::End();
+            RenderUI();
 
             // 绘制 ImGui
             ImGui::Render();
