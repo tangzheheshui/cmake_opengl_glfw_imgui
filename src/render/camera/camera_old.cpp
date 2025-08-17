@@ -126,9 +126,9 @@ Matrix Camera::ortho(float left, float right, float bottom, float top, float nea
     //    0       0       0       1
     
     // 步骤3:S*T后，将n和f，替换成-n�?f
-    mat.set(0, 0, 2.0 / (right - left));
-    mat.set(1, 1, 2.0 / (top - bottom));
-    mat.set(2, 2, 2.0 / (near - far));
+    mat.set(0, 0, 2.0f / (right - left));
+    mat.set(1, 1, 2.0f / (top - bottom));
+    mat.set(2, 2, 2.0f / (near - far));
     mat.set(3, 0, - (right + left) / (right - left));
     mat.set(3, 1, - (top + bottom) / (top - bottom));
     mat.set(3, 2, (far + near) / (near - far));

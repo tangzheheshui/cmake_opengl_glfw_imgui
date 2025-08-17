@@ -1,7 +1,7 @@
-#pragma once
+ï»¿#pragma once
 #include <memory>
 
-// ÀàµÄÇ°ÖÃÉùÃ÷
+
 class Camera;
 
 using CameraPtr = std::shared_ptr<Camera>;

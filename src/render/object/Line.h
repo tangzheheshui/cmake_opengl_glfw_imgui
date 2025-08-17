@@ -24,7 +24,7 @@ private:
 private:
     std::vector<glm::vec3> m_points;
     std::vector<unsigned int> m_indices;
-    glm::vec3 m_color;
+    glm::vec3 m_color{};
     float m_fWidth = 1;
 };
 

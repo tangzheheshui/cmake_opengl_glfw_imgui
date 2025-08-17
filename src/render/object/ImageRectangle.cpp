@@ -81,13 +81,11 @@ bool ImageRectangle::draw(CameraPtr camera) {
         shader->setInt("uHasHeight", 0);
     }
     
-    // 矩阵
     Matrix model;
     shader->setMat4("uModel", model);
     shader->setMat4("uViewProj", camera->GetVPMatrix());
     shader->setMat4("uLightSpaceMatrix", Scene::GetLightVPMatrix());
     
-    // 灯光
     auto light = Light::GlobalLight();
     shader->setFloat4("uLight.position", light.position.x, light.position.y, light.position.z, 1);
     shader->setFloat3("uLight.direction", light.direction.x, light.direction.y, light.direction.z);
@@ -95,14 +93,9 @@ bool ImageRectangle::draw(CameraPtr camera) {
     shader->setFloat3("uLight.ambient", light.ambient.x, light.ambient.y, light.ambient.z);
     shader->setFloat3("uLight.diffuse", light.diffuse.x, light.diffuse.y, light.diffuse.z);
     shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
-    
-    // 相机位置
     shader->setFloat3("uCameraPos", 15, 15, 0);
-    
-    // 透明�?
     shader->setFloat("uAlpha", getAlpha());
     
-    // 开启混�?
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glEnable(GL_BLEND);

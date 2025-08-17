@@ -13,7 +13,7 @@
 
 void Model::LoadFile(const std::string &path) {
     if (!m_filepath.empty()) {
-        assert(0); // 不允许变更模型信�?
+        assert(0); 
         return;
     }
     // Load the model file.
@@ -33,13 +33,11 @@ void Model::LoadFile(const std::string &path) {
     m_filepath = std::filesystem::path(path).parent_path();
     processTexture(scene);
     
-    // 解析材质
     processMaterail(scene);
     
     // process ASSIMP's root node recursively
     processNode(scene->mRootNode, scene, nullptr);
-    
-    // 解析动画
+
     processAnimation(scene);
 }
 
@@ -73,20 +71,20 @@ void Model::processAnimation(const aiScene* scene) {
         animation.duration = pAni->mDuration;
         animation.ticksPerSecond = pAni->mTicksPerSecond;
         
-        for(int j = 0; j < pAni->mNumChannels; j++) {
+        for(unsigned int j = 0; j < pAni->mNumChannels; j++) {
             auto channel = pAni->mChannels[j];
             NodeAnim nodeAni;
             nodeAni.name = channel->mNodeName.C_Str();
             printf("parserAni, nodeName = %s\n", nodeAni.name.c_str());
             // position
-            for (int indexPos = 0; indexPos < channel->mNumPositionKeys; indexPos++) {
+            for (unsigned int indexPos = 0; indexPos < channel->mNumPositionKeys; indexPos++) {
                 KeyPosition key;
                 key.timeStamp = channel->mPositionKeys[indexPos].mTime;
                 key.position = AssimpGLMHelpers::GetGLMVec(channel->mPositionKeys[indexPos].mValue);
                 nodeAni.positions.push_back(key);
             }
             
-            for (int indexPos = 0; indexPos < channel->mNumRotationKeys; indexPos++) {
+            for (unsigned int indexPos = 0; indexPos < channel->mNumRotationKeys; indexPos++) {
                 KeyRotation key;
                 key.timeStamp = channel->mRotationKeys[indexPos].mTime;
                 key.qua = AssimpGLMHelpers::GetGLMQuat(channel->mRotationKeys[indexPos].mValue);
@@ -95,7 +93,7 @@ void Model::processAnimation(const aiScene* scene) {
             
             animation.nodeAnims.push_back(nodeAni);
         }
-        // 目前只取一个动�?
+     
         m_model_data.animation = animation;
         break;
     }
@@ -122,7 +120,7 @@ void Model::processMaterail(const aiScene* scene) {
         }
            
         if(AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
-            // 防止模型导出时，丢失ambient
+            
             aiColor4D color(0.0, 0.0, 0.0, ambient.a);
             if (ambient == color) {
                 tmpMat->ambient = tmpMat->diffuse;
@@ -194,7 +192,7 @@ void Model::processBoneWeightForVertices(aiMesh *mesh, std::shared_ptr<MeshData>
     meshData->boneIDs.resize(meshData->positions.size(), glm::vec4(-1));
     meshData->weights.resize(meshData->positions.size());
     
-    for (int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
+    for (unsigned int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
     {
         int boneID = -1;
         std::string boneName = mesh->mBones[boneIndex]->mName.C_Str();
@@ -335,7 +333,7 @@ std::vector<Texture> Model::loadMaterialTextures(aiMaterial *mat, aiTextureType 
         //std::cout << "model materail tex name = " << filename << ", typeName = " << texture.name << std::endl;
         auto iter = m_model_data.map_image.find(filename);
         if (iter != m_model_data.map_image.end()) { 
-            // 从内存中获取
+            
             texture.data = iter->second;
         }
         else {
@@ -384,7 +382,7 @@ void Model::updateNode(Node* node, Node* nodeParent) {
     if (nodeParent) {
         auto nodeAni = m_model_data.animation.findNodeAnim(node->name);
         if (nodeAni) {
-            node->matCur = nodeParent->matCur * nodeAni->getMat4(m_anim_ratio);
+            node->matCur = nodeParent->matCur * nodeAni->getMat4((float)m_anim_ratio);
         } else {
             node->matCur = nodeParent->matCur * nodeParent->transformation;
         }
@@ -414,7 +412,7 @@ void Model::update() {
         clock_t det = (clock() - m_clock);
         clock_t cur = det % (5 * CLOCKS_PER_SEC);
         m_anim_ratio = cur / (5.0 * CLOCKS_PER_SEC);
-        printf("update ratio, m_anim_ratio = %f, cur = %zu\n", m_anim_ratio, cur);
+        printf("update ratio, m_anim_ratio = %f, cur = %d\n", (float)m_anim_ratio, (int)cur);
         updateNode(m_model_data.nodes.front().get(), nullptr);
     }
 }
@@ -510,7 +508,7 @@ void Model::getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned
         }
         
         std::transform(_debugIndex.begin(), _debugIndex.end(), std::back_inserter(indices),
-                           [indexBegin](int val) { return val + indexBegin; });
+                           [indexBegin](unsigned int val) { return val + (unsigned int)indexBegin; });
     }
     vertices.insert(vertices.end(), all_points.begin(), all_points.end());
 }

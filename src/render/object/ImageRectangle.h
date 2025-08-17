@@ -27,14 +27,14 @@ private:
     void getTangent(const glm::vec2 &uv1, const glm::vec2 &uv2, const glm::vec2 &uv3, const glm::vec2 &uv4, glm::vec3 &tangent1, glm::vec3 &bitangent1, glm::vec3 &tangent2, glm::vec3 &bitangent2);
 private:
     // 逆时针
-    glm::vec3 _pos1;
-    glm::vec3 _pos2;
-    glm::vec3 _pos3;
-    glm::vec3 _pos4;
+    glm::vec3 _pos1{};
+    glm::vec3 _pos2{};
+    glm::vec3 _pos3{};
+    glm::vec3 _pos4{};
     std::string m_image_diffuse;
     std::string m_image_normal;
     std::string m_image_height;
-    glm::vec2 m_step;
+    glm::vec2 m_step{};
     
     // 计算出来的顶点和索引
     struct Buffer {
@@ -45,7 +45,7 @@ private:
         glm::vec3 bitangent;
     };
     std::vector<Buffer> m_buffer;
-    unsigned int _texture;
+    unsigned int _texture = 0;
 };
 
 #endif /* ImageRectangle_hpp */

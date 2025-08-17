@@ -27,9 +27,9 @@ struct MeshData {
 };
 
 struct Materail {
-    glm::vec4 diffuse;
-    glm::vec4 specular;
-    glm::vec4 ambient;
+    glm::vec4 diffuse{};
+    glm::vec4 specular{};
+    glm::vec4 ambient{};
     std::vector<Texture> textures;
     float shininess = 0.f;
     float shininess_strength = 0.f;
@@ -38,24 +38,23 @@ struct Materail {
 struct KeyPosition
 {
     glm::vec3 position;
-    float timeStamp;
+    double timeStamp;
 };
 
 struct KeyRotation
 {
     glm::quat qua;
-    float timeStamp;
+    double timeStamp;
 };
 
 struct KeyScale
 {
     glm::vec3 scale;
-    float timeStamp;
+    double timeStamp;
 };
 
 struct NodeAnim {
     std::string name;
-    //glm::mat4 localTransform; 计算的结�?
     std::vector<KeyPosition> positions;
     std::vector<KeyRotation> rotations;
     glm::mat4 getMat4(float ratio) {
@@ -65,14 +64,14 @@ struct NodeAnim {
     }
     
     glm::mat4 getPosition(float ratio) {
-        int index = ratio * positions.size();
+        int index = static_cast<int>(ratio * positions.size());
         index = (index == positions.size()) ? (index-1) : index;
         printf("getposition, index = %d, total_size = %zu\n", index, positions.size());
         return glm::translate(glm::mat4(1.0f), positions[index].position);
     }
     
     glm::mat4 getRotation(float ratio) {
-        int index = ratio * rotations.size();
+        int index = static_cast<int>(ratio * rotations.size());
         index = (index == rotations.size()) ? (index-1) : index;
         auto rotation = glm::normalize(rotations[index].qua);
         return glm::toMat4(rotation);
@@ -97,7 +96,7 @@ struct Animation {
 
 struct Node {
     std::string name;
-    glm::mat4 transformation;
+    glm::mat4 transformation = glm::mat4(1);
     glm::mat4 matCur = glm::mat4(1);
     std::vector<std::shared_ptr<Node>> child;
 };
@@ -105,14 +104,14 @@ struct Node {
 struct BoneInfo {
     std::string nodeName;
     int index = -1;
-    glm::mat4 offset;
+    glm::mat4 offset{};
 };
 
 struct ModelData {
-    std::vector<std::shared_ptr<MeshData>> meshs; // 必须�?
+    std::vector<std::shared_ptr<MeshData>> meshs;
     std::map<std::string, ImageBuffer> map_image;
     std::vector<std::shared_ptr<Materail>> materails;
-    std::vector<std::shared_ptr<Node>> nodes; // 第一个就是根节点
+    std::vector<std::shared_ptr<Node>> nodes;
     Animation animation;
     std::map<std::string, BoneInfo> mapBoneInfo;
 };

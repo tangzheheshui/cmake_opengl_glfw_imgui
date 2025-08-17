@@ -17,21 +17,21 @@ public:
         light.position = {0.f, 10.0f, .0f};
         light.direction = -light.position;
         light.cosTheta = cos(degrees_to_radians(15));
-        float ambient = 0.4;
+        float ambient = 0.4f;
         light.ambient = glm::vec3(ambient);
-        float diffuse = 0.7;
+        float diffuse = 0.7f;
         light.diffuse = glm::vec3(diffuse);
-        float specular = 0;
+        float specular = 0.f;
         light.specular = glm::vec3(specular);
         return light;
     }
 public:
-    glm::vec3 position;
-    glm::vec3 direction;
+    glm::vec3 position{};
+    glm::vec3 direction{};
     float cosTheta = 0.f;
-    glm::vec3 ambient;
-    glm::vec3 diffuse;
-    glm::vec3 specular;
+    glm::vec3 ambient{};
+    glm::vec3 diffuse{};
+    glm::vec3 specular{};
 };
 
 #endif /* Light_h */

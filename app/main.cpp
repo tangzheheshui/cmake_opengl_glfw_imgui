@@ -338,13 +338,13 @@ void testRenderSystem(const std::string &rootPath) {
     
     objDuck->setCount(4);
     objDuck->setPosition(0, {0, 0, 2});
-    objDuck->setScale(0, 0.01);
+    objDuck->setScale(0, 0.01f);
     objDuck->setPosition(1, {-2, 0, 2});
-    objDuck->setScale(1, 0.01);
+    objDuck->setScale(1, 0.01f);
     objDuck->setPosition(2, {2, 0, 2});
-    objDuck->setScale(2, 0.01);
+    objDuck->setScale(2, 0.01f);
     objDuck->setPosition(3, {0, 0, -2});
-    objDuck->setScale(3, 0.01);
+    objDuck->setScale(3, 0.01f);
     objDuck->setRotateY(3, 90);
     
     // 光源模型

@@ -129,11 +129,11 @@ void RenderSystem::onMouseMove(double x, double y) {
         return;
     }
 
-    float xoffset = x - mMouseState.lastPos.x;
-    float yoffset = y - mMouseState.lastPos.y;
+    auto xoffset = x - mMouseState.lastPos.x;
+    auto yoffset = y - mMouseState.lastPos.y;
     mMouseState.lastPos = {x, y};
 
-    float sensitivity = 0.1f;
+    auto sensitivity = 0.1;
     xoffset *= sensitivity;
     yoffset *= sensitivity;
     

@@ -19,7 +19,7 @@ static const std::string STR_PICK_TEXTURE = "pick_texture";
 typedef std::shared_ptr<std::vector<unsigned char>> ImageBuffer;
 
 struct Texture {
-    std::string name; // 直接用作uniform纹理的名�?
+    std::string name;
     std::string filepath;
     ImageBuffer data;
     int width = 0;

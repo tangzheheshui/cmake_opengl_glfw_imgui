@@ -61,7 +61,7 @@ public:
     virtual void update() override;
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) override;
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) override;
-    // 模型的属�?
+
     void setCount(int count);
     void setScale(int index, float scale);
     void setPosition(int index, const glm::vec3 &pos);
@@ -87,7 +87,7 @@ private:
     ModelData m_model_data;
     std::shared_ptr<std::vector<glm::mat4>> m_FinalBoneMatrices;
     clock_t m_clock{};
-    float m_anim_ratio = 0.f;
+    double m_anim_ratio = 0;
     int m_BoneCounter = 0;
     AABB m_aabb;
     int m_nMultiViewport = 0;

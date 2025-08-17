@@ -48,7 +48,7 @@ std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
             
             obj->setSetp(1, 1);
             obj->setAlpha(0.5);
-            float step = i * 2;
+            float step = i * 2.f;
             glm::vec3 p1(0, 0, -step);
             glm::vec3 p2(ground_width, 0, -step);
             glm::vec3 p3(ground_width, ground_width, -step);
