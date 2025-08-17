@@ -12,8 +12,8 @@
 #include "object/ImageRectangle.h"
 #include "object/Line.h"
 #include "object/Sky.h"
-#include "ResMng/image.h"
-#include "Light.h"
+#include "ResMng/TextureMng.h"
+#include "light.h"
 #include "core/taskQueue.h"
 #include "scene/CameraController.h"
 

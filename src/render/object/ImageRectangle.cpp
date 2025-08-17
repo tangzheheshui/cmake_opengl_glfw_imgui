@@ -6,9 +6,9 @@
 //
 
 #include "ImageRectangle.h"
-#include "ResMng//image.h"
-#include "ResMng//shader.h"
-#include "scene/camera_old.h"
+#include "ResMng/TextureMng.h"
+#include "ResMng/ShaderMng.h"
+#include "scene/camera.h"
 #include "scene/scene.h"
 #include "scene/Light.h"
 

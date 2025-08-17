@@ -5,8 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/1.
 //
 
-#ifndef shader_hpp
-#define shader_hpp
+#pragma once
 
 #include <string>
 #include <map>
@@ -29,7 +28,6 @@ public:
     void setFloat4(const std::string &name, float v1, float v2, float v3, float v4) const;
     void setMat4Array(const std::string &name, const std::vector<Matrix> &value) const;
     void setMat4(const std::string &name, const Matrix &value) const;
-    
 private:
     // 程序ID
     unsigned int _ID;
@@ -49,19 +47,18 @@ enum class ShaderType {
     Model_Color_Anim,
     Model_Texture_Anim,
     Sky,
-    Pick,
     Text,
+    Pick,
 };
 
 class ShaderCache {
 public:
     static ShaderCache& GetInstance();
     Shader* GetShader(ShaderType type);
-    void init(const std::string &);
-private:
+    void init(const std::string& path);
+
     ShaderCache() {}
 private:
     std::map<ShaderType, Shader*> m_map_shader;
 };
 
-#endif

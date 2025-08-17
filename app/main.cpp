@@ -5,7 +5,7 @@
 #include "backends/imgui_impl_opengl3.h"
 #include <iostream>
 #include <filesystem>
-#include "scene/camera_old.h"
+#include "scene/camera.h"
 #include "RenderSystem.h"
 #include "scene/scene.h"
 #include "object/Line.h"

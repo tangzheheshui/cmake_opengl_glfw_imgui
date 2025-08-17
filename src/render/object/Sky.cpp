@@ -6,9 +6,9 @@
 //
 
 #include "Sky.h"
-#include "ResMng/shader.h"
-#include "scene/camera_old.h"
-#include "ResMng/image.h"
+#include "ResMng/ShaderMng.h"
+#include "scene/camera.h"
+#include "ResMng/TextureMng.h"
 
 bool Sky::draw(CameraPtr camera) {
     return false;

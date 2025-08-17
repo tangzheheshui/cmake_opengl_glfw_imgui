@@ -17,7 +17,7 @@
 #include <time.h>
 #include "math/matrix.h"
 #include "aabb.h"
-#include "ResMng/image.h"
+#include "ResMng/TextureMng.h"
 #include <filesystem>
 
 class AssimpGLMHelpers

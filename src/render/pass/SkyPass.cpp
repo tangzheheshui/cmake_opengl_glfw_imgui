@@ -1,7 +1,7 @@
 #include "SkyPass.h"
 #include "scene/scene.h"
 #include "object/Sky.h"
-#include "scene/camera_old.h"
+#include "scene/camera.h"
 
 CSkyPass::CSkyPass(std::shared_ptr<RenderContext> content) 
 : IRenderPass(content) {

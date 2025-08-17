@@ -6,7 +6,7 @@
 //
 
 #include "PassTexture.h"
-#include "ResMng/image.h"
+#include "ResMng/TextureMng.h"
 #include "scene/Light.h"
 #include "scene/scene.h"
 

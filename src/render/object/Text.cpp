@@ -1,9 +1,9 @@
 
 
 #include "Text.h"
-#include "ResMng/shader.h"
-#include "scene/camera_old.h"
-#include "ResMng/image.h"
+#include "../render/ResMng/ShaderMng.h"
+#include "scene/camera.h"
+#include "ResMng/TextureMng.h"
 #include "ResMng/FontManager.h"
 
 CText::CText(std::weak_ptr<FontManager> fontMng) {

@@ -12,7 +12,7 @@
 #include <mutex>
 #include <map>
 #include "object/BaseDraw.h"
-#include "shader.h"
+#include "ShaderMng.h"
 
 static const std::string STR_DEPTH_TEXTURE = "depth_texture";
 static const std::string STR_PICK_TEXTURE = "pick_texture";

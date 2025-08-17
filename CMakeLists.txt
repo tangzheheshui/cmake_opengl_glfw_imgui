@@ -21,6 +21,12 @@ file(GLOB_RECURSE SOURCES
     "src/*.h"
 )
 
+# 按文件的物理路径分组（不影响编译）
+
+source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" 
+    FILES ${SOURCES}
+)
+
 # 包含头文件路径
 include_directories(3rdparty/imgui)
 include_directories(3rdparty)
@@ -28,7 +34,6 @@ include_directories(3rdparty/freetype/include)
 include_directories(src/)
 include_directories(src/core/)
 include_directories(src/render/)
-include_directories(src/render/camera/)
 
 # 可执行文件
 add_executable(my_app app/main.cpp 

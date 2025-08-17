@@ -4,8 +4,8 @@
 #include "pass/ShadowPass.h"
 #include "pass/NormalPass.h"
 #include "pass/PickPass.h"
-#include "ResMng/image.h"
-#include "scene/camera_old.h"
+#include "ResMng/TextureMng.h"
+#include "scene/camera.h"
 #include "scene/CameraController.h"
 #include "ResMng/FontManager.h"
 
