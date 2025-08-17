@@ -16,9 +16,10 @@ add_subdirectory(3rdparty/assimp)
 add_subdirectory(3rdparty/freetype)
 
 # 收集所有的头文件
+set(RENDER_SYS_FILE_ROOT "RenderSystem")
 file(GLOB_RECURSE SOURCES 
-    "src/*.cpp"
-    "src/*.h"
+    "${RENDER_SYS_FILE_ROOT}/*.cpp"
+    "${RENDER_SYS_FILE_ROOT}/*.h"
 )
 
 # 按文件的物理路径分组（不影响编译）
@@ -31,9 +32,9 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}"
 include_directories(3rdparty/imgui)
 include_directories(3rdparty)
 include_directories(3rdparty/freetype/include)
-include_directories(src/)
-include_directories(src/core/)
-include_directories(src/render/)
+include_directories(${RENDER_SYS_FILE_ROOT}/)
+include_directories(${RENDER_SYS_FILE_ROOT}/core/)
+include_directories(${RENDER_SYS_FILE_ROOT}/render/)
 
 # 可执行文件
 add_executable(my_app app/main.cpp 
