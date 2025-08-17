@@ -19,9 +19,9 @@ void CNormalPass::draw(Scene* pScene) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // 矩阵
-    auto mpMatrix = pScene->GetActiveCamera()->GetVPMatrix();
+    auto camera = pScene->GetActiveCamera();
     
     for (auto obj : pScene->GetObjs()) {
-        obj->draw(mpMatrix);
+        obj->draw(camera);
     }
 }

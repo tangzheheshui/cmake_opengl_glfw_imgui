@@ -55,7 +55,7 @@ class Model : public BaseDraw {
 public:
     using BaseDraw::BaseDraw;
     void LoadFile(const std::string &path);
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(CameraPtr camera) override;
     virtual bool drawShadow() override;
     virtual bool drawPick() override;
     virtual void update() override;

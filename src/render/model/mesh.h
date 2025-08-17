@@ -18,11 +18,11 @@
 #include "PassTexture.h"
 #include "glm/glm.hpp"
 #include "model_data.h"
-
+#include "type_define.h"
 class Mesh {
 public:
     Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData);
-    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit = 1);
+    bool Draw(const std::vector<Matrix> &matModel, CameraPtr camera, uint32_t flags, int numViewpoit = 1);
     bool DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID);
     void setBoneMat(std::shared_ptr<std::vector<glm::mat4>> mat) { m_pass->m_matBone = mat; }
 private:        

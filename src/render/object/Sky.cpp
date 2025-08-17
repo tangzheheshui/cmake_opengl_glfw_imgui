@@ -10,7 +10,7 @@
 #include "render/camera/camera_old.h"
 #include "render/image.h"
 
-bool Sky::draw(const Matrix &mtx) {
+bool Sky::draw(CameraPtr camera) {
     return false;
 }
 

@@ -33,7 +33,7 @@ public:
         }
     }
     
-    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit);
+    bool Draw(const std::vector<Matrix> &matModel, CameraPtr camera, uint32_t flags, int numViewpoit);
     bool DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID);
 protected:
     virtual Shader* getShader(uint32_t flags) { return nullptr; }

@@ -16,7 +16,7 @@ class Sky : public BaseDraw {
 public:
     Sky() {}
     ~Sky() {}
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(CameraPtr camera) override;
     bool draw(const Matrix &viewMat, const Matrix &projMat);
     void setCubeImage(const std::array<std::string, 6>& imgs);
 private:

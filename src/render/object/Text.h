@@ -21,7 +21,7 @@ class CText : public BaseDraw {
 public:
     CText(std::weak_ptr<FontManager> fontMng);
     ~CText() {}
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(CameraPtr camera) override;
     void SetText(const std::string &str);
 private:
     FT_Library ft;

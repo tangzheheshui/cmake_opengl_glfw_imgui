@@ -12,7 +12,7 @@
 #include "../scene.h"
 #include "../Light.h"
 
-bool ImageRectangle::draw(const Matrix &mtx) {
+bool ImageRectangle::draw(CameraPtr camera) {
     int texture_normal = TextureMng::getInstance().getTexture(m_image_normal);
     bool has_normal = (texture_normal > 0);
     
@@ -84,7 +84,7 @@ bool ImageRectangle::draw(const Matrix &mtx) {
     // 矩阵
     Matrix model;
     shader->setMat4("uModel", model);
-    shader->setMat4("uViewProj", mtx);
+    shader->setMat4("uViewProj", camera->GetVPMatrix());
     shader->setMat4("uLightSpaceMatrix", Scene::GetLightVPMatrix());
     
     // 灯光

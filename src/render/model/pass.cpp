@@ -37,7 +37,7 @@ bool RenderPass::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx
     return true;
 }
 
-bool RenderPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit) {
+bool RenderPass::Draw(const std::vector<Matrix> &matModel, CameraPtr camera, uint32_t flags, int numViewpoit) {
     bool bDrawShadow = (flags & DrawOption::DRAW_SHADOW);
     auto shader = getShader(flags);
     if (!shader) {
@@ -87,7 +87,7 @@ bool RenderPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, ui
         }
         
         // 矩阵
-        shader->setMat4("uViewProj", mtx);
+        shader->setMat4("uViewProj", camera->GetVPMatrix());
         
         if (numViewpoit > 1) {
             shader->setMat4Array("uMatrixModel", matModel);
@@ -112,7 +112,7 @@ bool RenderPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, ui
         shader->setFloat("uMaterail.shininess_strength", m_materail->shininess_strength);
         
         // 相机位置
-        auto cam_pos = Camera::GetCamera().getPossition();
+        auto cam_pos = camera->getPossition();
         shader->setFloat3("uCameraPos", cam_pos.x, cam_pos.y, cam_pos.z);
         
         // boneMat

@@ -25,7 +25,7 @@ CText::CText(std::weak_ptr<FontManager> fontMng) {
     glBindVertexArray(0);
 }
 
-bool CText::draw(const Matrix &mtx) {
+bool CText::draw(CameraPtr camera) {
     auto pFontMng = _fontMng.lock();
     if (!pFontMng) {
         return false;
@@ -39,7 +39,7 @@ bool CText::draw(const Matrix &mtx) {
     shader->use();
 
     // 矩阵
-    shader->setMat4("uMatrixMVP", mtx);
+    shader->setMat4("uMatrixMVP", camera->GetVPMatrix());
 
     // 颜色
     shader->setFloat3("uColor", 1, 0, 0);

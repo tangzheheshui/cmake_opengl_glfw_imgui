@@ -88,11 +88,6 @@ void Camera::caculate() {
     _position = {x, y, z};
 }
 
-Camera& Camera::GetCamera() {
-    static Camera cam;
-    return cam;
-}
-
 Matrix Camera::LookAt(const glm::vec3 &eye, const glm::vec3 &center, const glm::vec3 &up) {
     auto F = glm::normalize(center - eye);
     auto R = glm::normalize(glm::cross(F, up));
@@ -154,7 +149,7 @@ Matrix Camera::perspective(float fov, float aspect, float near, float far) {
 
 void Camera::screenToWorld(const glm::vec2 &screen, glm::vec3 &world) {
     glm::vec4 proj(screen.x * 2 / _viewPortWidth - 1, screen.y * 2 / _viewPortHeight, -1, 1);
-    glm::mat4 vpMat = Matrix::toMatrix(GetCamera().GetVPMatrix());
+    glm::mat4 vpMat = Matrix::toMatrix(GetVPMatrix());
     glm::vec4 worldNear = glm::inverse(vpMat) * proj;
     world = {worldNear.x / worldNear.w, worldNear.y / worldNear.w, worldNear.z / worldNear.w};
 }

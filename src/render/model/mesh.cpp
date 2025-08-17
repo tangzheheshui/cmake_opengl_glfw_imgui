@@ -25,9 +25,9 @@ Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData
     }
 }
 
-bool Mesh::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit) {
+bool Mesh::Draw(const std::vector<Matrix> &matModel, CameraPtr camera, uint32_t flags, int numViewpoit) {
     if (m_pass) {
-         m_pass->Draw(matModel, mtx, flags, numViewpoit);
+         m_pass->Draw(matModel, camera, flags, numViewpoit);
     }
     return true;
 }

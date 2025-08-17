@@ -15,7 +15,7 @@ void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsig
     m_indices = indices;
 }
 
-bool Line::draw(const Matrix &mtx) {
+bool Line::draw(CameraPtr camera) {
     auto shader = ShaderCache::GetInstance().GetShader(ShaderType::Color);
     if (!shader) {
         return false;
@@ -26,7 +26,7 @@ bool Line::draw(const Matrix &mtx) {
     calculate();
     
     // 矩阵
-    shader->setMat4("uMatrixMVP", mtx);
+    shader->setMat4("uMatrixMVP", camera->GetVPMatrix());
     
     // 颜色
     shader->setFloat3("uColor", m_color.r, m_color.g, m_color.b);

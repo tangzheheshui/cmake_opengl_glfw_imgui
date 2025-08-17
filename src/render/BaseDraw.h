@@ -12,6 +12,7 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "../core/math/matrix.h"
+#include "type_define.h"
 
 static uint16_t _staticID = 0;
 
@@ -38,7 +39,7 @@ public:
             glDeleteBuffers(1, &_EBO);
         }
     }
-    virtual bool draw(const Matrix &mtx) = 0;
+    virtual bool draw(CameraPtr camera) = 0;
     virtual bool drawShadow() { return false; }
     virtual bool drawPick() { return false; }
     virtual void update() {}
