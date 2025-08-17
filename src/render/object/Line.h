@@ -10,7 +10,7 @@
 
 #include <glm/glm.hpp>
 #include <vector>
-#include "../BaseDraw.h"
+#include "object/BaseDraw.h"
 
 class Line : public BaseDraw {
 public:

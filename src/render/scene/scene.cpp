@@ -12,10 +12,10 @@
 #include "object/ImageRectangle.h"
 #include "object/Line.h"
 #include "object/Sky.h"
-#include "image.h"
+#include "ResMng/image.h"
 #include "Light.h"
 #include "core/taskQueue.h"
-#include "camera/CameraController.h"
+#include "scene/CameraController.h"
 
 Scene& Scene::getScene() {
     static Scene instance;

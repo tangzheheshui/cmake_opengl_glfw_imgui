@@ -6,8 +6,8 @@
 //
 
 #include "PassColor.h"
-#include "../Light.h"
-#include "../scene.h"
+#include "scene/Light.h"
+#include "scene/scene.h"
 
 Shader* PassColor::getShader(uint32_t flags) {
     bool shadow = (flags & DrawOption::DRAW_SHADOW);

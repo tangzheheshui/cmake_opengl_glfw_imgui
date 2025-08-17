@@ -11,8 +11,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include "shader.h"
-#include "image.h"
+#include "ResMng/shader.h"
+#include "ResMng/image.h"
 
 Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
     if (!meshData) {

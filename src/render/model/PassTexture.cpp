@@ -6,9 +6,9 @@
 //
 
 #include "PassTexture.h"
-#include "image.h"
-#include "../Light.h"
-#include "../scene.h"
+#include "ResMng/image.h"
+#include "scene/Light.h"
+#include "scene/scene.h"
 
 Shader* PassTexture::getShader(uint32_t flags) {
     bool shadow = (flags & DrawOption::DRAW_SHADOW);

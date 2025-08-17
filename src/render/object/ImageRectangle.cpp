@@ -6,11 +6,11 @@
 //
 
 #include "ImageRectangle.h"
-#include "../image.h"
-#include "../shader.h"
-#include "../camera/camera_old.h"
-#include "../scene.h"
-#include "../Light.h"
+#include "ResMng//image.h"
+#include "ResMng//shader.h"
+#include "scene/camera_old.h"
+#include "scene/scene.h"
+#include "scene/Light.h"
 
 bool ImageRectangle::draw(CameraPtr camera) {
     int texture_normal = TextureMng::getInstance().getTexture(m_image_normal);

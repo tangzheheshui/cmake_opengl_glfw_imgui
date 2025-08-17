@@ -13,11 +13,11 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include "model_data.h"
-#include "../BaseDraw.h"
+#include "object/BaseDraw.h"
 #include <time.h>
 #include "math/matrix.h"
 #include "aabb.h"
-#include "image.h"
+#include "ResMng/image.h"
 #include <filesystem>
 
 class AssimpGLMHelpers

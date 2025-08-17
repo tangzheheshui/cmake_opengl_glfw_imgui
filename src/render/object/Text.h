@@ -11,7 +11,7 @@
 #include <string>
 #include <array>
 
-#include "../BaseDraw.h"
+#include "object/BaseDraw.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 

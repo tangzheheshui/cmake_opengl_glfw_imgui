@@ -16,30 +16,9 @@ add_subdirectory(3rdparty/assimp)
 add_subdirectory(3rdparty/freetype)
 
 # 收集所有的头文件
-file(GLOB_RECURSE HEADER_FILES
-"${CMAKE_SOURCE_DIR}/src/*.h"
-)
-
-# 源文件
-set(SRC_PTAH ${CMAKE_CURRENT_SOURCE_DIR}/src)
-aux_source_directory(${SRC_PTAH}/render SRC_LIST1)
-aux_source_directory(${SRC_PTAH}/render/model SRC_LIST2)
-aux_source_directory(${SRC_PTAH}/render/object SRC_LIST3)
-aux_source_directory(${SRC_PTAH}/render/pass SRC_PASS_LIST)
-aux_source_directory(${SRC_PTAH}/render/camera SRC_LIST4)
-aux_source_directory(${SRC_PTAH}/core/math SRC_LIST5)
-aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/app SRC_APP)
-
-# 按文件的物理路径分组（不影响编译）
-source_group(TREE "${CMAKE_SOURCE_DIR}" FILES 
-${SRC_LIST1} 
-${SRC_LIST2} 
-${SRC_LIST3} 
-${SRC_LIST4}
-${SRC_LIST5}
-${HEADER_FILES}
-${SRC_PASS_LIST}
-${SRC_APP}
+file(GLOB_RECURSE SOURCES 
+    "src/*.cpp"
+    "src/*.h"
 )
 
 # 包含头文件路径
@@ -53,13 +32,7 @@ include_directories(src/render/camera/)
 
 # 可执行文件
 add_executable(my_app app/main.cpp 
-${SRC_LIST1} 
-${SRC_LIST2} 
-${SRC_LIST3}
-${SRC_LIST4} 
-${SRC_LIST5}
-${HEADER_FILES}
-${SRC_PASS_LIST}
+${SOURCES} 
 )
 
 # 链接库

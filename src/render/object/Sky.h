@@ -10,7 +10,7 @@
 
 #include <string>
 #include <array>
-#include "../BaseDraw.h"
+#include "object/BaseDraw.h"
 
 class Sky : public BaseDraw {
 public:

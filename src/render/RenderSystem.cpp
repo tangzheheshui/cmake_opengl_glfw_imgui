@@ -1,13 +1,13 @@
 #include "RenderSystem.h"
-#include "render/scene.h"
+#include "scene/scene.h"
 #include "pass/SkyPass.h"
 #include "pass/ShadowPass.h"
 #include "pass/NormalPass.h"
 #include "pass/PickPass.h"
-#include "image.h"
-#include "camera/camera_old.h"
-#include "camera/CameraController.h"
-#include "FontManager.h"
+#include "ResMng/image.h"
+#include "scene/camera_old.h"
+#include "scene/CameraController.h"
+#include "ResMng/FontManager.h"
 
 RenderSystem& RenderSystem::getInstance() {
 	static RenderSystem instance;

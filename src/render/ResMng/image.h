@@ -11,7 +11,7 @@
 #include <string>
 #include <mutex>
 #include <map>
-#include "BaseDraw.h"
+#include "object/BaseDraw.h"
 #include "shader.h"
 
 static const std::string STR_DEPTH_TEXTURE = "depth_texture";

@@ -80,7 +80,6 @@ void Camera::caculate() {
     _right = glm::normalize(glm::cross(_front, _worldUp));  
     _up    = glm::normalize(glm::cross(_right, _front));
     
-    // 重新计算位置
     float r = std::sqrt(_position.x*_position.x + _position.y*_position.y + _position.z*_position.z);
     float y = r * sin(glm::radians(_pitch));
     float x = r * cos(glm::radians(_pitch)) * sin(glm::radians(_yaw));
@@ -93,7 +92,6 @@ Matrix Camera::LookAt(const glm::vec3 &eye, const glm::vec3 &center, const glm::
     auto R = glm::normalize(glm::cross(F, up));
     auto U = glm::cross(R, F);
     
-    // R*T矩阵
     Matrix matR;
     matR.set(0, 0, R.x);
     matR.set(1, 0, R.y);
@@ -125,7 +123,7 @@ Matrix Camera::ortho(float left, float right, float bottom, float top, float nea
     //    0       0       2/(f-n) 0
     //    0       0       0       1
     
-    // 步骤3:S*T后，将n和f，替换成-n�?f
+    // 步骤3:S*T后，将n和f，替换成-n�?f
     mat.set(0, 0, 2.0f / (right - left));
     mat.set(1, 1, 2.0f / (top - bottom));
     mat.set(2, 2, 2.0f / (near - far));

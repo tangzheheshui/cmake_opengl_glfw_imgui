@@ -5,17 +5,17 @@
 #include "backends/imgui_impl_opengl3.h"
 #include <iostream>
 #include <filesystem>
-#include "camera/camera_old.h"
+#include "scene/camera_old.h"
 #include "RenderSystem.h"
-#include "scene.h"
+#include "scene/scene.h"
 #include "object/Line.h"
 #include "object/Sky.h"
 #include "object/Text.h"
 #include "object/ImageRectangle.h"
 #include "model/model.h"
-#include "Light.h"
+#include "scene/Light.h"
 #include "taskQueue.h"
-#include "FontManager.h"
+#include "ResMng/FontManager.h"
 #include "UI/mainUI.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);

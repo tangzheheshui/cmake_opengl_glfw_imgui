@@ -1,5 +1,5 @@
 #include "NormalPass.h"
-#include "../scene.h"
+#include "scene/scene.h"
 #include "../object/ImageRectangle.h"
 #include "../object/Line.h"
 #include "../object/Sky.h"

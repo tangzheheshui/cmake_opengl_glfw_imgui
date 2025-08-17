@@ -11,8 +11,8 @@
 #include <vector>
 #include "glm/glm.hpp"
 #include <glad/glad.h>
-#include "camera/camera_old.h"
-#include "shader.h"
+#include "scene/camera_old.h"
+#include "ResMng/shader.h"
 #include "model_data.h"
 #include "math/matrix.h"
 

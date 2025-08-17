@@ -6,9 +6,9 @@
 //
 
 #include "pass.h"
-#include "../scene.h"
-#include "../Light.h"
-#include "image.h"
+#include "scene/scene.h"
+#include "scene/Light.h"
+#include "ResMng/image.h"
 
 RenderPass::RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
     m_mesh_data = meshData;

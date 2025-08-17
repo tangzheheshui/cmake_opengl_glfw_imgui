@@ -7,8 +7,8 @@
 
 #include "Line.h"
 #include <glad/glad.h>
-#include "../shader.h"
-#include "../camera/camera_old.h"
+#include "ResMng/shader.h"
+#include "scene/camera_old.h"
 
 void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsigned int> &indices) {
     m_points = points;
