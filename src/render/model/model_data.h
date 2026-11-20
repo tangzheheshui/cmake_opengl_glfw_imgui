@@ -23,10 +23,10 @@ struct MeshData {
     std::vector<glm::ivec4> boneIDs;
     std::vector<glm::vec4> weights;
     std::vector<unsigned int> indices;
-    int index_materail = -1;
+    int index_material = -1;
 };
 
-struct Materail {
+struct Material {
     glm::vec4 diffuse;
     glm::vec4 specular;
     glm::vec4 ambient;
@@ -55,7 +55,7 @@ struct KeyScale
 
 struct NodeAnim {
     std::string name;
-    //glm::mat4 localTransform; 计算的结�?
+    //glm::mat4 localTransform; 计算的结�?
     std::vector<KeyPosition> positions;
     std::vector<KeyRotation> rotations;
     glm::mat4 getMat4(float ratio) {
@@ -109,9 +109,9 @@ struct BoneInfo {
 };
 
 struct ModelData {
-    std::vector<std::shared_ptr<MeshData>> meshs; // 必须�?
+    std::vector<std::shared_ptr<MeshData>> meshs; // 必须�?
     std::map<std::string, ImageBuffer> map_image;
-    std::vector<std::shared_ptr<Materail>> materails;
+    std::vector<std::shared_ptr<Material>> materials;
     std::vector<std::shared_ptr<Node>> nodes; // 第一个就是根节点
     Animation animation;
     std::map<std::string, BoneInfo> mapBoneInfo;

@@ -12,8 +12,6 @@
 #include <array>
 
 #include "../BaseDraw.h"
-#include <ft2build.h>
-#include FT_FREETYPE_H
 
 class FontManager;
 
@@ -24,8 +22,6 @@ public:
     virtual bool draw(const Matrix &mtx) override;
     void SetText(const std::string &str);
 private:
-    FT_Library ft;
-    FT_Face face;
     std::weak_ptr<FontManager> _fontMng;
     std::string m_str;
 };

@@ -31,9 +31,9 @@ void TextureMng::loadTexture(const std::string &filename) {
     }
     
     {
-        std::lock_guard<std::mutex> gurad(m_mutux);
-        auto iter = m_map_tetures.find(filename);
-        if (iter != m_map_tetures.end()) {
+        std::lock_guard<std::mutex> gurad(m_mutex);
+        auto iter = m_map_textures.find(filename);
+        if (iter != m_map_textures.end()) {
             return;
         }
     }
@@ -43,18 +43,19 @@ void TextureMng::loadTexture(const std::string &filename) {
     ImageBuffer pData = std::make_shared<std::vector<unsigned char>>();
     pData->assign(data, data + tex.width * tex.height * tex.format);
     tex.data = std::move(pData);
+    stbi_image_free(data);
     tex.filepath = filename;
     {
-        std::lock_guard<std::mutex> gurad(m_mutux);
+        std::lock_guard<std::mutex> gurad(m_mutex);
         m_map_tex_data[filename] = tex;
         printf("add filename = %s\n", filename.c_str());
     }
 }
 
 unsigned int TextureMng::getTexture(const std::string &filename) {
-    std::lock_guard guard(m_mutux);
-    auto iter = m_map_tetures.find(filename);
-    if (iter != m_map_tetures.end()) {
+    std::lock_guard guard(m_mutex);
+    auto iter = m_map_textures.find(filename);
+    if (iter != m_map_textures.end()) {
         return iter->second;
     }
     
@@ -92,8 +93,8 @@ void TextureMng::createShadowTexture() {
     GLfloat borderColor[] = { 1.0, 1.0, 1.0, 1.0 };
     glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
     
-    std::lock_guard guard(m_mutux);
-    m_map_tetures[STR_DEPTH_TEXTURE] = _depthTexture;
+    std::lock_guard guard(m_mutex);
+    m_map_textures[STR_DEPTH_TEXTURE] = _depthTexture;
 }
 
 void TextureMng::createSkyTexture() {
@@ -122,7 +123,7 @@ unsigned int TextureMng::genTexture(const Texture& tex) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         
-        m_map_tetures[tex.filepath] = textureID;
+        m_map_textures[tex.filepath] = textureID;
     }
     return textureID;
 }

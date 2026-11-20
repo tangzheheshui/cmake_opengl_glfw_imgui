@@ -61,7 +61,7 @@ public:
     virtual void update() override;
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) override;
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) override;
-    // 模型的属�?
+    // 模型的属�?
     void setCount(int count);
     void setScale(int index, float scale);
     void setPosition(int index, const glm::vec3 &pos);
@@ -74,7 +74,7 @@ private:
     std::shared_ptr<Mesh> processMesh(aiMesh *mesh, const aiScene *scene);
     void processBoneWeightForVertices(aiMesh *mesh, std::shared_ptr<MeshData> meshData);
     void processTexture(const aiScene* scene);
-    void processMaterail(const aiScene* scene);
+    void processMaterial(const aiScene* scene);
     void processAnimation(const aiScene* scene);
     std::vector<Texture> loadMaterialTextures(aiMaterial *mat, aiTextureType type, std::string typeName);
     void genMesh();

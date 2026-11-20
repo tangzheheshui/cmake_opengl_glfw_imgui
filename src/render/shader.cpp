@@ -147,67 +147,67 @@ ShaderCache& ShaderCache::GetInstance() {
 }
 
 void ShaderCache::init(const std::string& path) {
-    if (auto shader = new Shader(path+"vert_color", path+"frag_color")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Color, shader));
+    if (auto shader = std::make_unique<Shader>(path+"vert_color", path+"frag_color")) {
+        m_map_shader.emplace(ShaderType::Color, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_image", path + "frag_image")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Image, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_image", path + "frag_image")) {
+        m_map_shader.emplace(ShaderType::Image, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_model", path + "frag_model")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Model_Texture, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_model", path + "frag_model")) {
+        m_map_shader.emplace(ShaderType::Model_Texture, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_model_color", path + "frag_model_color")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Model_Color, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_model_color", path + "frag_model_color")) {
+        m_map_shader.emplace(ShaderType::Model_Color, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_shadow_color", path + "frag_shadow")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Shadow_Color, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_shadow_color", path + "frag_shadow")) {
+        m_map_shader.emplace(ShaderType::Shadow_Color, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_shadow", path + "frag_shadow")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Shadow_Texture, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_shadow", path + "frag_shadow")) {
+        m_map_shader.emplace(ShaderType::Shadow_Texture, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_deepImage", path + "frag_deepImage")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Debug_DeepTexture, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_deepImage", path + "frag_deepImage")) {
+        m_map_shader.emplace(ShaderType::Debug_DeepTexture, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_ground_normal", path + "frag_ground_normal")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Ground, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_ground_normal", path + "frag_ground_normal")) {
+        m_map_shader.emplace(ShaderType::Ground, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_model_color_anim", path + "frag_model_color")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Model_Color_Anim, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_model_color_anim", path + "frag_model_color")) {
+        m_map_shader.emplace(ShaderType::Model_Color_Anim, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_model_anim", path + "frag_model")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Model_Texture_Anim, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_model_anim", path + "frag_model")) {
+        m_map_shader.emplace(ShaderType::Model_Texture_Anim, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "vert_sky", path + "frag_sky")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Sky, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_sky", path + "frag_sky")) {
+        m_map_shader.emplace(ShaderType::Sky, std::move(shader));
     }
 
-    if (auto shader = new Shader(path + "model_multiview.vert", path + "frag_model", path + "model_multiview.geom")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Model_Texture_MultiView, shader));
+    if (auto shader = std::make_unique<Shader>(path + "model_multiview.vert", path + "frag_model", path + "model_multiview.geom")) {
+        m_map_shader.emplace(ShaderType::Model_Texture_MultiView, std::move(shader));
     }
     
-    if (auto shader = new Shader(path + "vert_pick", path + "frag_pick")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Pick, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_pick", path + "frag_pick")) {
+        m_map_shader.emplace(ShaderType::Pick, std::move(shader));
     }
     
-    if (auto shader = new Shader(path + "vert_font", path + "frag_font")) {
-        m_map_shader.insert(std::make_pair(ShaderType::Text, shader));
+    if (auto shader = std::make_unique<Shader>(path + "vert_font", path + "frag_font")) {
+        m_map_shader.emplace(ShaderType::Text, std::move(shader));
     }
 }
 
 Shader* ShaderCache::GetShader(ShaderType type) {
     auto iter = m_map_shader.find(type);
     if (iter != m_map_shader.end()) {
-        return iter->second;
+        return iter->second.get();
     }
     return nullptr;
 }

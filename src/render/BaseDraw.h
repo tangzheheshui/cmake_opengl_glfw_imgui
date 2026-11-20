@@ -13,27 +13,25 @@
 #include <glm/glm.hpp>
 #include "../core/math/matrix.h"
 
-static uint16_t _staticID = 0;
+inline static uint16_t _staticID = 0;
 
 class BaseDraw {
 public:
     BaseDraw() {
-        if (_VAO == 0) {
-            glGenVertexArrays(1, &_VAO);
-            glGenBuffers(1, &_VBO);
-            glGenBuffers(1, &_EBO);
-        }
+        glGenVertexArrays(1, &_VAO);
+        glGenBuffers(1, &_VBO);
+        glGenBuffers(1, &_EBO);
         _ID = _staticID++;
     }
-    ~BaseDraw() {
+    virtual ~BaseDraw() {
         if (_VAO > 0) {
             glDeleteVertexArrays(1, &_VAO);
         }
-        
+
         if (_VBO > 0) {
             glDeleteBuffers(1, &_VBO);
         }
-        
+
         if (_EBO > 0) {
             glDeleteBuffers(1, &_EBO);
         }

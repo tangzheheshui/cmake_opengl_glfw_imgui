@@ -6,13 +6,9 @@
 //
     
 #include "camera_old.h"
-
-const float YAW         = 0.0f;
-const float PITCH       =  0.0f;
-
-Camera::Camera() 
-: _yaw(YAW)
-, _pitch(PITCH)
+Camera::Camera()
+: _yaw(0)
+, _pitch(0)
 , _fov(45)
 {
     _near = 0.1f;
@@ -130,7 +126,7 @@ Matrix Camera::ortho(float left, float right, float bottom, float top, float nea
     //    0       0       2/(f-n) 0
     //    0       0       0       1
     
-    // 步骤3:S*T后，将n和f，替换成-n�?f
+    // 步骤3:S*T后，将n和f，替换成-n�?f
     mat.set(0, 0, 2.0 / (right - left));
     mat.set(1, 1, 2.0 / (top - bottom));
     mat.set(2, 2, 2.0 / (near - far));

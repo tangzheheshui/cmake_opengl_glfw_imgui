@@ -38,7 +38,7 @@ void PassTexture::setup(const std::vector<Matrix> &matModel, uint32_t flags) {
     glBindVertexArray(_VAO);
     
     bool hasAnim = (m_matBone && !m_matBone->empty());
-    bool multi_view = (flags | DrawOption::MULTI_VIEWPORT);
+    bool multi_view = (flags & DrawOption::MULTI_VIEWPORT);
     size_t size1 = m_mesh_data->positions.size() * sizeof(glm::vec3);
     size_t size2 = m_mesh_data->normals.size() * sizeof(glm::vec3);
     size_t size3 = m_mesh_data->coords.size() * sizeof(glm::vec2);

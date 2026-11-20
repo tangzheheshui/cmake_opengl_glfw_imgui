@@ -7,7 +7,6 @@
 #include <filesystem>
 
 class TextureMng;
-class ShaderMng;
 class Scene;
 class RenderPass;
 class IRenderPass;
@@ -58,7 +57,6 @@ private:
 private:
 	std::shared_ptr<TextureMng> m_texMng;
     std::shared_ptr<FontManager> m_fontMng;
-	std::shared_ptr<ShaderMng> m_shaderMng;
 	std::shared_ptr<Scene> mCurScene;
 	std::vector<std::shared_ptr<IRenderPass>> m_vec_renderpass;
     std::shared_ptr<RenderContext> mRenderContent;

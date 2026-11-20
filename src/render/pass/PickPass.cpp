@@ -24,7 +24,7 @@ void CPickPass::draw(Scene* pScene) {
     
     // draw
     for (auto obj : pScene->GetObjs()) {
-        obj->drawShadow();
+        obj->drawPick();
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

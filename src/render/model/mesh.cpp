@@ -14,7 +14,7 @@
 #include "shader.h"
 #include "image.h"
 
-Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
+Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData) {
     if (!meshData) {
         return;
     }

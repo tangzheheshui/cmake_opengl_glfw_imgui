@@ -45,7 +45,6 @@ private:
         glm::vec3 bitangent;
     };
     std::vector<Buffer> m_buffer;
-    unsigned int _texture;
 };
 
 #endif /* ImageRectangle_hpp */

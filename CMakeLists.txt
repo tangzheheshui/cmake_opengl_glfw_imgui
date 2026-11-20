@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.22)
 project(my_app)
 
 # 设置 C++ 标准
@@ -10,6 +10,7 @@ add_subdirectory(3rdparty/glad)
 add_subdirectory(3rdparty/imgui)
 add_subdirectory(3rdparty/assimp)
 add_subdirectory(3rdparty/freetype)
+add_subdirectory(3rdparty/glm)
 
 # 收集所有的头文件
 file(GLOB_RECURSE HEADER_FILES
@@ -17,23 +18,23 @@ file(GLOB_RECURSE HEADER_FILES
 )
 
 # 源文件
-set(SRC_PTAH ${CMAKE_CURRENT_SOURCE_DIR}/src)
-aux_source_directory(${SRC_PTAH}/render SRC_LIST1)
-aux_source_directory(${SRC_PTAH}/render/model SRC_LIST2)
-aux_source_directory(${SRC_PTAH}/render/object SRC_LIST3)
-aux_source_directory(${SRC_PTAH}/render/pass SRC_PASS_LIST)
-aux_source_directory(${SRC_PTAH}/render/camera SRC_LIST4)
-aux_source_directory(${SRC_PTAH}/core/math SRC_LIST5)
+set(SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/src)
+file(GLOB SRC_RENDER     "${SRC_PATH}/render/*.cpp")
+file(GLOB SRC_MODEL      "${SRC_PATH}/render/model/*.cpp")
+file(GLOB SRC_OBJECT     "${SRC_PATH}/render/object/*.cpp")
+file(GLOB SRC_PASS       "${SRC_PATH}/render/pass/*.cpp")
+file(GLOB SRC_CAMERA     "${SRC_PATH}/render/camera/*.cpp")
+file(GLOB SRC_MATH       "${SRC_PATH}/core/math/*.cpp")
 
 # 按文件的物理路径分组（不影响编译）
-source_group(TREE "${CMAKE_SOURCE_DIR}" FILES 
-${SRC_LIST1} 
-${SRC_LIST2} 
-${SRC_LIST3} 
-${SRC_LIST4}
-${SRC_LIST5}
+source_group(TREE "${CMAKE_SOURCE_DIR}" FILES
+${SRC_RENDER}
+${SRC_MODEL}
+${SRC_OBJECT}
+${SRC_CAMERA}
+${SRC_MATH}
 ${HEADER_FILES}
-${SRC_PASS_LIST}
+${SRC_PASS}
 )
 
 # 包含头文件路径
@@ -46,14 +47,14 @@ include_directories(src/render/)
 include_directories(src/render/camera/)
 
 # 可执行文件
-add_executable(my_app main.cpp 
-${SRC_LIST1} 
-${SRC_LIST2} 
-${SRC_LIST3}
-${SRC_LIST4} 
-${SRC_LIST5}
+add_executable(my_app main.cpp
+${SRC_RENDER}
+${SRC_MODEL}
+${SRC_OBJECT}
+${SRC_CAMERA}
+${SRC_MATH}
 ${HEADER_FILES}
-${SRC_PASS_LIST}
+${SRC_PASS}
 )
 
 # 链接库
@@ -62,3 +63,4 @@ target_link_libraries(my_app glfw)
 target_link_libraries(my_app imgui)
 target_link_libraries(my_app assimp)
 target_link_libraries(my_app freetype)
+target_link_libraries(my_app glm)

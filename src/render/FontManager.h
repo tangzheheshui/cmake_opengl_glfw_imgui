@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <string>
 #include <memory>
-#include <codecvt>
+#include <vector>
 
 // 字符位图信息结构
 struct Character {
@@ -30,6 +30,7 @@ private:
     FT_Library ft;               // FreeType 库对象
     FT_Face face;                // 字体面（每个字体文件对应一个 face）
     std::unordered_map<uint32_t, Character> characters; // 字符缓存
+    std::vector<unsigned int> m_textures; // 追踪所有分配的纹理用于清理
     bool LoadCharacter(uint32_t unicode);     // 支持Unicode字符
 };
 

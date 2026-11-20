@@ -15,13 +15,8 @@
 #include "image.h"
 #include "Light.h"
 #include "core/taskQueue.h"
-#include "camera/camera.h"
-#include "camera/CameraController.h"
 
-Scene& Scene::getScene() {
-    static Scene instance;
-    return instance;
-}
+#include "camera/CameraController.h"
 
 Scene::Scene() {
     mCameraActive = std::make_shared<Camera>();
@@ -63,20 +58,17 @@ std::vector<std::shared_ptr<ImageRectangle>> Scene::createGlass() {
 
 
 Matrix Scene::GetLightVPMatrix() {
-    if (_lightVPMatrix) {
-        return *_lightVPMatrix;
+    static bool initialized = false;
+    if (!initialized) {
+        glm::vec3 lightPos = Light::GlobalLight().position;
+        float near_plane = 1.0f, far_plane = 15.f;
+
+        Matrix lightView = Matrix::toMatrix(glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0000001, 1, 0.0)));
+        Matrix lightProjection = Camera::perspective(degrees_to_radians(90), 1.f, near_plane, far_plane);
+        _lightVPMatrix = lightProjection * lightView;
+        initialized = true;
     }
-    Matrix lightProjection, lightView;
-    glm::vec3 lightPos = Light::GlobalLight().position;
-    float near_plane = 1.0f, far_plane = 15.f;
-    
-    lightView = Matrix::toMatrix(glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0.0000001, 1, 0.0))) ;
-    lightProjection = Camera::perspective(degrees_to_radians(90), 1.f, near_plane, far_plane);
-    if (!_lightVPMatrix) {
-        _lightVPMatrix = new Matrix;
-        *_lightVPMatrix = lightProjection * lightView;
-    }
-    return *_lightVPMatrix;
+    return _lightVPMatrix;
 }
 
 std::shared_ptr<Line> Scene::getTestLine() {

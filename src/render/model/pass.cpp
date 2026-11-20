@@ -10,9 +10,9 @@
 #include "../Light.h"
 #include "image.h"
 
-RenderPass::RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData) {
+RenderPass::RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData) {
     m_mesh_data = meshData;
-    m_materail = matData;
+    m_material = matData;
 }
 
 bool RenderPass::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID) {
@@ -60,8 +60,8 @@ bool RenderPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, ui
         bool has_normal_tex = false;
         bool has_specular_tex = false;
         
-        for (int i = 0; i < m_materail->textures.size(); i++) {
-            auto tex = m_materail->textures[i];
+        for (int i = 0; i < m_material->textures.size(); i++) {
+            auto tex = m_material->textures[i];
             int texID = 0;
             if (!tex.filepath.empty()) {
                 texID = TextureMng::getInstance().getTexture(tex.filepath);
@@ -105,11 +105,11 @@ bool RenderPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, ui
         shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
         
         // 材质
-        shader->setFloat3("uMaterail.ambient", m_materail->ambient.r, m_materail->ambient.g, m_materail->ambient.b);
-        shader->setFloat3("uMaterail.diffuse", m_materail->diffuse.r, m_materail->diffuse.g, m_materail->diffuse.b);
-        shader->setFloat3("uMaterail.specular", m_materail->specular.r, m_materail->specular.g, m_materail->specular.b);
-        shader->setFloat("uMaterail.shininess", m_materail->shininess);
-        shader->setFloat("uMaterail.shininess_strength", m_materail->shininess_strength);
+        shader->setFloat3("uMaterail.ambient", m_material->ambient.r, m_material->ambient.g, m_material->ambient.b);
+        shader->setFloat3("uMaterail.diffuse", m_material->diffuse.r, m_material->diffuse.g, m_material->diffuse.b);
+        shader->setFloat3("uMaterail.specular", m_material->specular.r, m_material->specular.g, m_material->specular.b);
+        shader->setFloat("uMaterail.shininess", m_material->shininess);
+        shader->setFloat("uMaterail.shininess_strength", m_material->shininess_strength);
         
         // 相机位置
         auto cam_pos = Camera::GetCamera().getPossition();

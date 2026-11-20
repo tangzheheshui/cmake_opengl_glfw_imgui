@@ -10,6 +10,10 @@ FontManager::FontManager() {
 }
 
 FontManager::~FontManager() {
+    if (!m_textures.empty()) {
+        glDeleteTextures((GLsizei)m_textures.size(), m_textures.data());
+        m_textures.clear();
+    }
     FT_Done_Face(face);
     FT_Done_FreeType(ft);
 }
@@ -90,5 +94,6 @@ bool FontManager::LoadCharacter(uint32_t unicode) {
     };
 
     characters[unicode] = character;
+    m_textures.push_back(texture);
     return true;
 }

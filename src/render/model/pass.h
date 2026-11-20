@@ -18,7 +18,7 @@
 
 class RenderPass {
 public:
-    RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Materail> matData);
+    RenderPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData);
     virtual ~RenderPass() {
         if (_VAO > 0) {
             glDeleteVertexArrays(1, &_VAO);
@@ -40,7 +40,7 @@ protected:
     virtual void setup(const std::vector<Matrix> &matModel, uint32_t flags) {}
     void setup(const std::vector<Matrix> &matModel, bool hasTexture, bool hasAni);
 public:
-    std::shared_ptr<Materail> m_materail;
+    std::shared_ptr<Material> m_material;
     std::shared_ptr<MeshData> m_mesh_data;
     unsigned int _VAO = 0;
     unsigned int _VBO = 0;

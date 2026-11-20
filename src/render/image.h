@@ -19,7 +19,7 @@ static const std::string STR_PICK_TEXTURE = "pick_texture";
 typedef std::shared_ptr<std::vector<unsigned char>> ImageBuffer;
 
 struct Texture {
-    std::string name; // 直接用作uniform纹理的名�?
+    std::string name; // 直接用作uniform纹理的名�?
     std::string filepath;
     ImageBuffer data;
     int width = 0;
@@ -30,8 +30,8 @@ struct Texture {
 class TextureMng {
 public:
     static TextureMng& getInstance() {
-        std::call_once(_callOnce, [&]() { _instance = new TextureMng; });
-        return *_instance;
+        static TextureMng instance;
+        return instance;
     }
     void setRootPath(const std::string &path) { m_root_path = path; }
     void loadTexture(const std::string &filename);
@@ -49,11 +49,9 @@ private:
     void createSkyTexture();
     unsigned int genTexture(const Texture& tex);
 private:
-    inline static TextureMng* _instance = nullptr;
-    inline static std::once_flag _callOnce;
-    std::map<std::string, unsigned int> m_map_tetures;
+    std::map<std::string, unsigned int> m_map_textures;
     std::map<std::string, Texture> m_map_tex_data;
-    mutable std::mutex m_mutux;
+    mutable std::mutex m_mutex;
     std::string m_root_path;
 };
 

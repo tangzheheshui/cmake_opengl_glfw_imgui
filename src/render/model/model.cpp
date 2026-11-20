@@ -13,7 +13,7 @@
 
 void Model::LoadFile(const std::string &path) {
     if (!m_filepath.empty()) {
-        assert(0); // 不允许变更模型信�?
+        assert(0); // 不允许变更模型信�?
         return;
     }
     // Load the model file.
@@ -34,7 +34,7 @@ void Model::LoadFile(const std::string &path) {
     processTexture(scene);
     
     // 解析材质
-    processMaterail(scene);
+    processMaterial(scene);
     
     // process ASSIMP's root node recursively
     processNode(scene->mRootNode, scene, nullptr);
@@ -95,13 +95,13 @@ void Model::processAnimation(const aiScene* scene) {
             
             animation.nodeAnims.push_back(nodeAni);
         }
-        // 目前只取一个动�?
+        // 目前只取一个动�?
         m_model_data.animation = animation;
         break;
     }
 }
 
-void Model::processMaterail(const aiScene* scene) {
+void Model::processMaterial(const aiScene* scene) {
     if (!scene || !scene->HasMaterials()) {
         return;
     }
@@ -110,7 +110,7 @@ void Model::processMaterail(const aiScene* scene) {
         if (!mat) {
             continue;
         }
-        std::shared_ptr<Materail> tmpMat = std::make_shared<Materail>();
+        std::shared_ptr<Material> tmpMat = std::make_shared<Material>();
         aiColor4D diffuse;
         aiColor4D specular;
         aiColor4D ambient;
@@ -156,7 +156,7 @@ void Model::processMaterail(const aiScene* scene) {
         // 4. height maps
         std::vector<Texture> heightMaps = loadMaterialTextures(mat, aiTextureType_AMBIENT, "texture_height");
         tmpMat->textures.insert(tmpMat->textures.end(), heightMaps.begin(), heightMaps.end());
-        m_model_data.materails.push_back(tmpMat);
+        m_model_data.materials.push_back(tmpMat);
     }
 }
 
@@ -307,11 +307,11 @@ std::shared_ptr<Mesh> Model::processMesh(aiMesh *mesh, const aiScene *scene) {
     }
     
     // 材质索引
-    meshData->index_materail = mesh->mMaterialIndex;
+    meshData->index_material = mesh->mMaterialIndex;
 
     processBoneWeightForVertices(mesh, meshData);
     
-    auto pMesh = std::make_shared<Mesh>(meshData, m_model_data.materails[mesh->mMaterialIndex]);
+    auto pMesh = std::make_shared<Mesh>(meshData, m_model_data.materials[mesh->mMaterialIndex]);
     return pMesh;
 }
 

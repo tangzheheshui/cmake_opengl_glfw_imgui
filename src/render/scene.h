@@ -24,7 +24,6 @@ class CCameraController;
 
 class Scene {
 public:
-    static Scene& getScene();
     static Matrix GetLightVPMatrix();
     Scene();
     void setRootPath(const std::string &path) { m_root_path = path; }
@@ -50,7 +49,7 @@ private:
     std::vector<std::shared_ptr<BaseDraw>> m_vec_drawobj;
     std::vector<std::shared_ptr<BaseDraw>> m_vec_drawobj_blend;
     // 光源矩阵
-    inline static Matrix* _lightVPMatrix = nullptr;
+    inline static Matrix _lightVPMatrix;
     // 路径
     std::string m_root_path;
 };
