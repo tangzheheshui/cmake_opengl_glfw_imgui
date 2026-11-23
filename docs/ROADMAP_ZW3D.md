@@ -18,6 +18,14 @@
 - ✅ **B0** RHI v2 契约冻结（tag `rhi-v2-contract`）：DeviceDesc/NativeWindow、
   RenderTarget、SamplerDesc、TextureDesc(mip/sRGB)、Readback、对象级销毁、
   DeviceCapabilities；GL/VK 对象销毁已落地，其余由 B1–B4 逐后端实现
+- ✅ **VK 场景接线**（`8737900`）：Line 自动 RHI、天空盒开关、
+  `RHI_SMOKE` / `RHI_TEXQUAD` 在场景 pass 内叠加
+- ✅ **Windows 实机验证**（GTX 1050 Ti / Vulkan 1.3.280）：Vulkan 后端渲染成功、
+  验证层 0 error、`RHI_PROBE` 中心像素 119,136,119,255、ImGui 面板可见（CJK 字体已加载）；
+  同时修复：MSVC 代码页 936 需 `/utf-8`、只构建 app 时 SPIR-V 缺失、
+  per-image render-done semaphore、`RHI_PROBE` present 后布局转换
+- ⚠ **待修**：3D 内容相对 ImGui 上下翻转（B3：负高度 viewport / Reversed-Z）；
+  中文安装路径下 Assimp 打不开模型（Windows UTF-8 路径，资源层待修）
 - ⏭ **下一步**：并行 **B1**（VK Dynamic Rendering）、**B2**（GL v2 对齐）、
   **B3**（Reversed-Z/sRGB/mipmap）、**B4**（离屏 RT + readback）；
   B1 与 B3 同改管线/`VkDevice`，需串行或同一人
