@@ -1,0 +1,60 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "mac-clang",
+      "displayName": "macOS (Xcode, Debug)",
+      "generator": "Xcode",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "mac-gl-only",
+      "displayName": "macOS GL-only (no Vulkan SDK)",
+      "inherits": "mac-clang",
+      "binaryDir": "${sourceDir}/build-gl",
+      "cacheVariables": { "ENGINE_WITH_VULKAN": "OFF" }
+    },
+    {
+      "name": "linux-gcc",
+      "displayName": "Linux GCC (Ninja, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-gcc",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "linux-gl-only",
+      "displayName": "Linux GL-only (no Vulkan SDK)",
+      "inherits": "linux-gcc",
+      "binaryDir": "${sourceDir}/build/linux-gl-only",
+      "cacheVariables": { "ENGINE_WITH_VULKAN": "OFF" }
+    },
+    {
+      "name": "win-msvc",
+      "displayName": "Windows MSVC 2022 (x64)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64", "strategy": "set" },
+      "binaryDir": "${sourceDir}/build/win-msvc"
+    },
+    {
+      "name": "win-gl-only",
+      "displayName": "Windows GL-only (no Vulkan SDK)",
+      "inherits": "win-msvc",
+      "binaryDir": "${sourceDir}/build/win-gl-only",
+      "cacheVariables": { "ENGINE_WITH_VULKAN": "OFF" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mac-clang",    "configurePreset": "mac-clang",    "configuration": "Debug" },
+    { "name": "mac-gl-only",  "configurePreset": "mac-gl-only",  "configuration": "Debug" },
+    { "name": "linux-gcc",    "configurePreset": "linux-gcc" },
+    { "name": "linux-gl-only","configurePreset": "linux-gl-only" },
+    { "name": "win-msvc",     "configurePreset": "win-msvc",     "configuration": "Debug" },
+    { "name": "win-gl-only",  "configurePreset": "win-gl-only",  "configuration": "Debug" }
+  ]
+}

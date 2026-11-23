@@ -25,18 +25,11 @@ file(GLOB SRC_MATH       "${SRC_ENGINE_ROOT}/core/math/*.cpp")
 # 头文件列表（仅供 IDE 分组显示）
 file(GLOB_RECURSE ENGINE_HEADERS "${SRC_ENGINE_ROOT}/*.h")
 
-# ---- Vulkan 可选依赖（找到即启用后端；找不到仅编译 GL 后端）----
-find_path(VULKAN_INCLUDE_DIR vulkan/vulkan.h
-    HINTS /opt/homebrew/include /usr/include "${CMAKE_SOURCE_DIR}/3rdparty/vulkan/include")
-find_library(VULKAN_LIBRARY NAMES vulkan MoltenVK
-    HINTS /opt/homebrew/lib /usr/lib)
-if(VULKAN_INCLUDE_DIR AND VULKAN_LIBRARY)
-    set(ENGINE_HAS_VULKAN ON)
+# ---- Vulkan 可选后端（探测结果由顶层 CMakeLists 提供：ENGINE_HAS_VULKAN）----
+if(ENGINE_HAS_VULKAN)
     file(GLOB SRC_RHI_VK "${SRC_ENGINE_ROOT}/rhi/vk/*.cpp")
-    message(STATUS "engine: Vulkan backend enabled -> ${VULKAN_LIBRARY}")
 else()
     set(SRC_RHI_VK "")
-    message(STATUS "engine: Vulkan NOT found, building GL backend only")
 endif()
 
 add_library(engine STATIC
@@ -61,8 +54,15 @@ endif()
 # ---- Vulkan 着色器：构建期 GLSL → SPIR-V（glslangValidator）----
 # 产物写入源码树 res/shaders_vk/*.spv（.gitignore 已忽略），
 # 运行期 VkDevice 从 RHI 设备的 shaderRootPath（res/shaders_vk/）加载
-find_program(GLSLANG_VALIDATOR glslangValidator
-    HINTS /opt/homebrew/bin /usr/local/bin)
+# A2: Vulkan 后端启用时 glslang 是硬依赖——缺失时直接 configure 报错，
+# 而不是静默不生成 SPIR-V（运行期才报 "missing SPIR-V"）。
+find_program(GLSLANG_VALIDATOR NAMES glslangValidator glslang
+    HINTS "$ENV{VULKAN_SDK}/bin" /opt/homebrew/bin /usr/local/bin)
+if(ENGINE_HAS_VULKAN AND NOT GLSLANG_VALIDATOR)
+    message(FATAL_ERROR
+        "engine: Vulkan backend enabled but glslangValidator not found. "
+        "Install glslang (or Vulkan SDK), or configure with -DENGINE_WITH_VULKAN=OFF.")
+endif()
 if(GLSLANG_VALIDATOR AND ENGINE_HAS_VULKAN)
     file(GLOB VK_SHADER_SRCS
         "${CMAKE_SOURCE_DIR}/res/shaders_vk/*.vert"

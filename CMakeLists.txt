@@ -30,6 +30,35 @@ set_target_properties(imgui PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/3rdparty/imgui"
 )
 
+# ---- Vulkan 可选后端探测（只做一次，engine/app 共用；A2）----
+# 探测顺序：环境变量 VULKAN_SDK（Windows/Linux 官方 SDK）→ brew /usr/local → 系统路径。
+# 找不到时降级为仅 GL 后端（产品回退路径），不中断构建。
+option(ENGINE_WITH_VULKAN "Build the Vulkan RHI backend (auto-disabled if SDK not found)" ON)
+set(ENGINE_HAS_VULKAN OFF)
+if(NOT ENGINE_WITH_VULKAN)
+    message(STATUS "vulkan: disabled by ENGINE_WITH_VULKAN=OFF (GL backend only)")
+endif()
+if(ENGINE_WITH_VULKAN)
+    set(_vk_hints "")
+    if(DEFINED ENV{VULKAN_SDK})
+        list(APPEND _vk_hints "$ENV{VULKAN_SDK}")
+        message(STATUS "vulkan: VULKAN_SDK = $ENV{VULKAN_SDK}")
+    endif()
+    find_path(VULKAN_INCLUDE_DIR vulkan/vulkan.h
+        HINTS ${_vk_hints} /opt/homebrew /usr/local /usr
+        PATH_SUFFIXES include Include)
+    find_library(VULKAN_LIBRARY NAMES vulkan vulkan-1 MoltenVK
+        HINTS ${_vk_hints} /opt/homebrew /usr/local /usr
+        PATH_SUFFIXES lib lib64 Lib)
+    if(VULKAN_INCLUDE_DIR AND VULKAN_LIBRARY)
+        set(ENGINE_HAS_VULKAN ON)
+        message(STATUS "vulkan: backend enabled -> ${VULKAN_LIBRARY}")
+    else()
+        message(STATUS "vulkan: not found (set VULKAN_SDK, or -DVULKAN_INCLUDE_DIR/-DVULKAN_LIBRARY; "
+                       "-DENGINE_WITH_VULKAN=OFF to silence)")
+    endif()
+endif()
+
 # ---- engine 层 ----
 add_subdirectory(src)
 

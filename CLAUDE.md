@@ -30,11 +30,18 @@ third-party 层            3rdparty/ 各自独立 target
 ### 构建命令
 
 ```bash
+# 推荐：CMake Presets（mac-clang / linux-gcc / win-msvc，另有 *-gl-only）
+cmake --preset mac-clang && cmake --build --preset mac-clang
+
+# 等价的手动命令
 cmake -S . -B build -G Xcode
 cmake --build build
 ```
 
-可执行文件：`build/app/Debug/my_app`（引擎库产物：`build/src/Debug/libengined.a`）
+- 可执行文件：`build/app/Debug/my_app`（引擎库产物：`build/src/Debug/libengined.a`）
+- **GL-only 构建**：`-DENGINE_WITH_VULKAN=OFF`（无 Vulkan SDK 时自动降级）；
+  Vulkan 后端启用但缺 `glslangValidator` 时 configure 直接报错
+- 多平台构建入口统一走 `CMakePresets.json`；`VULKAN_SDK` 环境变量会被自动探测
 
 ### 运行
 

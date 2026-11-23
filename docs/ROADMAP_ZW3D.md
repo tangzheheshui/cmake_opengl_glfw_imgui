@@ -12,8 +12,11 @@
 - ✅ **A3** VkCaps 能力探测 + Pipeline Cache 持久化 + 面板/日志能力表
   （顺带修复：pipeline layout 泄漏、退出时对象在命令缓冲中销毁、
   单例析构晚于 `glfwTerminate` 的崩溃）
-- ⏭ **下一步**：A2 跨平台构建（CMakePresets / Vulkan SDK 探测 / GL-only 构建），
-  然后进入 **B0 接口冻结**（唯一串行门禁，冻结后打 tag `rhi-v2-contract`）
+- ✅ **A2** CMakePresets（mac/linux/win + GL-only）、VULKAN_SDK 探测、
+  glslang 硬校验、`ENGINE_HAS_VULKAN` 对 app 可见、临时目录跨平台
+  （macOS 已验证；Windows/Linux 需实机构建确认）
+- ⏭ **下一步**：**B0 接口冻结**（唯一串行门禁，冻结后打 tag `rhi-v2-contract`），
+  然后并行 B1/B2/B3/B4
 
 ## 0. 待确认假设（影响架构，尽早确认）
 

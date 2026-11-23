@@ -7,11 +7,9 @@
 
 file(GLOB SRC_APP "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
-# Vulkan 可选：为 ImGui Vulkan backend 提供源文件与链接
-find_path(VULKAN_INCLUDE_DIR vulkan/vulkan.h HINTS /opt/homebrew/include /usr/include)
-find_library(VULKAN_LIBRARY NAMES vulkan HINTS /opt/homebrew/lib /usr/lib)
-set(APP_IMGUI_VK_SRC "")
-if(VULKAN_INCLUDE_DIR AND VULKAN_LIBRARY)
+# Vulkan 可选（A2）：探测结果由顶层 CMakeLists 提供（ENGINE_HAS_VULKAN）；
+# main.cpp 通过 ENGINE_HAS_VULKAN 宏裁剪 Vulkan 代码，GL-only 构建可用。
+if(ENGINE_HAS_VULKAN)
     list(APPEND SRC_APP "${CMAKE_SOURCE_DIR}/3rdparty/imgui/backends/imgui_impl_vulkan.cpp")
     message(STATUS "app: ImGui Vulkan backend enabled")
 endif()
@@ -33,7 +31,10 @@ target_link_libraries(my_app
         glfw      # main.cpp 直接创建/操作窗口
 )
 
-if(VULKAN_INCLUDE_DIR AND VULKAN_LIBRARY)
+if(ENGINE_HAS_VULKAN)
+    target_compile_definitions(my_app PRIVATE ENGINE_HAS_VULKAN=1)
     target_include_directories(my_app PRIVATE ${VULKAN_INCLUDE_DIR})
     target_link_libraries(my_app PRIVATE ${VULKAN_LIBRARY})
+else()
+    target_compile_definitions(my_app PRIVATE ENGINE_HAS_VULKAN=0)
 endif()

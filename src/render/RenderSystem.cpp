@@ -69,8 +69,13 @@ void RenderSystem::init(const std::string& rootPath) {
     // 后端选择：RHI_BACKEND 环境变量（opengl=默认 / vulkan）
     if (const char* b = std::getenv("RHI_BACKEND")) {
         if (std::strcmp(b, "vulkan") == 0 || std::strcmp(b, "VULKAN") == 0) {
+#ifdef ENGINE_HAS_VULKAN
             _backend = rhi::Backend::Vulkan;
             ENGINE_LOG_INFO("[RHI] using Vulkan backend (MoltenVK)");
+#else
+            // A2: GL-only 构建——不静默进入空渲染，保持 OpenGL 回退路径
+            ENGINE_LOG_WARN("[RHI] RHI_BACKEND=vulkan ignored: Vulkan backend not compiled, using OpenGL");
+#endif
         }
     }
 
@@ -250,9 +255,14 @@ void RenderSystem::selfTestAB() {
     }
     printf("[SELFTEST] model A/B diff pixels=%d bbox=(%d,%d)-(%d,%d) frame=%dx%d\n",
            diffCount, minX, minY, maxX, maxY, w, h);
-    // 调试设施：导出 RHI 分支帧供目视检查
+    // 调试设施：导出 RHI 分支帧供目视检查（A2：跨平台临时目录，不写死 /tmp）
     {
-        FILE* fp = fopen("/tmp/frame_rhi.ppm", "wb");
+        std::error_code ec;
+        auto tmpDir = std::filesystem::temp_directory_path(ec);
+        if (ec) tmpDir = ".";
+        const std::string rhiPpm = (tmpDir / "frame_rhi.ppm").string();
+        const std::string glPpm  = (tmpDir / "frame_gl.ppm").string();
+        FILE* fp = fopen(rhiPpm.c_str(), "wb");
         if (fp) {
             fprintf(fp, "P6\n%d %d\n255\n", w, h);
             for (int y = h - 1; y >= 0; --y) {
@@ -263,7 +273,7 @@ void RenderSystem::selfTestAB() {
             }
             fclose(fp);
         }
-        fp = fopen("/tmp/frame_gl.ppm", "wb");
+        fp = fopen(glPpm.c_str(), "wb");
         if (fp) {
             fprintf(fp, "P6\n%d %d\n255\n", w, h);
             for (int y = h - 1; y >= 0; --y) {

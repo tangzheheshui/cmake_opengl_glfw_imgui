@@ -798,8 +798,12 @@ void VulkanDevice::endFrame() {
         ENGINE_LOG_INFO("[VKPROBE] center bytes = %d,%d,%d,%d (format=%d)",
                     px[off], px[off+1], px[off+2], px[off+3], (int)_swapchainFormat);
         std::fflush(stdout);
-        if (std::getenv("RHI_DUMP")) {   // 正式调试设施：导出整帧 PPM
-            FILE* fp = fopen("/tmp/frame_vk.ppm", "wb");
+        if (std::getenv("RHI_DUMP")) {   // 正式调试设施：导出整帧 PPM（跨平台临时目录）
+            std::error_code ec;
+            auto tmpDir = std::filesystem::temp_directory_path(ec);
+            if (ec) tmpDir = ".";
+            const std::string ppmPath = (tmpDir / "frame_vk.ppm").string();
+            FILE* fp = fopen(ppmPath.c_str(), "wb");
             if (fp) {
                 std::fprintf(fp, "P6\n%u %u\n255\n", _swapchainExtent.width, _swapchainExtent.height);
                 for (uint32_t y = 0; y < _swapchainExtent.height; ++y) {

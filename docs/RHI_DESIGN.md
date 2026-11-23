@@ -81,6 +81,7 @@ ImGui 窗口"渲染调试"（`src/render/DebugPanel.cpp`）：
 | M4.3c | VK 模式 ImGui 面板可见性（需 Metal capture 深查）；阴影/拾取 Pass 迁移 | 进行中 |
 | **A1** | **Validation Layer + Debug Utils + 对象命名 + RHI_VK_VALIDATION 开关。修复真实缺陷：draw 期间原位更新描述符缺 UPDATE_AFTER_BIND（119 条违规 → 0）** | ✅ |
 | **A3** | **VkCaps 能力探测（启动日志能力表）+ Pipeline Cache 持久化 + 调试面板能力表**；顺带修复：pipeline layout 每管线泄漏、退出时对象在命令缓冲中即销毁、单例析构晚于 `glfwTerminate` | ✅ |
+| **A2** | **CMakePresets（mac/linux/win + GL-only）+ VULKAN_SDK 探测 + glslang 硬校验 + `ENGINE_HAS_VULKAN` 对 app 可见 + 临时目录跨平台** | ✅ macOS 验证；Win/Linux 待实机 |
 | M5 | 打包：MoltenVK Frameworks 内嵌（消除 DYLD_LIBRARY_PATH）、启动参数选后端 | 待做 |
 
 ## M3 调试历程（关键经验，都是真金白银换的）

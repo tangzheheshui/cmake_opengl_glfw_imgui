@@ -1,9 +1,11 @@
-# OpenGL 渲染引擎
+# 双后端渲染引擎（OpenGL / Vulkan）
 
-基于 C++17/OpenGL 3.3 Core Profile 的 3D 渲染引擎，使用 GLFW + GLAD + Dear ImGui + Assimp + FreeType 构建。
+基于 C++17 的 3D 渲染引擎，通过自研 RHI 抽象层统一封装 **OpenGL 3.3** 与 **Vulkan** 两个后端，
+使用 GLFW + GLAD + Dear ImGui + Assimp + FreeType 构建。macOS 上 Vulkan 经 MoltenVK。
 
 ## 特性
 
+- **双后端 RHI**：OpenGL 3.3 / Vulkan（MoltenVK），统一资源与命令抽象
 - **多 Pass 前向渲染管线**：阴影贴图 → 主渲染 → 天空盒 → 实体拾取
 - **3D 模型加载**（Assimp）：支持骨骼动画和实例化渲染
 - **阴影映射**：平行光阴影（1024×1024 深度贴图）
@@ -18,29 +20,29 @@
 - CMake 3.22+
 - C++17 编译器（Clang / GCC / MSVC）
 - OpenGL 3.3+ 支持
+- **Vulkan 后端（可选）**：Vulkan SDK（Windows/Linux 设 `VULKAN_SDK`）或 macOS
+  `brew install molten-vk vulkan-loader vulkan-headers glslang`；
+  **glslangValidator**（Vulkan 启用时为硬依赖，构建期编译 SPIR-V；本仓库验证版本 16.6.0）。
+  找不到 Vulkan SDK 时自动降级为仅 GL 后端；`-DENGINE_WITH_VULKAN=OFF` 可显式关闭。
 
-## 快速开始
+## 快速开始（CMake Presets）
 
 ```bash
-# 克隆项目
 git clone <repository-url>
 cd cmake_opengl_glfw_imgui
 
-# 配置（macOS 推荐 Xcode）
-cmake -S . -B build -G Xcode
+# macOS / Linux / Windows 统一入口（见 CMakePresets.json）
+cmake --preset mac-clang     # linux-gcc / win-msvc / *-gl-only
+cmake --build --preset mac-clang
 
-# 编译
-cmake --build build
+# 运行（GL 默认）
+./build/app/Debug/my_app
 
-# 运行
-./build/Debug/my_app
+# Vulkan 后端（macOS 开发期需要 DYLD 路径，打包后 Frameworks 内嵌解决）
+DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan ./build/app/Debug/my_app
 ```
 
-Windows 上：
-```bash
-cmake -S . -B build
-cmake --build build --config Debug
-```
+手动配置等价于 `cmake -S . -B build -G Xcode && cmake --build build`。
 
 ## 项目结构
 

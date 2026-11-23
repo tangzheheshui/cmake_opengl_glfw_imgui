@@ -2,11 +2,19 @@
 #include <GLFW/glfw3.h>
 #include "3rdparty/imgui/imgui.h"
 #include "backends/imgui_impl_glfw.h"
+// A2: Vulkan 相关代码按构建能力裁剪（GL-only 构建不依赖 Vulkan SDK）
+#ifndef ENGINE_HAS_VULKAN
+#define ENGINE_HAS_VULKAN 0
+#endif
+#if ENGINE_HAS_VULKAN
 #include "backends/imgui_impl_vulkan.h"
+#endif
 #include "backends/imgui_impl_opengl3.h"
 #include <iostream>
 #include <cstdlib>
+#if ENGINE_HAS_VULKAN
 #include <vulkan/vulkan.h>
+#endif
 #include <cstring>
 #include <filesystem>
 #include "camera/camera.h"
@@ -47,7 +55,9 @@ float lastX = 800.0f / 2.0;
 float lastY = 600.0 / 2.0;
 float fov = 45.0f;
 
+#if ENGINE_HAS_VULKAN
 static VkDescriptorPool g_imguiDescriptorPool = VK_NULL_HANDLE;
+#endif
 
 int main()
 {
@@ -60,6 +70,13 @@ int main()
     if (const char* b = std::getenv("RHI_BACKEND")) {
         useVulkan = (std::strcmp(b, "vulkan") == 0 || std::strcmp(b, "VULKAN") == 0);
     }
+#if !ENGINE_HAS_VULKAN
+    if (useVulkan) {
+        std::printf("[UI] RHI_BACKEND=vulkan but this build has no Vulkan support; "
+                    "falling back to OpenGL\n");
+        useVulkan = false;
+    }
+#endif
 
     if (useVulkan) {
         // Vulkan 模式：窗口不创建 GL 上下文，surface 由 RHI 层创建
@@ -167,6 +184,7 @@ int main()
     RenderSystem::getInstance().onWindowSizeChanged(width, height);
 
     // Vulkan 模式：ImGui Vulkan backend（需要 RHI 设备，故在 init 之后初始化）
+#if ENGINE_HAS_VULKAN
     if (useVulkan) {
         auto* dev = RenderSystem::getInstance().rhiDevice();
         rhi::IRHIDevice::NativeHandles h;
@@ -215,6 +233,7 @@ int main()
                                             reinterpret_cast<VkCommandBuffer>(cmd->nativeCommandBuffer()));
         });
     }
+#endif
 
     // 使用rendersysytem的各种接口
     testRenderSystem(proPath, useVulkan);
@@ -234,6 +253,7 @@ int main()
 
         RenderSystem::getInstance().update();
 
+#if ENGINE_HAS_VULKAN
         // Vulkan mode: build ImGui frame before draw (RenderDrawData runs inside drawRhiScene's pass)
         if (useVulkan) {
             ImGui_ImplGlfw_NewFrame();      // 先设置 DisplaySize（依赖 GLFW 窗口）
@@ -245,6 +265,7 @@ int main()
             }
             ImGui::Render();
         }
+#endif
 
         RenderSystem::getInstance().draw();
 
@@ -269,6 +290,7 @@ int main()
         glfwPollEvents();
     }
 
+#if ENGINE_HAS_VULKAN
     if (useVulkan) {
         // ImGui 的资源（buffer/pipeline/描述符集）被最后一帧的命令缓冲引用，
         // 销毁前必须等 GPU 完成；否则验证层报 "currently in use"
@@ -283,21 +305,12 @@ int main()
                 vkDestroyDescriptorPool((VkDevice)h.device, g_imguiDescriptorPool, nullptr);
             }
         }
-    } else {
-            if (useVulkan) {
-            ImGui_ImplVulkan_Shutdown();
-        } else {
-            ImGui_ImplOpenGL3_Shutdown();
-        }
+    } else
+#endif
+    {
+        ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
-        if (useVulkan && g_imguiDescriptorPool != VK_NULL_HANDLE) {
-            auto* dev = RenderSystem::getInstance().rhiDevice();
-            rhi::IRHIDevice::NativeHandles h;
-            if (dev && dev->nativeHandles(h)) {
-                vkDestroyDescriptorPool((VkDevice)h.device, g_imguiDescriptorPool, nullptr);
-            }
-        }
     }
 
     // RHI 设备/GL 资源必须在窗口销毁前显式释放（单例静态析构太晚，会崩溃；

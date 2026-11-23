@@ -1,4 +1,6 @@
 /build/
+/build-*/
+/CMakeUserPresets.json
 /.vs/
 .vscode/
 *.DS_Store
