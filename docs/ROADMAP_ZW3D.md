@@ -14,7 +14,7 @@
   单例析构晚于 `glfwTerminate` 的崩溃）
 - ✅ **A2** CMakePresets（mac/linux/win + GL-only）、VULKAN_SDK 探测、
   glslang 硬校验、`ENGINE_HAS_VULKAN` 对 app 可见、临时目录跨平台
-  （macOS 已验证；Windows/Linux 需实机构建确认）
+  （macOS + Windows 已实机构建；Linux 待验证）
 - ✅ **B0** RHI v2 契约冻结（tag `rhi-v2-contract`）：DeviceDesc/NativeWindow、
   RenderTarget、SamplerDesc、TextureDesc(mip/sRGB)、Readback、对象级销毁、
   DeviceCapabilities；GL/VK 对象销毁已落地，其余由 B1–B4 逐后端实现
@@ -24,11 +24,48 @@
   验证层 0 error、`RHI_PROBE` 中心像素 119,136,119,255、ImGui 面板可见（CJK 字体已加载）；
   同时修复：MSVC 代码页 936 需 `/utf-8`、只构建 app 时 SPIR-V 缺失、
   per-image render-done semaphore、`RHI_PROBE` present 后布局转换
-- ⚠ **待修**：3D 内容相对 ImGui 上下翻转（B3：负高度 viewport / Reversed-Z）；
-  中文安装路径下 Assimp 打不开模型（Windows UTF-8 路径，资源层待修）
-- ⏭ **下一步**：并行 **B1**（VK Dynamic Rendering）、**B2**（GL v2 对齐）、
-  **B3**（Reversed-Z/sRGB/mipmap）、**B4**（离屏 RT + readback）；
-  B1 与 B3 同改管线/`VkDevice`，需串行或同一人
+- ⚠ **已知小问题（不阻塞，已记录）**：
+  1. 3D 内容相对 ImGui 上下翻转（B3a：负高度 viewport）；
+  2. 深度范围仍是 GL 约定 z∈[-1,1]，Vulkan 需要 [0,1]（B3b：Reversed-Z/投影）；
+  3. 中文安装路径下 Assimp 打不开模型（A4：Windows UTF-8/宽字符路径）；
+  4. resize 仍走“重建 PSO”路径（B1：Dynamic Rendering）
+- ✅ **收尾状态**：所有改动已提交并推送（origin/master）；
+  Windows Vulkan 实机可运行，验证层 0 error；ImGui 面板可见（CJK 字体）
+
+## 剩余工作总览（2026-11-23 收尾版，评审用）
+
+> 这是给产品/排期看的浓缩清单；详细阶段表见第 2 节。
+> 规模：S ≈ 1–2 天，M ≈ 3–5 天，L ≈ 1–2 周（单人）。
+
+| 优先级 | ID | 工作项 | 现状 | 依赖 | 并行性 | 规模 |
+|--------|----|--------|------|------|--------|------|
+| P0 | B3a | Y 翻转：负高度 viewport，并移除 dump 行翻转 | 3D 相对 UI 倒置 | B0 | 与 B1 串行（VkCommandList/管线） | S–M |
+| P0 | B3b | 深度：Vulkan 投影 z∈[0,1] + Reversed-Z | 近平面裁剪 / 大范围 z-fighting 风险 | B3a | 与 B3a 同人 | M |
+| P0 | A4 | Windows UTF-8/宽字符路径（Assimp IOSystem、纹理/着色器/缓存路径） | 中文安装路径加载失败 | 无 | **可与 B3 并行**（资源/IO） | M |
+| P0 | B1 | Dynamic Rendering + resize/ImGui 失效收尾 | 固定 render pass；resize 重建 PSO | B0 | 与 B3 串行（VkDevice/管线） | M |
+| P0 | B2 | GL 后端 v2：render target / sampler / readback / caps | 契约已冻结，GL 未实现 | B0 | **可并行** | M |
+| P0 | B4 | 离屏 RenderTarget + readback | 仅默认 framebuffer | B1 | 与 B2 并行；与 B1 串行（VkDevice） | M |
+| P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
+| P1 | C2 | 多视口 | 单视口 | B0 | 可并行 | M |
+| P1 | D1 | 宽线/边线 + AA + polygon offset | VK 线宽仅 1 | B3 | 可并行 | L |
+| P1 | D2 | 拾取 Pass + 回读 | 无拾取回读 | B4 | 可并行 | M |
+| P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | 未迁移 | B1/B4 | 大部分可并行 | M/S |
+| P2 | E1/E2 | VMA + 异步上传环 + Timeline + fif=2 | 每次上传 `vkQueueWaitIdle` | A3 | E1→E2 串行 | M/L |
+| P2 | E3/E5 | CPU 剔除 / LOD / 流式加载 | 未开始 | 无 / E1 | 可与 E1/E2 并行 | M |
+| P3 | F1 | headless 测试 + CI | 无 | B4 | 可并行 | S |
+| P3 | F2 | 打包 / GL 回退验证 / 设备丢失恢复 | 未开始 | C1/C4 | 部分并行 | M |
+
+### 推荐执行顺序（评审后再定）
+
+1. **第一波（正确性收尾）**：B3a → B3b + A4。B3 与本机 VK 环境可直接验证；
+   A4 只动资源/IO 层，可同时进行。
+2. **第二波（RHI 基座）**：B1 → B4；B2 并行。B1/B4 同改 `VkDevice`，需串行或同一人。
+3. **第三波（ZW3D 接入）**：C1/C2 + D2/D4/D7；D1 等 B3 完成后做。
+4. **第四波（大装配）**：E1/E2 → E3/E5。
+5. **第五波（工程化）**：F1/F2。
+
+明确不做：bindless/BDA、GPL、VRS/FSR、Ray Query、HDR、完整 RT 管线、
+Vulkan Video / Mesh Shader / Shader Object（理由见第 1 节）。
 
 ## 0. 待确认假设（影响架构，尽早确认）
 
@@ -77,8 +114,10 @@
 | A1 | Validation Layer + Debug Utils + 对象命名 + `RHI_VK_VALIDATION` | S | 无 | 可与 A2 并行；与 A3 同改 VkDevice，**建议同一人** | `VkDevice.*`、`main.cpp` |
 | A2 | 跨平台构建：CMakePresets、Vulkan SDK 探测、glslang、`ENGINE_HAS_VULKAN` 对 app 可见、`/tmp` 路径、GL-only 构建修复 | S | 无 | **可完全并行** | `CMakeLists.txt`、`src/CMakeLists.txt`、`app/*` |
 | A3 | `VkCaps` 能力探测 + Pipeline Cache 持久化 + 调试面板展示 | S | A1 | 与 A1 串行或同一人 | `VkDevice.*`、`DebugPanel.*` |
+| A4 | Windows UTF-8/宽字符路径：Assimp `IOSystem`、纹理/着色器/pipeline cache 路径 | M | 无 | **可与 B3 并行**（资源/IO 层） | `image.*`、`model.*`、`shader.*`、`VkDevice.*` |
 
-验收：Windows/Linux 都能构建；GL-only 构建不报错；验证层对现有场景无 error；启动日志打印能力表。
+验收：Windows/Linux 都能构建；GL-only 构建不报错；验证层对现有场景无 error；启动日志打印能力表；
+中文安装路径下模型、纹理、着色器均可加载（A4）。
 
 ### Phase 1 —— RHI v2 契约 + 渲染正确性（先串行冻结，再并行）
 
@@ -138,18 +177,24 @@
 EDS 1、多队列、Subgroup、Ray Query 拾取、HDR、GPL。
 明确不做：VRS/FSR 上采样、完整 RT 管线、Vulkan Video、Mesh/Task Shader、Shader Object。
 
-## 3. 现有 P0 缺陷的归并
+## 3. 现有缺陷归并（2026-11-23 收尾版）
 
-| 现有问题 | 归属 | 说明 |
+| 问题 | 状态 | 归属/说明 |
 |---|---|---|
-| ImGui VK 面板不可见 | B5 | 仅调试工具，不阻塞 ZW3D 产品路径 |
-| VK 未接 RenderSettings | B1 | 随 Dynamic Rendering 一起整理 |
-| Y 翻转 / 深度范围 | B3 | 跨平台正确性前置 |
-| resize 重建 PSO / ImGui 失效 | B1 | Dynamic Rendering 一并解决 |
-| Line 在 VK 静默消失 | D1 | CAD 线框需求会正式重做 |
-| 阴影 / 地面 / 文字（demo） | D4 仅文字 | 阴影/地面非产品需求，不投入 |
-| GL-only 构建坏、CMake macOS 路径 | A2 | 产品交付前置 |
-| 描述符/pipeline layout 生命周期 | E1/B1 | 在 VMA/DR 改造中归属清晰化 |
+| ImGui VK 面板不可见 | ✅ 已解决（Windows 验证） | 面板可见；B1 改 Dynamic Rendering 时注意 ImGui backend |
+| VK 未接 RenderSettings | ✅ 已解决（`8737900`） | sky/smoke/tex quad 开关接线 |
+| Line 在 VK 静默消失 | ✅ 已解决（`8737900`） | 自动走 RHI；宽线质量仍由 D1 提升 |
+| GL-only 构建坏 / CMake macOS 路径 | ✅ 已解决（A2 + Windows 验证） | Linux 预设待实机验证 |
+| MSVC 代码页 936 中文源码 | ✅ 已解决（`7a6de50`） | engine/app 加 `/utf-8` |
+| 只构建 app 时缺 SPIR-V | ✅ 已解决（`11d4dfa`） | `my_app` 依赖 `vk_shaders` |
+| swapchain semaphore 复用 / probe 布局 | ✅ 已解决（`e19a227`） | per-image render-done + probe 移到 present 前 |
+| Y 翻转 | ⏳ 待修 B3a | 3D 相对 UI 倒置；修完后移除 dump 行翻转 |
+| 深度范围 z∈[-1,1] / 大范围精度 | ⏳ 待修 B3b | Vulkan 需要 [0,1]；CAD 需要 Reversed-Z |
+| 中文安装路径加载失败 | ⏳ 待修 A4 | Assimp/纹理/着色器路径需 UTF-8/宽字符 |
+| resize 重建 PSO / ImGui 失效 | ⏳ 待修 B1 | Dynamic Rendering 一并解决 |
+| 描述符“当前块”隐式残留 | ⏳ 待修 B1/E1 | 每 draw 显式 block 或每 draw 独立描述符集 |
+| 阴影 / 地面 / 文字（demo） | 部分 | 文字 D4；阴影/地面非产品需求，不投入 |
+| pipeline layout 生命周期 | ✅ A3 已修 | 后续 B1 重建管线时保持 |
 
 ## 4. 并行开发与多机协作约定
 
@@ -180,13 +225,44 @@ EDS 1、多队列、Subgroup、Ray Query 拾取、HDR、GPL。
 - 本文件作为计划唯一来源；每周更新“当前阶段/阻塞项/下一步”。
 - 每个工作流结束在 issue/文档里写：改了什么、怎么验证、回退方式。
 
+### 4.6 本机已验证的 Windows 构建/运行环境（2026-11-23）
+
+- Windows 10 19045；VS 2022 17.14；MSVC 19.44.35207；Windows SDK 10.0.26100
+- CMake **4.4.4**（VS 自带 3.31 在 C+CXX 检测阶段崩溃；4.4 正常。
+  旧第三方 `cmake_minimum_required(<3.5)` 需 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`）
+- Vulkan SDK **1.4.363.1**：`C:\work\VulkanSDK`（headers / `vulkan-1.lib` / glslang / validation layer）
+- GPU：GTX 1050 Ti，Vulkan 1.3.280，驱动 560.94
+
+构建：
+
+```bat
+set VULKAN_SDK=C:\work\VulkanSDK
+cmake -S . -B build/win-verify -G "Visual Studio 17 2022" -A x64 ^
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DENGINE_WITH_VULKAN=ON
+cmake --build build/win-verify --config Debug --target my_app --parallel 8
+```
+
+运行：仓库路径含中文时 Assimp 无法打开模型（A4 待修）。临时办法是把
+`my_app.exe` 与 `res/` 复制到 ASCII 目录（如 `C:\work\engine-bin`）后运行：
+
+```bat
+set RHI_BACKEND=vulkan
+set RHI_VK_VALIDATION=1
+set RHI_PROBE=1
+set RHI_DUMP=1
+my_app.exe
+```
+
+实测：验证层 0 error；`RHI_PROBE` 中心像素开烟雾时 `119,136,119,255`；
+ImGui 面板可见；3D 内容 Y 翻转待 B3a。
+
 ## 5. 里程碑验收
 
 | 里程碑 | 验收标准 |
 |---|---|
-| M0 | Win/Linux 可构建；GL-only 可构建；验证层无 error；能力表可查 |
-| M1 | reversed-Z + sRGB + mipmap；GL/VK 视觉对齐；resize 不重建 PSO |
-| M2 | 嵌入宿主窗口/离屏纹理；无 GLFW 依赖；headless 冒烟通过；多视口正确 |
+| M0 | Windows/macOS 已构建；Linux 待验证；GL-only 可构建；验证层无 error；能力表可查 |
+| M1 | Y 翻转修复；Vulkan 深度 z∈[0,1] + Reversed-Z；sRGB + mipmap；GL/VK 视觉对齐；resize 不重建 PSO |
+| M2 | 嵌入宿主窗口/离屏纹理；无 GLFW 依赖；headless 冒烟通过；多视口正确；中文路径资源加载正常 |
 | M3 | 边线/宽线、拾取、透明、SDF 文字、剖切可用 |
 | M4 | VMA + 异步上传 + fif=2；大装配在预算内稳定运行 |
 | M5 | （可选）GPU 剔除/MDI；bindless 预研结论 |
