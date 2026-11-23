@@ -82,6 +82,7 @@ ImGui 窗口"渲染调试"（`src/render/DebugPanel.cpp`）：
 | **A1** | **Validation Layer + Debug Utils + 对象命名 + RHI_VK_VALIDATION 开关。修复真实缺陷：draw 期间原位更新描述符缺 UPDATE_AFTER_BIND（119 条违规 → 0）** | ✅ |
 | **A3** | **VkCaps 能力探测（启动日志能力表）+ Pipeline Cache 持久化 + 调试面板能力表**；顺带修复：pipeline layout 每管线泄漏、退出时对象在命令缓冲中即销毁、单例析构晚于 `glfwTerminate` | ✅ |
 | **A2** | **CMakePresets（mac/linux/win + GL-only）+ VULKAN_SDK 探测 + glslang 硬校验 + `ENGINE_HAS_VULKAN` 对 app 可见 + 临时目录跨平台** | ✅ macOS 验证；Win/Linux 待实机 |
+| **B0** | **RHI v2 契约冻结**：DeviceDesc/NativeWindow、RenderTarget、SamplerDesc、TextureDesc(mip/sRGB/sampler)、ReadbackDesc、对象级销毁、结构化 DeviceCapabilities、setScissor。tag `rhi-v2-contract` | ✅ |
 | M5 | 打包：MoltenVK Frameworks 内嵌（消除 DYLD_LIBRARY_PATH）、启动参数选后端 | 待做 |
 
 ## M3 调试历程（关键经验，都是真金白银换的）
@@ -186,6 +187,28 @@ DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan RHI_SMOKE=1 \
 # 第一次：capabilities 表 + "pipeline cache empty" ... "pipeline cache saved: N bytes"
 # 第二次： "pipeline cache loaded: N bytes"
 ```
+
+### B0：RHI v2 契约（已冻结，tag `rhi-v2-contract`）
+
+冻结原则：**只加不改**。v1 的调用路径原样可用，新增能力默认"不支持"或在
+B1–B4 逐后端落地；冻结后公共头的任何改动必须同步本节并通知所有并行工作流。
+
+| 契约项 | 定义 | 实现状态 |
+|---|---|---|
+| `DeviceDesc` / `NativeWindow` | 宿主窗口（Win32/Xlib/Xcb/Wayland/Cocoa/MetalLayer）或离屏设备；引擎不再硬依赖 GLFW | C1 实现；`RHIFactory::createDevice(DeviceDesc)` 当前明确告警返回空 |
+| `RenderTargetDesc` / `RenderTargetHandle` | 离屏颜色/深度附件，`RenderPassDesc::renderTarget`；invalid = 默认帧缓冲 | B4 实现 |
+| `SamplerDesc` | filter/wrap/LOD/aniso/compare；在 `TextureDesc::sampler` 内提供 | GL B2、VK B3 生效 |
+| `TextureDesc` 扩展 | `mipLevels` / `generateMips` / `arrayLayers`；sRGB 通过 `Format` 表达 | B3 生效 |
+| `ReadbackDesc` + `readbackTexture` | 同步回读（缩略图/拾取/验证） | B4 实现 |
+| 对象级销毁 | `destroyBuffer/Texture/Pipeline/UniformBlock`；句柄 id 不复用，槽位保留 | ✅ GL/VK 已实现 |
+| `DeviceCapabilities` | 结构化能力（limits/扩展特性）+ `details` 人类可读表 | ✅ VK 已填充；GL 在 B2 对齐 |
+| `setScissor` | 多视口裁剪（C2 前置） | C2 实现 |
+
+注意：
+- `RenderPassDesc::framebufferId`（GL FBO 直通）是 v1 遗留，保留到 B2 完成后移除。
+- VK `destroyPipeline` 后槽位标记 dead，swapchain 重建不会复活；`destroyUniformBlock`
+  只回收 UBO 内存，描述符集随 pool 回收（pool 未开 FREE_DESCRIPTOR_SET_BIT，E1 细化）。
+- 设备默认 uniform block 由设备持有，`destroyUniformBlock` 对其告警并忽略。
 
 ### M4.3b 已知问题（M4.3c 优先）
 

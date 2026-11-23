@@ -24,6 +24,11 @@ public:
     static std::unique_ptr<IRHIDevice> createDevice(Backend backend,
                                                     GLFWwindow* window,
                                                     const std::string& shaderRootPath);
+
+    // v2 契约入口（B0 冻结；宿主窗口/离屏接入在 C1 实现）：
+    //   - 引擎不再硬依赖 GLFW；GLFW 只是示例 app 的窗口来源
+    //   - DeviceDesc::window 为空且 offscreen = true 时创建无 swapchain 的离屏设备
+    static std::unique_ptr<IRHIDevice> createDevice(const DeviceDesc& desc);
 };
 
 } // namespace rhi

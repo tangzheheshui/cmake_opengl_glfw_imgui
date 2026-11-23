@@ -672,15 +672,28 @@ bool VulkanDevice::beginFrameInternal() {
 }
 
 void VulkanDevice::recreatePipelines() {
+    // 快照描述与存活标记（createPipeline 会向两个数组追加），清空后按原槽位顺序重建，
+    // 保证句柄 id（下标+1）不变；destroyPipeline 过的槽位保持 dead。
+    const std::vector<GraphicsPipelineDesc> descs = _pipelineDescs;
+    std::vector<bool> alive;
+    alive.reserve(_pipelines.size());
     for (auto& p : _pipelines) {
+        alive.push_back(p.alive);
         if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
+        p.pipeline = VK_NULL_HANDLE;
     }
-    for (size_t i = 0; i < _pipelineDescs.size(); ++i) {
-        // 借用 createPipeline 的实现重建（句柄 id 保持不变，直接覆盖存储槽位）
-        PipelineHandle tmp = createPipeline(_pipelineDescs[i]);
-        _pipelines[i] = std::move(_pipelines[tmp.id - 1]);
-        _pipelines.pop_back();
-        _pipelineDescs.pop_back();   // createPipeline 又 push 了一份描述符，去掉重复
+    _pipelines.clear();
+    _pipelineDescs.clear();
+    for (size_t i = 0; i < descs.size(); ++i) {
+        const bool slotAlive = (i < alive.size()) ? alive[i] : true;
+        if (!slotAlive) {
+            VkPipelineRes dead;
+            dead.alive = false;
+            _pipelines.push_back(std::move(dead));
+            _pipelineDescs.push_back(descs[i]);
+            continue;
+        }
+        createPipeline(descs[i]);   // 内部 push，句柄 = 当前下标+1
     }
 }
 
@@ -875,10 +888,52 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
 
 void VulkanDevice::updateBuffer(BufferHandle buffer, const void* data,
                             uint32_t size, uint32_t offset) {
-    if (!buffer.valid() || !data) return;
+    if (!buffer.valid() || !data || buffer.id > _buffers.size()) return;
     VkBufferRes& b = _buffers[buffer.id - 1];
-    if (offset + size > b.size) return;   // 越界保护
+    if (!b.mapped || offset + size > b.size) return;   // 已销毁 / 越界保护
     std::memcpy(static_cast<uint8_t*>(b.mapped) + offset, data, size);
+}
+
+// ---- v2 对象级销毁（B0）----
+void VulkanDevice::destroyBuffer(BufferHandle h) {
+    if (!h.valid() || h.id > _buffers.size()) return;
+    VkBufferRes& b = _buffers[h.id - 1];
+    if (!b.buffer) return;
+    vkDestroyBuffer(_device, b.buffer, nullptr);
+    if (b.memory) vkFreeMemory(_device, b.memory, nullptr);   // free 隐含 unmap
+    b = VkBufferRes{};
+}
+
+void VulkanDevice::destroyTexture(TextureHandle h) {
+    if (!h.valid() || h.id > _textures.size()) return;
+    VkTextureRes& t = _textures[h.id - 1];
+    if (!t.image) return;
+    if (t.sampler) vkDestroySampler(_device, t.sampler, nullptr);
+    if (t.view)    vkDestroyImageView(_device, t.view, nullptr);
+    vkDestroyImage(_device, t.image, nullptr);
+    if (t.memory)  vkFreeMemory(_device, t.memory, nullptr);
+    t = VkTextureRes{};
+}
+
+void VulkanDevice::destroyPipeline(PipelineHandle h) {
+    if (!h.valid() || h.id > _pipelines.size()) return;
+    VkPipelineRes& p = _pipelines[h.id - 1];
+    if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
+    p = VkPipelineRes{};
+    p.alive = false;   // 槽位保留（id 不复用）；swapchain 重建不复活
+}
+
+void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
+    if (!h.valid() || h.id > _uniformBlocks.size()) return;
+    if (h.id == _defaultUniformBlock.id) {
+        ENGINE_LOG_WARN_ONCE("[VK] destroyUniformBlock: device default block is device-owned, ignored");
+        return;
+    }
+    VkUniformBlockRes& b = _uniformBlocks[h.id - 1];
+    if (!b.buffer) return;
+    vkDestroyBuffer(_device, b.buffer, nullptr);
+    if (b.memory) vkFreeMemory(_device, b.memory, nullptr);   // 描述符集随 pool 回收（无 FREE_DESCRIPTOR_SET_BIT）
+    b = VkUniformBlockRes{};
 }
 
 TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
@@ -1361,18 +1416,42 @@ DeviceInfo VulkanDevice::info() const {
     return di;
 }
 
-std::vector<DeviceCapability> VulkanDevice::capabilities() const {
-    auto caps = _caps.toCapabilities();
-    caps.push_back({"验证层", _validationEnabled ? "enabled" : "disabled"});
-    caps.push_back({"debug_utils", _debugUtilsEnabled ? "enabled" : "disabled"});
+DeviceCapabilities VulkanDevice::capabilities() const {
+    DeviceCapabilities caps;
+    caps.maxTexture2D           = _caps.props.limits.maxImageDimension2D;
+    caps.maxPushConstantSize    = _caps.props.limits.maxPushConstantsSize;
+    caps.maxUniformBufferRange  = _caps.props.limits.maxUniformBufferRange;
+    caps.maxSampledImagesPerSet = _caps.props.limits.maxDescriptorSetSampledImages;
+    for (uint32_t i = 0; i < _caps.memory.memoryHeapCount; ++i) {
+        const auto& h = _caps.memory.memoryHeaps[i];
+        if (h.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) caps.deviceMemoryBytes += h.size;
+    }
+    caps.dynamicRendering   = _caps.hasDynamicRendering;
+    caps.synchronization2   = _caps.hasSynchronization2;
+    caps.timelineSemaphore  = _caps.hasTimelineSemaphore;
+    caps.descriptorIndexing = _caps.hasDescriptorIndexing;
+    caps.memoryBudget       = _caps.hasMemoryBudget;
+    caps.wideLines          = _caps.features.wideLines == VK_TRUE;
+    caps.geometryShader     = _caps.features.geometryShader == VK_TRUE;
+    caps.samplerAnisotropy  = _caps.features.samplerAnisotropy == VK_TRUE;
+    for (const auto& f : _caps.surfaceFormats) {
+        if (f.format == VK_FORMAT_B8G8R8A8_SRGB || f.format == VK_FORMAT_R8G8B8A8_SRGB) {
+            caps.sRGBSwapchain = true;
+            break;
+        }
+    }
+
+    caps.details = _caps.toCapabilities();
+    caps.details.push_back({"验证层", _validationEnabled ? "enabled" : "disabled"});
+    caps.details.push_back({"debug_utils", _debugUtilsEnabled ? "enabled" : "disabled"});
     if (_pipelineCache) {
         char buf[96];
         std::snprintf(buf, sizeof(buf), "%s, 启动时 %zu B",
                       _pipelineCacheFromDisk ? "loaded" : "new",
                       _pipelineCacheLoadedBytes);
-        caps.push_back({"pipeline cache", buf});
+        caps.details.push_back({"pipeline cache", buf});
     } else {
-        caps.push_back({"pipeline cache", "disabled"});
+        caps.details.push_back({"pipeline cache", "disabled"});
     }
     return caps;
 }

@@ -28,4 +28,13 @@ std::unique_ptr<IRHIDevice> RHIFactory::createDevice(Backend backend,
     return nullptr;
 }
 
+std::unique_ptr<IRHIDevice> RHIFactory::createDevice(const DeviceDesc& desc) {
+    // B0 契约入口：宿主窗口/离屏设备（C1）落地前返回 nullptr 并明确告警，
+    // 避免上层误以为拿到了可用设备。
+    (void)desc;
+    ENGINE_LOG_WARN("[RHI] DeviceDesc-based device creation not implemented yet (C1); "
+                    "use RHIFactory::createDevice(Backend, GLFWwindow*, shaderRootPath)");
+    return nullptr;
+}
+
 } // namespace rhi

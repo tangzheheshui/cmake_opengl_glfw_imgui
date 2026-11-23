@@ -53,6 +53,11 @@ public:
 
     virtual void setViewport(float x, float y, float w, float h) = 0;
 
+    // 裁剪矩形（v2；C2 多视口用）。默认 = 整目标，后端在 C2 落地。
+    virtual void setScissor(int x, int y, int w, int h) {
+        (void)x; (void)y; (void)w; (void)h;
+    }
+
     // ---- 绘制 ----
     virtual void draw(uint32_t vertexCount, uint32_t firstVertex = 0) = 0;
     virtual void drawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0) = 0;

@@ -51,6 +51,9 @@ struct VkUniformBlockRes {
 
 struct VkPipelineRes {
     VkPipeline       pipeline = VK_NULL_HANDLE;
+    // v2 对象级销毁：destroyPipeline 后槽位保留（句柄 id 不复用），
+    // swapchain 重建时跳过 dead 槽位，不"复活"已销毁的管线。
+    bool             alive    = true;
     // M3 固定 push constant 布局的填充缓冲（见 VkCommandList）
     //  [0,64)  mat4 uMatrixMVP（顶点）
     //  [64,80) vec4 uColor   （片元，Vec3 写入时 alpha 填 1）

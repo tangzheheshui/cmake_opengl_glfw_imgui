@@ -53,6 +53,11 @@ public:
     void updateBuffer(BufferHandle buffer, const void* data,
                       uint32_t size, uint32_t offset = 0) override;
 
+    // v2 对象级销毁（B0）：槽位保留为失效，句柄 id 不复用
+    void destroyBuffer(BufferHandle) override;
+    void destroyTexture(TextureHandle) override;
+    void destroyPipeline(PipelineHandle) override;
+
     void beginFrame() override {}
     void endFrame()   override {}
     void waitIdle()   override;

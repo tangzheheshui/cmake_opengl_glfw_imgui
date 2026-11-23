@@ -6,6 +6,7 @@
 #define IRHIDevice_h
 
 #include "RhiTypes.h"
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -22,9 +23,30 @@ public:
     virtual Backend    backend() const = 0;
     virtual DeviceInfo info() const = 0;
 
-    // 设备能力/运行状态列表（调试面板展示 + 启动日志；后端可自选粒度）。
-    // GL 后端在 B2 与 Vulkan 对齐；默认空列表。
-    virtual std::vector<DeviceCapability> capabilities() const { return {}; }
+    // 结构化设备能力（调试面板展示 + 启动日志 + 上层路径选择）。
+    // GL 后端在 B2 与 Vulkan 对齐；默认空表（0/false = 未知）。
+    virtual DeviceCapabilities capabilities() const { return {}; }
+
+    // ---- v2 对象级销毁（B0 冻结）----
+    // 句柄 id 不复用：销毁后槽位保留为失效，访问返回空对象。
+    // GL/VK 均在 B0 实现 buffer/texture/pipeline；uniform block 随 device 回收（E1 细化）。
+    virtual void destroyBuffer(BufferHandle) {}
+    virtual void destroyTexture(TextureHandle) {}
+    virtual void destroyPipeline(PipelineHandle) {}
+    virtual void destroyUniformBlock(UniformBlockHandle) {}
+
+    // ---- v2 采样器（B2 GL / B3 VK 生效；默认不支持）----
+    virtual SamplerHandle createSampler(const SamplerDesc&) { return {}; }
+    virtual void destroySampler(SamplerHandle) {}
+
+    // ---- v2 离屏渲染目标（B4 实现；默认不支持）----
+    virtual RenderTargetHandle createRenderTarget(const RenderTargetDesc&) { return {}; }
+    virtual void destroyRenderTarget(RenderTargetHandle) {}
+    virtual TextureHandle renderTargetColorTexture(RenderTargetHandle) const { return {}; }
+
+    // ---- v2 同步回读（B4 实现；outSize 必须 ≥ 区域字节数）----
+    virtual bool readbackTexture(TextureHandle, void* /*outData*/, size_t /*outSize*/,
+                                 const ReadbackDesc& = {}) { return false; }
 
     // ---- 资源生命周期 ----
     // v1：句柄由后端内部表管理；对象级销毁在 M2 补齐（当前随 device 析构统一回收）。

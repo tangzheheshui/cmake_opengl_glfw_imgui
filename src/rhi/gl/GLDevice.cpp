@@ -132,6 +132,28 @@ void GLDevice::updateBuffer(BufferHandle buffer, const void* data,
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
+// ---- v2 对象级销毁（B0）----
+void GLDevice::destroyBuffer(BufferHandle h) {
+    if (!h.valid() || h.id > _buffers.size()) return;
+    GLBuffer& b = _buffers[h.id - 1];
+    if (b.id) glDeleteBuffers(1, &b.id);
+    b = GLBuffer{};
+}
+
+void GLDevice::destroyTexture(TextureHandle h) {
+    if (!h.valid() || h.id > _textures.size()) return;
+    GLTexture& t = _textures[h.id - 1];
+    if (t.id) glDeleteTextures(1, &t.id);
+    t = GLTexture{};
+}
+
+void GLDevice::destroyPipeline(PipelineHandle h) {
+    if (!h.valid() || h.id > _pipelines.size()) return;
+    GLPipeline& p = _pipelines[h.id - 1];
+    p.program.reset();   // Shader 析构负责 glDeleteProgram
+    p.desc = GraphicsPipelineDesc{};
+}
+
 void GLDevice::waitIdle() {
     glFinish();
 }

@@ -21,6 +21,11 @@
 
 namespace rhi {
 
+// RHI v2 契约版本（B0 冻结，2026-11-23）。改动公共头必须同步 docs/RHI_DESIGN.md。
+// v2 相比 v1 新增：DeviceDesc（宿主窗口/离屏）、RenderTarget、SamplerDesc、
+// TextureDesc(mip/sRGB/sampler)、readback、对象级销毁、结构化 Capabilities。
+constexpr int RhiContractVersion = 2;
+
 constexpr uint32_t InvalidId = 0;
 
 // ---- 句柄：强类型包装，防止不同资源句柄互相误用 ----
@@ -34,11 +39,41 @@ struct TextureHandle  : RhiHandle {};
 struct UniformBlockHandle : RhiHandle {};   // 绘制级 uniform 块（GL: 名字式直传；VK: 独立 UBO+描述符集）
 struct PipelineHandle : RhiHandle {};
 struct SamplerHandle  : RhiHandle {};
+struct RenderTargetHandle : RhiHandle {};   // 离屏渲染目标（B4 实现；invalid = 默认帧缓冲）
 
 // ---- 渲染后端 ----
 enum class Backend : int {
     OpenGL,
     Vulkan,
+};
+
+// ---- 原生窗口句柄（v2：宿主嵌入；C1 接入，引擎不硬依赖 GLFW）----
+enum class NativeWindowType : int {
+    None = 0,
+    Win32,       // handle = HWND
+    Xlib,        // handle = Window, display = Display*
+    Xcb,         // handle = xcb_window_t
+    Wayland,     // handle = wl_surface*
+    Cocoa,       // handle = NSView*
+    MetalLayer,  // handle = CAMetalLayer*（MoltenVK 离屏/嵌入）
+};
+
+struct NativeWindow {
+    NativeWindowType type = NativeWindowType::None;
+    void* handle  = nullptr;
+    void* display = nullptr;   // 仅 Xlib 用
+    bool valid() const { return type != NativeWindowType::None && handle != nullptr; }
+};
+
+// ---- 设备描述（v2；C1 接入宿主窗口/离屏）----
+struct DeviceDesc {
+    Backend      backend = Backend::OpenGL;
+    NativeWindow window;              // valid() = 渲染到宿主窗口；否则配合 offscreen
+    bool         offscreen = false;   // true：不创建 swapchain，仅渲染到 RenderTarget
+    std::string  appName = "my_app";
+    std::string  shaderRootPath;      // 后端变体着色器根目录（以路径分隔符结尾）
+    bool         enableValidation = true;   // 后端/构建允许时启用；环境变量可覆盖
+    uint32_t     swapchainImageCount = 0;   // 0 = 后端默认
 };
 
 // ---- Buffer 用途（位掩码）。Vulkan: 映射 VkBufferUsageFlags ----
@@ -56,10 +91,54 @@ enum TextureUsage : uint32_t {
     TEX_DEPTH_ATTACHMENT = 1 << 2,
 };
 
-// ---- 纹理格式（按需扩充；每个后端负责映射到自己的枚举）----
+// ---- 纹理格式（每个后端负责映射到自己的枚举；枚举值已冻结，只允许追加）----
 enum class Format : int {
-    RGBA8_UNorm,
-    Depth32F,
+    RGBA8_UNorm = 0,
+    Depth32F    = 1,     // 深度附件
+    RGBA8_SRGB,          // sRGB 采样（B3）
+    BGRA8_UNorm,         // 交换链原生格式（B1/B3）
+    BGRA8_SRGB,
+    R8_UNorm,            // 单通道（遮罩/字体图集）
+    R16F,                // 高动态范围中间缓冲
+    RGBA16F,
+    RGBA32F,
+    D24S8,               // 深度+模板
+    R32_UInt,            // 拾取 Pass ID（D2）
+};
+
+// 字节数（0 = 后端/格式组合按运行时计算；压缩格式不在 v2 范围）
+inline uint32_t formatBytesPerPixel(Format f) {
+    switch (f) {
+        case Format::RGBA8_UNorm:
+        case Format::RGBA8_SRGB:
+        case Format::BGRA8_UNorm:
+        case Format::BGRA8_SRGB:
+        case Format::D24S8:
+        case Format::Depth32F:
+        case Format::R32_UInt:  return 4;
+        case Format::R8_UNorm:  return 1;
+        case Format::R16F:      return 2;
+        case Format::RGBA16F:   return 8;
+        case Format::RGBA32F:   return 16;
+    }
+    return 0;
+}
+
+// ---- 采样器描述（v2；GL 后端 B2 落地，Vulkan 在 createTexture 内建）----
+enum class FilterMode : int { Nearest, Linear };
+enum class WrapMode   : int { Repeat, ClampToEdge, Mirror };
+
+struct SamplerDesc {
+    FilterMode minFilter = FilterMode::Linear;
+    FilterMode magFilter = FilterMode::Linear;
+    FilterMode mipFilter = FilterMode::Linear;
+    WrapMode   wrapU = WrapMode::Repeat;
+    WrapMode   wrapV = WrapMode::Repeat;
+    WrapMode   wrapW = WrapMode::Repeat;
+    float      minLod = 0.0f;
+    float      maxLod = 1000.0f;
+    float      maxAnisotropy = 1.0f;   // 1 = 关闭
+    bool       compareEnable = false;  // 深度比较采样（阴影 PCF，后续）
 };
 
 // ---- 顶点布局（显式描述，替代 GL 隐式的 glVertexAttribPointer 顺序约定）----
@@ -131,16 +210,46 @@ struct TextureDesc {
     uint32_t    usage = TEX_SAMPLED;
     const void* initialData = nullptr;
     // cubemap = true 时：initialData 为 6 个面连续存放（+X,-X,+Y,-Y,+Z,-Z），
-    // 每面 width*height*4 字节 RGBA8
+    // 每面 width*height*formatBytesPerPixel(format) 字节
     bool        cubemap = false;
+
+    // ---- v2 追加（B0 冻结；后端在 B2/B3 生效）----
+    uint32_t    mipLevels = 1;      // 0 = 完整 mip 链（floor(log2(max(w,h)))+1）
+    bool        generateMips = false;  // 创建后生成 mipmap（B3）
+    uint32_t    arrayLayers = 1;    // cubemap 固定 6；普通纹理默认 1
+    SamplerDesc sampler;            // 采样参数（GL: B2 独立采样器对象；VK: 创建时烘焙）
+};
+
+// ---- 离屏渲染目标（v2；B4 实现。color/depth 由后端按 desc 创建）----
+struct RenderTargetDesc {
+    uint32_t width  = 0;
+    uint32_t height = 0;
+    Format   colorFormat = Format::RGBA8_UNorm;
+    bool     hasDepth    = true;
+    Format   depthFormat = Format::Depth32F;
+    uint32_t mipLevels   = 1;
+    bool     sampleable  = true;   // 颜色附件可作纹理采样（缩略图/后处理）
+};
+
+// ---- 回读区域（v2；宽高为 0 = 全图。B4 实现，同步语义）----
+struct ReadbackDesc {
+    uint32_t mipLevel  = 0;
+    uint32_t arrayLayer = 0;
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t width  = 0;
+    uint32_t height = 0;
 };
 
 // ---- 帧级渲染 Pass 描述 ----
 // 对应现有 CShadowPass/CNormalPass/CSkyPass/CPickPass 的帧结构。
 // Vulkan 语义：这是一个 VkRenderPass 的 load/store + clear 操作描述。
 struct RenderPassDesc {
-    // framebuffer 的正式抽象（TextureHandle 数组）在 M3 Vulkan 后端时引入。
-    // GL 阶段：0 = 默认帧缓冲（屏幕），其它值 = FBO 对象名（阴影 Pass 现有 FBO 可直通）。
+    // v2：渲染目标句柄；invalid = 默认帧缓冲（屏幕/swapchain）。
+    // Vulkan：B1 起映射为 dynamic rendering 的 attachment；GL：B2 绑定对应 FBO。
+    RenderTargetHandle renderTarget;
+
+    // v1 遗留：GL FBO 对象名直通（0 = 默认帧缓冲）。B2 迁移完成后移除。
     uint32_t framebufferId = 0;
     bool     clearColor = true;
     float    clearColorValue[4] = {0.2f, 0.3f, 0.3f, 1.0f};
@@ -195,6 +304,29 @@ struct DeviceInfo {
 struct DeviceCapability {
     std::string name;
     std::string value;
+};
+
+// ---- 结构化设备能力（v2；0/false = 未知或不支持）----
+// 与 DeviceInfo（标识信息）和 details（人类可读表）互补：
+// 上层按字段做路径选择（如 dynamicRendering ? 新路径 : 旧路径）。
+struct DeviceCapabilities {
+    uint32_t maxTexture2D            = 0;
+    uint32_t maxPushConstantSize     = 0;
+    uint32_t maxUniformBufferRange   = 0;
+    uint32_t maxSampledImagesPerSet  = 0;
+    uint64_t deviceMemoryBytes       = 0;
+
+    bool dynamicRendering     = false;   // VK_KHR_dynamic_rendering（B1）
+    bool synchronization2     = false;   // VK_KHR_synchronization2（上传环）
+    bool timelineSemaphore    = false;   // VK_KHR_timeline_semaphore（E2）
+    bool descriptorIndexing   = false;   // VK_EXT_descriptor_indexing
+    bool memoryBudget         = false;   // VK_EXT_memory_budget（E1）
+    bool wideLines            = false;   // 宽线（D1；CAD 边线质量）
+    bool geometryShader       = false;   // MoltenVK 为 false
+    bool samplerAnisotropy    = false;
+    bool sRGBSwapchain        = false;   // 交换链含 sRGB 格式（B3）
+
+    std::vector<DeviceCapability> details;   // 人类可读能力表（日志/面板）
 };
 
 } // namespace rhi

@@ -21,14 +21,14 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
 
         // ---- 设备能力/运行状态（A3；启动时同一份内容已写入日志）----
         if (ImGui::CollapsingHeader("设备能力")) {
-            const auto caps = device->capabilities();
-            if (caps.empty()) {
+            const rhi::DeviceCapabilities caps = device->capabilities();
+            if (caps.details.empty()) {
                 ImGui::TextDisabled("（后端未提供）");
             } else {
                 ImGui::BeginChild("caps_child", ImVec2(0, 280), ImGuiChildFlags_Borders);
                 if (ImGui::BeginTable("caps_table", 2,
                                       ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
-                    for (const auto& c : caps) {
+                    for (const auto& c : caps.details) {
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
                         ImGui::TextUnformatted(c.name.c_str());

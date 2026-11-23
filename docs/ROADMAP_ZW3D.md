@@ -15,8 +15,12 @@
 - ✅ **A2** CMakePresets（mac/linux/win + GL-only）、VULKAN_SDK 探测、
   glslang 硬校验、`ENGINE_HAS_VULKAN` 对 app 可见、临时目录跨平台
   （macOS 已验证；Windows/Linux 需实机构建确认）
-- ⏭ **下一步**：**B0 接口冻结**（唯一串行门禁，冻结后打 tag `rhi-v2-contract`），
-  然后并行 B1/B2/B3/B4
+- ✅ **B0** RHI v2 契约冻结（tag `rhi-v2-contract`）：DeviceDesc/NativeWindow、
+  RenderTarget、SamplerDesc、TextureDesc(mip/sRGB)、Readback、对象级销毁、
+  DeviceCapabilities；GL/VK 对象销毁已落地，其余由 B1–B4 逐后端实现
+- ⏭ **下一步**：并行 **B1**（VK Dynamic Rendering）、**B2**（GL v2 对齐）、
+  **B3**（Reversed-Z/sRGB/mipmap）、**B4**（离屏 RT + readback）；
+  B1 与 B3 同改管线/`VkDevice`，需串行或同一人
 
 ## 0. 待确认假设（影响架构，尽早确认）
 

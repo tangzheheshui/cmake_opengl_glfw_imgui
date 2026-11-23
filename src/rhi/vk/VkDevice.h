@@ -33,7 +33,7 @@ public:
 
     Backend    backend() const override { return Backend::Vulkan; }
     DeviceInfo info() const override;
-    std::vector<DeviceCapability> capabilities() const override;   // A3: 能力表 + 运行时状态
+    DeviceCapabilities capabilities() const override;   // A3/B0: 结构化能力 + 运行时状态表
 
     BufferHandle   createBuffer(const BufferDesc& desc) override;
     TextureHandle  createTexture(const TextureDesc& desc) override;
@@ -41,6 +41,12 @@ public:
     UniformBlockHandle createUniformBlock(uint32_t size) override;
     void updateBuffer(BufferHandle buffer, const void* data,
                       uint32_t size, uint32_t offset = 0) override;
+
+    // v2 对象级销毁（B0）：槽位保留为失效，句柄 id 不复用
+    void destroyBuffer(BufferHandle) override;
+    void destroyTexture(TextureHandle) override;
+    void destroyPipeline(PipelineHandle) override;
+    void destroyUniformBlock(UniformBlockHandle) override;
 
     void beginFrame() override;
     void endFrame()   override;
