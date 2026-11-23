@@ -200,11 +200,11 @@ B1–B4 逐后端落地；冻结后公共头的任何改动必须同步本节并
 |---|---|---|
 | `DeviceDesc` / `NativeWindow` | 宿主窗口（Win32/Xlib/Xcb/Wayland/Cocoa/MetalLayer）或离屏设备；引擎不再硬依赖 GLFW | C1 实现；`RHIFactory::createDevice(DeviceDesc)` 当前明确告警返回空 |
 | `RenderTargetDesc` / `RenderTargetHandle` | 离屏颜色/深度附件，`RenderPassDesc::renderTarget`；invalid = 默认帧缓冲 | ✅ B4（GL/VK 双端；颜色附件可采样可回读；VK 格式须与管线烘焙格式兼容） |
-| `SamplerDesc` | filter/wrap/LOD/aniso/compare；在 `TextureDesc::sampler` 内提供 | GL B2、VK B3 生效 |
+| `SamplerDesc` | filter/wrap/LOD/aniso/compare；在 `TextureDesc::sampler` 内提供 | ✅ GL B2（独立采样器对象 `glGenSamplers/glSamplerParameter*` + `attachSampler` 显式关联，`bindTexture` 优先 `glBindSampler`；纹理烘焙参数路径原样保留）、VK B3（createTexture 内建） |
 | `TextureDesc` 扩展 | `mipLevels` / `generateMips` / `arrayLayers`；sRGB 通过 `Format` 表达 | B3 生效 |
 | `ReadbackDesc` + `readbackTexture` | 同步回读（缩略图/拾取/验证） | ✅ B4（GL/VK；VK submitOneTime 同步；已知行序差异：VK row0=画面顶、GL row0=画面底，统一随 B2） |
 | 对象级销毁 | `destroyBuffer/Texture/Pipeline/UniformBlock`；句柄 id 不复用，槽位保留 | ✅ GL/VK 已实现 |
-| `DeviceCapabilities` | 结构化能力（limits/扩展特性）+ `details` 人类可读表 | ✅ VK 已填充；GL 在 B2 对齐 |
+| `DeviceCapabilities` | 结构化能力（limits/扩展特性）+ `details` 人类可读表 | ✅ GL/VK 均已填充（B2：GL 用 `glGetIntegerv/glGetString/glGetStringi` 惰性查询，中文 details 表与 VK 同风格；启动时不打印，面板「设备能力」按需展示） |
 | `setScissor` | 多视口裁剪（C2 前置） | C2 实现 |
 
 注意：
@@ -212,6 +212,50 @@ B1–B4 逐后端落地；冻结后公共头的任何改动必须同步本节并
 - VK `destroyPipeline` 后槽位标记 dead，swapchain 重建不会复活；`destroyUniformBlock`
   只回收 UBO 内存，描述符集随 pool 回收（pool 未开 FREE_DESCRIPTOR_SET_BIT，E1 细化）。
 - 设备默认 uniform block 由设备持有，`destroyUniformBlock` 对其告警并忽略。
+
+### B2：GL 后端收口——独立采样器 + 能力表对齐（2026-11-23，macOS 验证）
+
+**独立采样器对象**（`GLDevice::createSampler/destroySampler` + `GLCommandList::bindTexture`）：
+
+- 参数映射与 VK 端一致：`minFilter×mipFilter` 组合成 GL 四档 mipmap MIN_FILTER
+  （对应 VK `minFilter+mipmapMode`）；wrap S/T/R；`min/maxLod`；anisotropy 按
+  `GL_EXT_texture_filter_anisotropic` 硬件上限 clamp；compareEnable 开
+  `GL_TEXTURE_COMPARE_MODE=GL_COMPARE_REF_TO_TEXTURE`、比较函数取 `GL_GREATER`
+  （Reversed-Z 约定，见 VkDevice.cpp compareOp 注释）。
+- **双路径并存，既有行为零变化**：`createTexture` 依旧把 `SamplerDesc` 烘在纹理对象上
+  （glTexParameteri）；独立采样器只有显式 `createSampler + GLDevice::attachSampler`
+  （GL 后端内部扩展，不在冻结契约内）关联到 `GLTexture::sampler` 才生效。`bindTexture`
+  对关联纹理优先 `glBindSampler`，未关联纹理绑 0（恢复烘焙参数）；设备从未创建过
+  采样器时完全不触碰 `GL_SAMPLER_BINDING`。
+- **Pass 边界状态中性扩展**：Pass 内绑定过的采样器槽位在 `endRenderPass` 统一解绑
+  （`GL_SAMPLER_BINDING` 也是全局状态，不能泄漏给遗留 GL 代码）。
+- 已知约束：GL 的 mipmap 档 MIN_FILTER 要求纹理有完整 mip 链（不完整纹理采样为黑），
+  `SamplerDesc` 无"不用 mip"表达（枚举冻结），独立采样器请只用于带 mip 链的纹理；
+  立方体贴图要求 Clamp 类地址模式，由调用方保证（VK 端是在 createTexture 内强制）。
+- `destroySampler` 槽位保留失效（id 不复用），并清理纹理上的悬空引用。
+
+**DeviceCapabilities**：GL 侧 `capabilities()` 惰性查询（启动不打印），
+`glGetIntegerv/glGetString/glGetStringi` 产出与 VK 同风格的中文 details 表。
+GL 特有语义：`maxUniformBufferRange=GL_MAX_UNIFORM_BLOCK_SIZE`、
+`maxSampledImagesPerSet=GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS`、push constant/显存
+查询不到（0 + details 注明）；`samplerAnisotropy` 按扩展探测；
+`sRGBSwapchain` 按 GL 3.0 核心的 `GL_FRAMEBUFFER_SRGB` 能力报告
+（macOS 查不到 `GLFW_SRGB_CAPABLE`，`GL_BACK` 附件编码查询非法会报
+GL_INVALID_ENUM——用 `GL_BACK_LEFT`，app/main.cpp 的启动诊断踩过前者）。
+
+验证（macOS / Apple M4 Pro，GL 4.1 Metal）：
+
+```bash
+cmake --preset mac-clang && cmake --build --preset mac-clang   # 零错误
+RHI_EXIT_AFTER=60 ./build/app/Debug/my_app                     # exit=0，无 GL 错误
+RHI_EXIT_AFTER=60 RHI_RT_TEST=1 ./build/app/Debug/my_app       # corner=124,89,63,255
+                                                               # center=214,142,121,255（B4 基线不变）
+RHI_TEXQUAD=1 RHI_EXIT_AFTER=60 ./build/app/Debug/my_app       # 贴图四边形正常（bindTexture 改动回归）
+```
+
+另以临时自检代码（未入库）驱动过独立采样器全链路：createSampler → attachSampler →
+Pass 内 bindTexture（glBindSampler 分支）→ endRenderPass 解绑 → destroySampler 引用清理，
+`glGetError` 全程 0x0；能力表查询后 `glGetError` 亦为 0x0。
 
 ### B3a/B3b：VK 后端坐标与深度约定（2026-11-23，Windows 实机验证）
 

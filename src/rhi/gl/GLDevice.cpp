@@ -43,6 +43,32 @@ static GLenum glWrapOf(WrapMode m) {
     return GL_REPEAT;
 }
 
+// B2：minFilter × mipFilter 组合成 GL 四档 mipmap 过滤（与 VK 端
+// minFilter/mipmapMode 两字段一一对应；无 mip 链的纹理请勿使用 *MIPMAP* 档，
+// 否则纹理按"不完整"处理采样为黑）
+static GLenum glMinFilterOf(FilterMode minF, FilterMode mipF) {
+    const bool nearestLevel = (minF == FilterMode::Nearest);
+    const bool nearestMip   = (mipF == FilterMode::Nearest);
+    if (nearestLevel && nearestMip) return GL_NEAREST_MIPMAP_NEAREST;
+    if (!nearestLevel && nearestMip) return GL_LINEAR_MIPMAP_NEAREST;
+    if (nearestLevel && !nearestMip) return GL_NEAREST_MIPMAP_LINEAR;
+    return GL_LINEAR_MIPMAP_LINEAR;
+}
+
+// B2：按名字检查 GL 扩展。core profile 下 glGetString(GL_EXTENSIONS) 不可靠，
+// 用 glGetStringi 逐个遍历（需 GL 3.0+，本后端上下文固定 3.3 起）
+static bool hasGLExtension(const char* name) {
+    GLint n = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+    for (GLint i = 0; i < n; ++i) {
+        const GLubyte* ext = glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
+        if (ext && std::strcmp(reinterpret_cast<const char*>(ext), name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::string shaderFileOf(const GraphicsPipelineDesc& desc, ShaderStage stage) {
     for (const auto& s : desc.shaders) {
         if (s.stage == stage) return s.path;
@@ -60,6 +86,7 @@ GLDevice::~GLDevice() {
     waitIdle();
     for (auto& b : _buffers)   if (b.id) glDeleteBuffers(1, &b.id);
     for (auto& t : _textures)  if (t.id) glDeleteTextures(1, &t.id);
+    for (auto& s : _samplers)  if (s.id) glDeleteSamplers(1, &s.id);
     // GLPipeline 持有 unique_ptr<Shader>，其析构负责 glDeleteProgram
 }
 
@@ -72,6 +99,107 @@ DeviceInfo GLDevice::info() const {
     di.adapterName = renderer ? reinterpret_cast<const char*>(renderer) : "unknown";
     di.apiVersion  = version  ? reinterpret_cast<const char*>(version)  : "unknown";
     return di;
+}
+
+// B2：结构化设备能力，与 VK 端（VulkanDevice::capabilities + VkCaps）对齐。
+// 惰性查询：调用时才 glGetIntegerv/glGetString（要求当前线程有本上下文），
+// 启动时不打印——调试面板「设备能力」折叠区按需展示。
+DeviceCapabilities GLDevice::capabilities() const {
+    DeviceCapabilities caps;
+    char buf[128];
+
+    // 数值版本号（GL 3.0+）
+    GLint major = 0, minor = 0;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+
+    // ---- limits ----
+    GLint maxTexSize = 0, maxUnits = 0, maxUboRange = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexSize);
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+    glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &maxUboRange);
+    caps.maxTexture2D           = static_cast<uint32_t>(std::max(0, maxTexSize));
+    caps.maxSampledImagesPerSet = static_cast<uint32_t>(std::max(0, maxUnits));   // 全阶段合计纹理单元
+    caps.maxUniformBufferRange  = static_cast<uint32_t>(std::max(0, maxUboRange));
+    // GL 无 push constant 对应物（uniform 按名直传）；GL 也查不到显存大小
+    caps.maxPushConstantSize = 0;
+    caps.deviceMemoryBytes   = 0;
+
+    // ---- 特性 ----
+    // VK 专属的路径开关对 GL 不适用，语义上保持 false：
+    caps.dynamicRendering   = false;   // GL 没有 render pass 对象，本来就是直接渲染
+    caps.synchronization2   = false;
+    caps.timelineSemaphore  = false;
+    caps.descriptorIndexing = false;   // 3.3 core 无 bindless texture
+    caps.memoryBudget       = false;
+
+    // 宽线（D1 CAD 边线质量）：核心上下文里 glLineWidth>1 通常受限，按实际范围判定
+    GLfloat lineWidthRange[2] = {1.0f, 1.0f};
+    glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lineWidthRange);
+    caps.wideLines = lineWidthRange[1] > 1.0f;
+
+    // 几何着色器：GL 3.2 起核心支持（macOS GL 4.1 有；MoltenVK 不支持只是 VK 侧限制）
+    caps.geometryShader = (major > 3) || (major == 3 && minor >= 2);
+
+    // 各向异性过滤：GL_EXT_texture_filter_anisotropic
+    //（glad 头里 GL_MAX_TEXTURE_MAX_ANISOTROPY = 0x84FF，与 EXT 名同值）
+    const bool hasAniso = hasGLExtension("GL_EXT_texture_filter_anisotropic");
+    GLfloat maxAniso = 1.0f;
+    if (hasAniso) {
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAniso);
+    }
+    caps.samplerAnisotropy = hasAniso && maxAniso > 1.0f;
+
+    // sRGB 默认帧缓冲（等价 VK 的 sRGB 交换链）：GL 3.0 起核心提供
+    // GL_FRAMEBUFFER_SRGB 写入编码开关（B3c 线性工作流依赖它）。
+    // 注意 GLFW_SRGB_CAPABLE 在 macOS 上查不到（见 app/main.cpp B3c 注释），
+    // GL_BACK 的 COLOR_ENCODING 查询也实测报 linear——按核心版本能力报告。
+    caps.sRGBSwapchain = (major >= 3);
+
+    // 诊断值：默认帧缓冲附件编码（保留 main.cpp 启动诊断的同一信息；
+    // 查询前后恢复 GL_FRAMEBUFFER_BINDING，状态中性）
+    GLint defaultEnc = GL_LINEAR, prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // 注意：附件名必须用 GL_BACK_LEFT（GL_BACK 在本查询非法，驱动报 GL_INVALID_ENUM，
+    // app/main.cpp 的启动诊断即踩过此坑——错误被忽略后 encoding 恒为 0）
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_BACK_LEFT,
+                                          GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING,
+                                          &defaultEnc);
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+
+    // ---- details 人类可读表（风格与 VK 端 VkCaps::toCapabilities 一致）----
+    const GLubyte* renderer = glGetString(GL_RENDERER);
+    const GLubyte* vendor   = glGetString(GL_VENDOR);
+    const GLubyte* version  = glGetString(GL_VERSION);
+    const GLubyte* glsl     = glGetString(GL_SHADING_LANGUAGE_VERSION);
+    auto add = [&caps](const std::string& n, const std::string& v) {
+        caps.details.push_back({n, v});
+    };
+    auto yesNo = [](bool b) { return b ? "yes" : "no"; };
+    add("设备", renderer ? reinterpret_cast<const char*>(renderer) : "unknown");
+    add("厂商", vendor ? reinterpret_cast<const char*>(vendor) : "unknown");
+    std::snprintf(buf, sizeof(buf), "%s (%d.%d)",
+                  version ? reinterpret_cast<const char*>(version) : "unknown", major, minor);
+    add("API 版本", buf);
+    add("GLSL 版本", glsl ? reinterpret_cast<const char*>(glsl) : "unknown");
+    std::snprintf(buf, sizeof(buf), "%u", caps.maxTexture2D);
+    add("最大 2D 纹理", buf);
+    std::snprintf(buf, sizeof(buf), "%u", caps.maxSampledImagesPerSet);
+    add("纹理单元（combined）", buf);
+    std::snprintf(buf, sizeof(buf), "%u B", caps.maxUniformBufferRange);
+    add("UBO 范围上限", buf);
+    add("push constants 上限", "不支持（uniform 按名直传）");
+    add("显存堆", "不可查询（GL）");
+    std::snprintf(buf, sizeof(buf), "%.1f..%.1f", lineWidthRange[0], lineWidthRange[1]);
+    add("线宽范围", buf);
+    add("wideLines", yesNo(caps.wideLines));
+    add("geometryShader", yesNo(caps.geometryShader));
+    std::snprintf(buf, sizeof(buf), "%s (max %.1f)", yesNo(caps.samplerAnisotropy), maxAniso);
+    add("samplerAnisotropy", buf);
+    add("sRGB 帧缓冲", yesNo(caps.sRGBSwapchain));
+    add("默认帧缓冲编码", defaultEnc == GL_SRGB ? "sRGB" : "linear");
+    return caps;
 }
 
 BufferHandle GLDevice::createBuffer(const BufferDesc& desc) {
@@ -186,6 +314,86 @@ void GLDevice::updateBuffer(BufferHandle buffer, const void* data,
     glBindBuffer(GL_ARRAY_BUFFER, buf.id);
     glBufferSubData(GL_ARRAY_BUFFER, offset, size, data);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+// ---- v2 独立采样器（B2）----
+// 与 createTexture 的"烘焙到纹理对象"路径并存：既有纹理不受影响（参数仍烘在
+// glTexParameteri），只有显式 createSampler + attachSampler 的纹理在
+// bindTexture 时改走 glBindSampler（GL 采样器对象优先级高于纹理对象参数）。
+SamplerHandle GLDevice::createSampler(const SamplerDesc& desc) {
+    GLSampler s;
+    glGenSamplers(1, &s.id);
+    if (!s.id) {
+        ENGINE_LOG_ERROR("[GL] createSampler: glGenSamplers failed");
+        return {};
+    }
+    s.desc = desc;
+
+    // 过滤：min = minFilter×mipFilter 四档组合（对应 VK minFilter+mipmapMode），
+    // mag = magFilter
+    glSamplerParameteri(s.id, GL_TEXTURE_MIN_FILTER, glMinFilterOf(desc.minFilter, desc.mipFilter));
+    glSamplerParameteri(s.id, GL_TEXTURE_MAG_FILTER,
+                        (desc.magFilter == FilterMode::Nearest) ? GL_NEAREST : GL_LINEAR);
+
+    // 地址模式（S/T/R）。注意 GL 采样器是跨纹理复用的：立方体贴图要求
+    // Clamp 类地址模式（REPEAT 采样 cube 违规），由调用方按用途设置
+    //（与 VK 端 createTexture 内对 cubemap 强制 CLAMP_TO_EDGE 的差异点）。
+    glSamplerParameteri(s.id, GL_TEXTURE_WRAP_S, glWrapOf(desc.wrapU));
+    glSamplerParameteri(s.id, GL_TEXTURE_WRAP_T, glWrapOf(desc.wrapV));
+    glSamplerParameteri(s.id, GL_TEXTURE_WRAP_R, glWrapOf(desc.wrapW));
+
+    // LOD 区间
+    glSamplerParameterf(s.id, GL_TEXTURE_MIN_LOD, desc.minLod);
+    glSamplerParameterf(s.id, GL_TEXTURE_MAX_LOD, desc.maxLod);
+
+    // 各向异性过滤：需要 GL_EXT_texture_filter_anisotropic；上限按硬件 clamp
+    if (desc.maxAnisotropy > 1.0f) {
+        if (hasGLExtension("GL_EXT_texture_filter_anisotropic")) {
+            GLfloat maxAniso = 1.0f;
+            glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAniso);
+            glSamplerParameterf(s.id, GL_TEXTURE_MAX_ANISOTROPY,
+                                std::min(desc.maxAnisotropy, maxAniso));
+        } else {
+            ENGINE_LOG_WARN_ONCE("[GL] sampler anisotropy requested but "
+                                 "GL_EXT_texture_filter_anisotropic missing");
+        }
+    }
+
+    // 深度比较采样（阴影 PCF 预留）：比较函数与 VK 对齐取 GREATER
+    //（Reversed-Z 时代约定，见 VkDevice.cpp compareOp 注释）
+    glSamplerParameteri(s.id, GL_TEXTURE_COMPARE_MODE,
+                        desc.compareEnable ? GL_COMPARE_REF_TO_TEXTURE : GL_NONE);
+    glSamplerParameteri(s.id, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
+
+    _samplers.push_back(std::move(s));
+    SamplerHandle h; h.id = static_cast<uint32_t>(_samplers.size());
+    ENGINE_LOG_INFO("[GL] sampler %u created (aniso=%.1f, compare=%d)",
+                    h.id, desc.maxAnisotropy, desc.compareEnable ? 1 : 0);
+    return h;
+}
+
+void GLDevice::destroySampler(SamplerHandle h) {
+    if (!h.valid() || h.id > _samplers.size()) return;
+    GLSampler& s = _samplers[h.id - 1];
+    if (s.id) {
+        glDeleteSamplers(1, &s.id);
+        // 清理纹理上的悬空引用（GLSampler 槽位保留为失效，id 不复用）
+        for (auto& t : _textures) {
+            if (t.sampler.id == h.id) t.sampler = SamplerHandle{};
+        }
+    }
+    s = GLSampler{};
+}
+
+void GLDevice::attachSampler(TextureHandle tex, SamplerHandle s) {
+    if (!tex.valid() || tex.id > _textures.size()) return;
+    if (s.valid() && (s.id > _samplers.size() || !_samplers[s.id - 1].id)) {
+        ENGINE_LOG_WARN("[GL] attachSampler: sampler %u invalid", s.id);
+        return;
+    }
+    GLTexture& t = _textures[tex.id - 1];
+    if (!t.id) return;   // 已销毁的纹理不记录
+    t.sampler = s;       // s invalid = 解除关联
 }
 
 // ---- v2 对象级销毁（B0）----
@@ -346,6 +554,10 @@ const GLBuffer& GLDevice::buffer(BufferHandle h) const {
 
 const GLTexture& GLDevice::texture(TextureHandle h) const {
     return _textures[h.id - 1];
+}
+
+const GLSampler& GLDevice::sampler(SamplerHandle h) const {
+    return _samplers[h.id - 1];
 }
 
 const GLPipeline& GLDevice::pipeline(PipelineHandle h) const {

@@ -57,6 +57,9 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
     saveState(_savedState);
     _stateSaved = true;
 
+    // B2：采样器槽位跟踪表清零（只记录本 Pass 内的绑定，见 endRenderPass）
+    for (uint32_t i = 0; i < 32; ++i) _samplerSlotsTouched[i] = false;
+
     // B4：离屏 RenderTarget（RHI 资源 FBO）优先于 v1 遗留 FBO 直通
     if (desc.renderTarget.valid()) {
         const GLRenderTarget& rt = _device->renderTarget(desc.renderTarget);
@@ -92,6 +95,17 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
 }
 
 void GLCommandList::endRenderPass() {
+    // B2：把本 Pass 内绑定过独立采样器的单元解绑（GL_SAMPLER_BINDING 也是
+    // 全局状态），采样器不泄漏给 Pass 外的遗留 GL 代码——纹理对象上烘焙的
+    // glTexParameteri 参数随即照常生效
+    if (_device->hasSamplers()) {
+        for (uint32_t i = 0; i < 32; ++i) {
+            if (_samplerSlotsTouched[i]) {
+                glBindSampler(static_cast<GLuint>(i), 0);
+                _samplerSlotsTouched[i] = false;
+            }
+        }
+    }
     if (_stateSaved) {
         restoreState(_savedState);
         _stateSaved = false;
@@ -151,6 +165,17 @@ void GLCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
     glActiveTexture(GL_TEXTURE0 + slot);
     glBindTexture(target, t.id);
     glActiveTexture(GL_TEXTURE0);
+
+    // B2：显式关联的独立采样器优先于纹理对象烘焙参数（GL 采样器对象语义：
+    // 绑到单元后覆盖该单元纹理的 glTexParameteri）。
+    // 设备从未创建独立采样器时完全不触碰 GL_SAMPLER_BINDING，遗留路径零状态
+    // 变化；一旦用了采样器，每次绑定都显式写单元（绑 0 = 用烘焙参数），避免
+    // 上一张纹理的采样器泄漏到下一张。
+    if (_device->hasSamplers()) {
+        const GLuint sid = t.sampler.valid() ? _device->sampler(t.sampler).id : 0;
+        glBindSampler(slot, sid);
+        if (sid) _samplerSlotsTouched[slot] = true;
+    }
 }
 
 void GLCommandList::setViewport(float x, float y, float w, float h) {
