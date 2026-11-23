@@ -9,6 +9,7 @@
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
+#include "fs/FilePathUtil.h"
 
 namespace rhi {
 
@@ -17,17 +18,14 @@ static const char* kRequiredDeviceExts[] = {
 };
 
 // ---- 工具：读取 SPIR-V 文件 ----
+// A4: 路径按 UTF-8 解释（Windows 上宽字符打开，中文安装路径可用）
 static std::vector<char> readSpirvFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) {
+    std::vector<unsigned char> data;
+    if (!engine::fs::readFileBinary(engine::fs::pathFromUtf8(path), data)) {
         ENGINE_LOG_ERROR("[VK] cannot open SPIR-V: %s", path.c_str());
         return {};
     }
-    size_t size = static_cast<size_t>(f.tellg());
-    std::vector<char> data(size);
-    f.seekg(0);
-    f.read(data.data(), size);
-    return data;
+    return std::vector<char>(data.begin(), data.end());
 }
 
 // 深度附件格式：按支持度依次尝试
@@ -661,7 +659,8 @@ void VulkanDevice::createPipelineCache() {
 
     std::vector<char> initial;
     {
-        std::ifstream f(_pipelineCachePath, std::ios::binary | std::ios::ate);
+        // A4: UTF-8 路径（fstream 接 path 对象，Windows 宽字符安全）
+        std::ifstream f(engine::fs::pathFromUtf8(_pipelineCachePath), std::ios::binary | std::ios::ate);
         if (f.is_open()) {
             const size_t size = static_cast<size_t>(f.tellg());
             initial.resize(size);
@@ -711,24 +710,27 @@ void VulkanDevice::savePipelineCache() {
     if (vkGetPipelineCacheData(_device, _pipelineCache, &size, data.data()) != VK_SUCCESS) return;
     data.resize(size);
 
-    const std::string tmp = _pipelineCachePath + ".tmp";
+    // A4: _pipelineCachePath 是 UTF-8 串，构造宽 path 后做临时文件+改名
+    const std::filesystem::path cachePath = engine::fs::pathFromUtf8(_pipelineCachePath);
+    std::filesystem::path tmpPath = cachePath;
+    tmpPath += ".tmp";
     {
         std::error_code ec;
-        auto parent = std::filesystem::path(tmp).parent_path();
+        auto parent = cachePath.parent_path();
         if (!parent.empty()) std::filesystem::create_directories(parent, ec);
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        std::ofstream f(tmpPath, std::ios::binary | std::ios::trunc);
         if (!f.is_open()) {
-            ENGINE_LOG_WARN("[VK] cannot write pipeline cache: %s", tmp.c_str());
+            ENGINE_LOG_WARN("[VK] cannot write pipeline cache: %s", _pipelineCachePath.c_str());
             return;
         }
         f.write(data.data(), static_cast<std::streamsize>(data.size()));
         if (!f) {
-            ENGINE_LOG_WARN("[VK] pipeline cache write failed: %s", tmp.c_str());
+            ENGINE_LOG_WARN("[VK] pipeline cache write failed: %s", _pipelineCachePath.c_str());
             return;
         }
     }
     std::error_code ec;
-    std::filesystem::rename(tmp, _pipelineCachePath, ec);   // 先写临时文件再改名，避免崩溃留下半截缓存
+    std::filesystem::rename(tmpPath, cachePath, ec);   // 先写临时文件再改名，避免崩溃留下半截缓存
     if (ec) {
         ENGINE_LOG_WARN("[VK] pipeline cache rename failed: %s", ec.message().c_str());
         return;
@@ -894,8 +896,8 @@ void VulkanDevice::endFrame() {
             std::error_code ec;
             auto tmpDir = std::filesystem::temp_directory_path(ec);
             if (ec) tmpDir = ".";
-            const std::string ppmPath = (tmpDir / "frame_vk.ppm").string();
-            FILE* fp = fopen(ppmPath.c_str(), "wb");
+            // A4: 保持 path 对象直接打开（临时目录可能含中文用户名，Windows ACP fopen 会失败）
+            FILE* fp = engine::fs::openWrite(tmpDir / "frame_vk.ppm");
             if (fp) {
                 std::fprintf(fp, "P6\n%u %u\n255\n", _swapchainExtent.width, _swapchainExtent.height);
                 // B3a 完成后 3D 内容已是正立，按屏幕行序直接导出

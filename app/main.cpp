@@ -32,6 +32,7 @@
 #include "rhi/IRHICommandList.h"
 #include "rhi/IRHIDevice.h"   // UI 层：ImGui 面板只在 app 层使用，不进引擎库
 #include "color/ColorSpace.h"
+#include "fs/FilePathUtil.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -192,8 +193,10 @@ int main()
     }
 
     // ��ȡ��Ŀ¼
+    // A4: 路径字符串统一按 UTF-8 传递（Windows 上 path::string() 是 ACP，
+    // 中文安装路径在字符串层就会坏）
     std::filesystem::path current_path = std::filesystem::current_path();
-    std::string proPath = current_path.string();
+    std::string proPath = engine::fs::utf8FromPath(current_path);
     char sep = std::filesystem::path::preferred_separator;
     std::string buildFolder = std::string(1, sep) + "build";
     size_t pos =  proPath.find(buildFolder);
@@ -206,11 +209,11 @@ int main()
     // 资源加载是 app 层职责（引擎不假设项目资源布局）
     {
         auto& renderSys = RenderSystem::getInstance();
-        renderSys.preloadTextures((std::filesystem::path(proPath) / "res").string());
+        renderSys.preloadTextures(engine::fs::utf8FromPath(engine::fs::pathFromUtf8(proPath) / "res"));
         // 字体字形当前是 GL 纹理实现，仅 GL 模式加载（Vulkan 文字渲染 M4 迁移）
         if (!useVulkan) {
             renderSys.GetFontMng()->LoadFont(
-                (std::filesystem::path(proPath) / "res" / "font" / "arial.ttf").string(), 48);
+                engine::fs::utf8FromPath(engine::fs::pathFromUtf8(proPath) / "res" / "font" / "arial.ttf"), 48);
         }
     }
     RenderSystem::getInstance().onWindowSizeChanged(width, height);
@@ -503,11 +506,11 @@ void testRenderSystem(const std::string &rootPath, bool useVulkan) {
     }
     [[maybe_unused]] std::shared_ptr<ImageRectangle> objGroundUnused = objGround;
     float ground_width = 10;
-    auto texPath = std::filesystem::path(rootPath) / "res" / "textures";
+    auto texPath = engine::fs::pathFromUtf8(rootPath) / "res" / "textures";
     if (objGround) {
-        objGround->setImagePath((texPath / "bricks2.jpg").string(),
-            (texPath / "bricks2_normal.jpg").string(),
-            (texPath / "bricks2_disp.jpg").string());
+        objGround->setImagePath(engine::fs::utf8FromPath(texPath / "bricks2.jpg"),
+            engine::fs::utf8FromPath(texPath / "bricks2_normal.jpg"),
+            engine::fs::utf8FromPath(texPath / "bricks2_disp.jpg"));
 
         objGround->setSetp(5, 5);
         glm::vec3 p1(-ground_width, 0,  ground_width);
@@ -520,7 +523,7 @@ void testRenderSystem(const std::string &rootPath, bool useVulkan) {
     
     // 鸭子
     std::shared_ptr<Model> objDuck = std::make_shared<Model>();
-    objDuck->LoadFile((std::filesystem::path(rootPath) / "res" / "model" / "duck.dae").string());
+    objDuck->LoadFile(engine::fs::utf8FromPath(engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
     TaskQueue::instance().pushTask([start](){
     }); 
     
@@ -537,7 +540,7 @@ void testRenderSystem(const std::string &rootPath, bool useVulkan) {
     
     // 光源模型
     std::shared_ptr<Model> objLight = std::make_shared<Model>();
-    objLight->LoadFile((std::filesystem::path(rootPath) / "res" / "model" / "duck.dae").string());
+    objLight->LoadFile(engine::fs::utf8FromPath(engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
     objLight->setCount(1);
     objLight->setLightOpen(false);
     auto lightPos = Light::GlobalLight().position;
@@ -548,12 +551,12 @@ void testRenderSystem(const std::string &rootPath, bool useVulkan) {
     auto skyboxPath = texPath / "skybox";
     std::shared_ptr<Sky> objSky = std::make_shared<Sky>();
     objSky->setCubeImage({
-        (skyboxPath / "right.jpg").string(),
-        (skyboxPath / "left.jpg").string(),
-        (skyboxPath / "top.jpg").string(),
-        (skyboxPath / "bottom.jpg").string(),
-        (skyboxPath / "front.jpg").string(),
-        (skyboxPath / "back.jpg").string()
+        engine::fs::utf8FromPath(skyboxPath / "right.jpg"),
+        engine::fs::utf8FromPath(skyboxPath / "left.jpg"),
+        engine::fs::utf8FromPath(skyboxPath / "top.jpg"),
+        engine::fs::utf8FromPath(skyboxPath / "bottom.jpg"),
+        engine::fs::utf8FromPath(skyboxPath / "front.jpg"),
+        engine::fs::utf8FromPath(skyboxPath / "back.jpg")
     });
     
     // obj

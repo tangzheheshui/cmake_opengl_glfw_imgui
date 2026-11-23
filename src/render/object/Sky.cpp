@@ -14,6 +14,8 @@
 #include "rhi/IRHICommandList.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <cstring>
+#include <vector>
+#include "fs/FilePathUtil.h"
 #include "stb_image.h"
 #include "log/LogMacros.h"
 
@@ -157,7 +159,16 @@ void Sky::ensureRHIResources(rhi::IRHIDevice* device) {
     bool ok = true;
     for (int face = 0; face < 6 && ok; ++face) {
         int w = 0, h = 0, ch = 0;
-        unsigned char* d = stbi_load(_arrImage[face].c_str(), &w, &h, &ch, 0);
+        // A4: UTF-8 路径内存解码
+        std::vector<unsigned char> fileData;
+        if (!engine::fs::readFileBinary(engine::fs::pathFromUtf8(_arrImage[face]), fileData)) {
+            ENGINE_LOG_ERROR("[SKY] cubemap face open failed: %s", _arrImage[face].c_str());
+            ok = false;
+            break;
+        }
+        unsigned char* d = stbi_load_from_memory(fileData.data(),
+                                                 static_cast<int>(fileData.size()),
+                                                 &w, &h, &ch, 0);
         if (!d || w <= 0 || h <= 0) { ok = false; break; }
         if (fw == 0) { fw = w; fh = h; fch = ch; packed.reserve(static_cast<size_t>(fw) * fh * 4 * 6); }
         else if (w != fw || h != fh) { stbi_image_free(d); ok = false; break; }

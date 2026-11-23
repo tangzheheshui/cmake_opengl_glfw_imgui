@@ -14,6 +14,7 @@
 #include "rhi/IRHIDevice.h"
 #include "rhi/IRHICommandList.h"
 #include "color/ColorSpace.h"
+#include "fs/FilePathUtil.h"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
 #include <cstring>
@@ -81,11 +82,13 @@ void RenderSystem::init(const std::string& rootPath) {
     }
 
     // ������ɫ��
-    auto shaderPath = std::filesystem::path(rootPath) / "res" / "shaders";
+    // A4: rootPath 约定为 UTF-8；Windows 上 path(std::string) 按 ACP 解释会错，
+    // 统一走 pathFromUtf8（引擎内路径字符串 = UTF-8）
+    auto shaderPath = engine::fs::pathFromUtf8(rootPath) / "res" / "shaders";
     // 注意：GL 着色器缓存仅在 OpenGL 后端初始化（Vulkan 模式无 GL 上下文，
     // glad 函数指针为空，任何 glCreate* 调用都会跳空地址）
     if (_backend == rhi::Backend::OpenGL) {
-        ShaderCache::GetInstance().init(shaderPath.string() + std::string(1, std::filesystem::path::preferred_separator));
+        ShaderCache::GetInstance().init(engine::fs::utf8FromPath(shaderPath) + std::string(1, std::filesystem::path::preferred_separator));
     }
 
 	// ��ʼ������
@@ -108,7 +111,7 @@ void RenderSystem::init(const std::string& rootPath) {
         }
         m_rhiDevice = rhi::RHIFactory::createDevice(
             _backend, _window,
-            shaderRoot.string() + std::string(1, std::filesystem::path::preferred_separator));
+            engine::fs::utf8FromPath(shaderRoot) + std::string(1, std::filesystem::path::preferred_separator));
         if (m_rhiDevice) {
             createSmokeTriangle();
             createTexturedQuad();
@@ -286,9 +289,8 @@ void RenderSystem::selfTestAB() {
         std::error_code ec;
         auto tmpDir = std::filesystem::temp_directory_path(ec);
         if (ec) tmpDir = ".";
-        const std::string rhiPpm = (tmpDir / "frame_rhi.ppm").string();
-        const std::string glPpm  = (tmpDir / "frame_gl.ppm").string();
-        FILE* fp = fopen(rhiPpm.c_str(), "wb");
+        // A4: 保持 path 对象直接打开（临时目录可能含中文用户名，Windows ACP fopen 会失败）
+        FILE* fp = engine::fs::openWrite(tmpDir / "frame_rhi.ppm");
         if (fp) {
             fprintf(fp, "P6\n%d %d\n255\n", w, h);
             for (int y = h - 1; y >= 0; --y) {
@@ -299,7 +301,7 @@ void RenderSystem::selfTestAB() {
             }
             fclose(fp);
         }
-        fp = fopen(glPpm.c_str(), "wb");
+        fp = engine::fs::openWrite(tmpDir / "frame_gl.ppm");
         if (fp) {
             fprintf(fp, "P6\n%d %d\n255\n", w, h);
             for (int y = h - 1; y >= 0; --y) {
@@ -492,7 +494,8 @@ void RenderSystem::recordSmokeTriangle(rhi::IRHICommandList* cmd) {
 }
 
 void RenderSystem::preloadTextures(const std::string& dirPath) {
-    loadTexture(std::filesystem::path(dirPath));
+    // A4: dirPath 按 UTF-8 解释（Windows 宽字符目录遍历）
+    loadTexture(engine::fs::pathFromUtf8(dirPath));
 }
 
 void RenderSystem::loadTexture(const std::filesystem::path& dirPath) {
@@ -503,7 +506,8 @@ void RenderSystem::loadTexture(const std::filesystem::path& dirPath) {
         else if (entry.is_regular_file()) {
             auto extension = entry.path().extension().string();
             if (extension == ".png" || extension == ".jpg" || extension == ".tga") {
-                auto filename = entry.path().string();
+                // A4: 资源键与打开路径统一为 UTF-8
+                auto filename = engine::fs::utf8FromPath(entry.path());
                 TextureMng::getInstance().loadTexture(filename);
             }
         }

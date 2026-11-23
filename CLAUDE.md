@@ -143,6 +143,10 @@ device->endFrame();
 - **Vulkan 命名**：后端类名 `VulkanDevice`（不得用 `VkDevice`，会遮蔽 Vulkan 原生句柄类型）
 - **uniform 名称**：遗留拼写 `uMaterail` 保留，改时需同步 GLSL
 - **几何着色器**：MoltenVK 不支持，`model_multiview.geom` 的替代方案见 docs
+- **路径字符串一律 UTF-8**（A4）：引擎接口的路径 `std::string` 按 UTF-8 解释；
+  打开文件必须走 `core/fs/FilePathUtil`（Windows 宽字符边界），
+  Assimp 用 `Utf8IOSystem`；禁止 `path::string()` 往返（Windows 上是 ACP，
+  中文路径会坏），需要字符串时用 `engine::fs::utf8FromPath`
 - 部分历史代码注释为 GBK 编码，macOS 下显示乱码（编辑时用 ASCII 锚点匹配）
 
 ## 已知限制

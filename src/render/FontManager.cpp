@@ -1,5 +1,6 @@
 #include "log/LogMacros.h"
 #include "FontManager.h"
+#include "fs/FilePathUtil.h"
 #include <iostream>
 #include <stdexcept>
 #include <glad/glad.h>
@@ -22,8 +23,16 @@ FontManager::~FontManager() {
 }
 
 bool FontManager::LoadFont(const std::string& fontPath, unsigned int fontSize) {
-    // 加载字体
-    if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
+    // 加载字体。A4: UTF-8 路径读入内存后 FT_New_Memory_Face
+    //（Windows 上 FT_New_Face 的 char 路径按 ACP 解释，中文路径失败；
+    //  缓冲与 face 同生命周期，见 FontManager.h 说明）
+    if (!engine::fs::readFileBinary(engine::fs::pathFromUtf8(fontPath), _fontFileData)
+        || _fontFileData.empty()) {
+        ENGINE_LOG_ERROR("FREETYPE: Failed to read font: %s", fontPath.c_str());
+        return false;
+    }
+    if (FT_New_Memory_Face(ft, _fontFileData.data(),
+                           static_cast<FT_Long>(_fontFileData.size()), 0, &face)) {
         ENGINE_LOG_ERROR("FREETYPE: Failed to load font: %s", fontPath.c_str());
         return false;
     }

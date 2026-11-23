@@ -34,6 +34,9 @@ private:
                                  //（Windows 实机退出崩溃的根因，B3 验证期修复）
     std::unordered_map<uint32_t, Character> characters; // 字符缓存
     std::vector<unsigned int> m_textures; // 追踪所有分配的纹理用于清理
+    // A4: 字体文件字节。FT_New_Memory_Face 不拷贝数据，缓冲必须与 face
+    // 同生命周期（face 在析构时释放，故数据随对象常驻）
+    std::vector<unsigned char> _fontFileData;
     bool LoadCharacter(uint32_t unicode);     // 支持Unicode字符
 };
 

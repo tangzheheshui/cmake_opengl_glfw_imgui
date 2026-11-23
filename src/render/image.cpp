@@ -7,6 +7,7 @@
 
 #include "log/LogMacros.h"
 #include "image.h"
+#include "fs/FilePathUtil.h"
 
 #include <iostream>
 #include <fstream>
@@ -41,7 +42,20 @@ void TextureMng::loadTexture(const std::string &filename) {
     }
     
     Texture tex;
-    unsigned char *data = stbi_load(filename.c_str(), &tex.width, &tex.height, &tex.format, 0);
+    // A4: UTF-8 路径读入内存后解码（Windows 宽路径安全），顺带修复
+    // 原实现在文件打开失败时对空指针 assign 的隐患
+    std::vector<unsigned char> fileData;
+    if (!engine::fs::readFileBinary(engine::fs::pathFromUtf8(filename), fileData)) {
+        ENGINE_LOG_WARN("TextureMng: cannot open texture file: %s", filename.c_str());
+        return;
+    }
+    unsigned char *data = stbi_load_from_memory(fileData.data(),
+                                                static_cast<int>(fileData.size()),
+                                                &tex.width, &tex.height, &tex.format, 0);
+    if (!data) {
+        ENGINE_LOG_WARN("TextureMng: cannot decode texture file: %s", filename.c_str());
+        return;
+    }
     ImageBuffer pData = std::make_shared<std::vector<unsigned char>>();
     pData->assign(data, data + tex.width * tex.height * tex.format);
     tex.data = std::move(pData);
@@ -168,7 +182,14 @@ unsigned int TextureMng::getCubeTexture(std::array<std::string, 6> faces) {
     for (unsigned int i = 0; i < faces.size(); i++)
     {
         auto& file = faces[i];
-        unsigned char *data = stbi_load(file.c_str(), &width, &height, &nrChannels, 0);
+        // A4: UTF-8 路径内存解码（同 loadTexture）
+        std::vector<unsigned char> fileData;
+        unsigned char *data = nullptr;
+        if (engine::fs::readFileBinary(engine::fs::pathFromUtf8(file), fileData)) {
+            data = stbi_load_from_memory(fileData.data(),
+                                         static_cast<int>(fileData.size()),
+                                         &width, &height, &nrChannels, 0);
+        }
         if (data)
         {
             // B3c：天空盒是颜色贴图，sRGB 内部格式随交换链 sRGB 编码形成往返

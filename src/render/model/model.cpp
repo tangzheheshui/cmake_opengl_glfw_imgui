@@ -10,6 +10,8 @@
 #include "RenderSystem.h"
 #include "rhi/IRHIDevice.h"
 #include "core/taskQueue.h"
+#include "fs/FilePathUtil.h"
+#include "Utf8IOSystem.h"
 #include <iostream>
 #include <filesystem>
 #include "core/math/math.h"
@@ -20,9 +22,11 @@ void Model::LoadFile(const std::string &path) {
         return;
     }
     // Load the model file.
+    // A4: 路径按 UTF-8 打开（Windows 宽字符），修复中文安装路径加载失败
     Assimp::Importer importer;
+    importer.SetIOHandler(new engine::Utf8IOSystem());
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
-    //import.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs); 
+    //import.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
     
     // check for errors
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) // if is Not Zero
@@ -33,7 +37,7 @@ void Model::LoadFile(const std::string &path) {
     }
     
     // retrieve the directory path of the filepath
-    m_filepath = std::filesystem::path(path).parent_path();
+    m_filepath = engine::fs::pathFromUtf8(path).parent_path();
     processTexture(scene);
     
     // 解析材质
@@ -347,7 +351,7 @@ std::vector<Texture> Model::loadMaterialTextures(aiMaterial *mat, aiTextureType 
                 pos = filename.find_last_of('/');
             }
             auto name = filename.substr(pos+1, filename.length() - pos);
-            texture.filepath = (m_filepath / name).string();
+            texture.filepath = engine::fs::utf8FromPath(m_filepath / name);
         }
         m_map_tempTexture[filename] = texture;
         textures.push_back(texture);

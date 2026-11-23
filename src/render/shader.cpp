@@ -12,12 +12,14 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include "fs/FilePathUtil.h"
 
 Shader::Shader(const std::string &vertPath, const std::string &fragPath, const std::string &geomPath) {
     std::ifstream vertFile;
     std::ifstream fragFile;
-    vertFile.open(vertPath);
-    fragFile.open(fragPath);
+    // A4: 路径字符串按 UTF-8 解释（Windows 上直接用 char 会走 ACP）
+    vertFile.open(engine::fs::pathFromUtf8(vertPath));
+    fragFile.open(engine::fs::pathFromUtf8(fragPath));
     std::string strVert;
     std::string strFrag;
     if (vertFile.is_open() && fragFile.is_open()) {
@@ -65,7 +67,7 @@ Shader::Shader(const std::string &vertPath, const std::string &fragPath, const s
     
     if (!geomPath.empty()) {
         std::ifstream geomFile;
-        geomFile.open(geomPath);
+        geomFile.open(engine::fs::pathFromUtf8(geomPath));
         std::string str;
         if (geomFile.is_open()) {
             std::stringstream vShaderStream;

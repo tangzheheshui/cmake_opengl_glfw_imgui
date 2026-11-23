@@ -46,6 +46,15 @@
 - ✅ **顺带修复退出段错误**（基线即崩，非 B3 引入）：`FontManager::face`
   未初始化，VK 模式不加载字体时 `FT_Done_Face(垃圾指针)` 崩溃；
   `RHI_EXIT_AFTER` 回归路径恢复可用（exit=0）
+- ✅ **A4 UTF-8 路径**（2026-11-23，macOS 中文路径实机验证）：引擎路径字符串
+  统一按 UTF-8 约定，新增 `src/core/fs/FilePathUtil`（Windows 边界转宽字符
+  `_wfopen`/UTF-16 path，非法 UTF-8 回退 ACP）+ Assimp 自定义 IOSystem
+  （`Utf8IOSystem`，替换按 ACP 打开的 DefaultIOSystem）。覆盖全部文件打开点：
+  Assimp 模型、stb_image（改内存解码）、GLSL/SPIR-V、FreeType（改
+  `FT_New_Memory_Face`，缓冲与 face 同生命周期）、管线缓存读写、PPM 导出
+  （临时目录可能含中文用户名）。验证：GL/VK 双后端 `RHI_EXIT_AFTER=60`
+  exit=0；整个工程复制到 `/tmp/中文路径A4测试/` 后模型/纹理/着色器/字体/
+  管线缓存全部正常加载。**Windows 中文安装路径待实机复验**
 - ⚠ **已知小问题（不阻塞，已记录）**：
   1. 中文安装路径下 Assimp 打不开模型（A4：Windows UTF-8/宽字符路径）；
   2. 光源指示鸭（objLight，scale 0.5）包住相机 → 画面顶部巨鸭弧形，
@@ -65,7 +74,7 @@
 | P0 | B3a | ~~Y 翻转：负高度 viewport，并移除 dump 行翻转~~ | ✅ 完成（2026-11-23 实机验证） | B0 | — | S–M |
 | P0 | B3b | ~~深度：Vulkan 投影 z∈[0,1] + Reversed-Z~~ | ✅ 完成（同日验证） | B3a | — | M |
 | P0 | B3c | ~~sRGB 交换链 + 纹理 sRGB/mipmap（GL/VK 视觉对齐）~~ | ✅ 完成（2026-11-23，VK 验证层 0 error） | B3b | 与 A4 并行 | S–M |
-| P0 | A4 | Windows UTF-8/宽字符路径（Assimp IOSystem、纹理/着色器/缓存路径） | 中文安装路径加载失败 | 无 | **可与 B3 并行**（资源/IO） | M |
+| P0 | A4 | ~~Windows UTF-8/宽字符路径（Assimp IOSystem、纹理/着色器/缓存路径）~~ | ✅ 完成（2026-11-23 macOS 中文路径验证；Windows 实机待复验） | 无 | — | M |
 | P0 | B1 | ~~Dynamic Rendering + resize/ImGui 失效收尾~~ | ✅ 完成（2026-11-23） | B0 | 与 B3 串行（VkDevice/管线） | M |
 | P0 | B2 | GL 后端 v2：render target / sampler / readback / caps | 契约已冻结，GL 未实现 | B0 | **可并行** | M |
 | P0 | B4 | 离屏 RenderTarget + readback | 仅默认 framebuffer | B1 | 与 B2 并行；与 B1 串行（VkDevice） | M |
@@ -82,8 +91,8 @@
 ### 推荐执行顺序（评审后再定）
 
 1. **第一波（正确性收尾）**：~~B3a → B3b → B3c~~ ✅ 已完成（2026-11-23）；
-   剩余 **A4**（只动资源/IO 层）。
-2. **第二波（RHI 基座）**：~~B1~~ ✅ → B4；B2 并行。B1/B4 同改 `VkDevice`，需串行或同一人。
+   ~~A4~~ ✅ 已完成（同日，Windows 实机待复验）。
+2. **第二波（RHI 基座）**：~~B1~~ ✅ → **B4**；B2 并行。B1/B4 同改 `VkDevice`，需串行或同一人。
 3. **第三波（ZW3D 接入）**：C1/C2 + D2/D4/D7；D1 等 B3 完成后做。
 4. **第四波（大装配）**：E1/E2 → E3/E5。
 5. **第五波（工程化）**：F1/F2。
@@ -216,7 +225,7 @@ EDS 1、多队列、Subgroup、Ray Query 拾取、HDR、GPL。
 | 深度范围 z∈[-1,1] / 大范围精度 | ✅ 已解决（B3b，2026-11-23） | Reversed-Z：setUniform 后乘 z 修正 + GREATER 族 + 清屏 0 |
 | sRGB / mipmap 未生效 | ✅ 已解决（B3c，2026-11-23） | VK sRGB 交换链/纹理 + GL sRGB 帧缓冲/纹理；`generateMips` 完整链 + 每级 DST 屏障修复 |
 | VK 模式退出段错误 | ✅ 已解决（2026-11-23） | `FontManager::face` 未初始化；VK 不加载字体时 FT_Done_Face 崩溃，NSDMI + 空值保护 |
-| 中文安装路径加载失败 | ⏳ 待修 A4 | Assimp/纹理/着色器路径需 UTF-8/宽字符 |
+| 中文安装路径加载失败 | ✅ 已修 A4（2026-11-23） | 引擎路径串 = UTF-8 + `core/fs/FilePathUtil`（Windows 宽字符边界）+ Assimp `Utf8IOSystem`；macOS 中文路径实机验证，Windows 实机待复验 |
 | resize 重建 PSO / ImGui 失效 | ✅ 已解决（B1，2026-11-23） | Dynamic Rendering；resize 不再重建 PSO |
 | 描述符“当前块”隐式残留 | ⏳ 待修 B1/E1 | 每 draw 显式 block 或每 draw 独立描述符集 |
 | 阴影 / 地面 / 文字（demo） | 部分 | 文字 D4；阴影/地面非产品需求，不投入 |
