@@ -40,6 +40,11 @@ if(ENGINE_HAS_VULKAN)
     target_compile_definitions(my_app PRIVATE ENGINE_HAS_VULKAN=1)
     target_include_directories(my_app PRIVATE ${VULKAN_INCLUDE_DIR})
     target_link_libraries(my_app PRIVATE ${VULKAN_LIBRARY})
+    # 只构建 my_app 时也必须先生成 SPIR-V（vk_shaders 是 ALL 目标，
+    # 但 --target my_app 不会自动带上它）
+    if(TARGET vk_shaders)
+        add_dependencies(my_app vk_shaders)
+    endif()
 else()
     target_compile_definitions(my_app PRIVATE ENGINE_HAS_VULKAN=0)
 endif()
