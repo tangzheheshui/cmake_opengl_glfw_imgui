@@ -35,7 +35,10 @@ public:
     }
     void setRootPath(const std::string &path) { m_root_path = path; }
     void loadTexture(const std::string &filename);
-    unsigned int getTexture(const std::string &filename);
+    // srgbColor=true：颜色贴图（diffuse/specular/天空盒等），用 sRGB 内部格式
+    // 让硬件在采样时解码到线性空间；法线/高度/遮罩等数据贴图传 false。
+    // 同一文件以两种色彩空间使用时分别缓存。
+    unsigned int getTexture(const std::string &filename, bool srgbColor = false);
     // 取已预载纹理的原始数据（不擦除，供 RHI 后端创建自己的纹理对象）
     ImageBuffer getTextureData(const std::string &filename, int &width, int &height, int &channels);
     unsigned int getCubeTexture(std::array<std::string, 6> faces);
@@ -49,7 +52,7 @@ private:
 private:
     void createShadowTexture();
     void createSkyTexture();
-    unsigned int genTexture(const Texture& tex);
+    unsigned int genTexture(const Texture& tex, bool srgbColor);
 private:
     std::map<std::string, unsigned int> m_map_textures;
     std::map<std::string, Texture> m_map_tex_data;

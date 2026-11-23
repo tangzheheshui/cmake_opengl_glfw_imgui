@@ -13,6 +13,7 @@
 #include "rhi/RHIFactory.h"
 #include "rhi/IRHIDevice.h"
 #include "rhi/IRHICommandList.h"
+#include "color/ColorSpace.h"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
 #include <cstring>
@@ -146,10 +147,16 @@ void RenderSystem::createSmokeTriangle() {
     pipeDesc.blend       = { false };
     m_smokePipeline = m_rhiDevice->createPipeline(pipeDesc);
 
+    // B3c：顶点色是作者指定的 sRGB 值；sRGB 交换链写回时编码，故先转线性
+    SmokeVertex smokeVerts[3];
+    for (int i = 0; i < 3; ++i) {
+        smokeVerts[i] = kSmokeVertices[i];
+        color::srgbToLinear(smokeVerts[i].col, 3);
+    }
     rhi::BufferDesc vbDesc;
-    vbDesc.size = sizeof(kSmokeVertices);
+    vbDesc.size = sizeof(smokeVerts);
     vbDesc.usage = rhi::BUF_VERTEX;
-    vbDesc.initialData = kSmokeVertices;
+    vbDesc.initialData = smokeVerts;
     m_smokeVB = m_rhiDevice->createBuffer(vbDesc);
 
     // 索引 0,1,2：走 drawIndexed（M3 Vulkan 验证用）
@@ -178,7 +185,11 @@ void RenderSystem::drawRhiScene() {
     rhi::RenderPassDesc rp;
     rp.clearColor = true;
     rp.clearDepth = true;
-    rp.clearColorValue[0] = 0.2f; rp.clearColorValue[1] = 0.3f; rp.clearColorValue[2] = 0.3f; rp.clearColorValue[3] = 1.0f;
+    // B3c：清屏色按作者 sRGB 值给出；sRGB 附件按线性值编码，故先转线性
+    rp.clearColorValue[0] = color::srgbToLinear(0.2f);
+    rp.clearColorValue[1] = color::srgbToLinear(0.3f);
+    rp.clearColorValue[2] = color::srgbToLinear(0.3f);
+    rp.clearColorValue[3] = 1.0f;
     cmd->beginRenderPass(rp);
     cmd->pushDebugLabel("RhiScene");
     static bool emptyScene = (std::getenv("RHI_EMPTY") != nullptr);   // 调试开关：仅清屏+UI（VK 面板排查用）
@@ -216,6 +227,10 @@ void RenderSystem::draw() {
         drawRhiScene();
         return;
     }
+    // B3c：线性工作流。GL 默认帧缓冲以 GLFW_SRGB_CAPABLE 创建，写回时由
+    // 硬件做 linear→sRGB 编码（纹理已在采样时解码）。ImGui 在 main 中绘制前
+    // 会关闭本开关，保持其既有的 gamma 空间 UI 外观。
+    glEnable(GL_FRAMEBUFFER_SRGB);
     // 帧级 Pass 循环（调试面板可按开关跳过）
     renderScenePasses();
     drawSceneOverlays();
@@ -370,6 +385,8 @@ void RenderSystem::createTexturedQuad() {
     rhi::TextureDesc texDesc;
     texDesc.width = 1; texDesc.height = 1;
     texDesc.usage = rhi::TEX_SAMPLED;
+    // B3c：紫色是颜色值；sRGB 解码 + sRGB 交换链编码 → 回读仍为原字节
+    texDesc.format = rhi::Format::RGBA8_SRGB;
     texDesc.initialData = purple;
     m_quadTex = m_rhiDevice->createTexture(texDesc);
 

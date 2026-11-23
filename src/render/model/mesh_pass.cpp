@@ -90,7 +90,11 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
             auto tex = m_material->textures[i];
             int texID = 0;
             if (!tex.filepath.empty()) {
-                texID = TextureMng::getInstance().getTexture(tex.filepath);
+                // B3c：diffuse/specular 是颜色贴图（sRGB 解码）；normal/height 是
+                // 线性数据贴图，必须保持非 sRGB 原值。
+                const bool colorTex = tex.name.rfind("texture_diffuse", 0) == 0
+                                   || tex.name.rfind("texture_specular", 0) == 0;
+                texID = TextureMng::getInstance().getTexture(tex.filepath, colorTex);
                 if(tex.name == "texture_diffuse0") {
                     
                 }
@@ -417,6 +421,10 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
                 rhi::TextureDesc td;
                 td.width = tw; td.height = thh;
                 td.usage = rhi::TEX_SAMPLED;
+                // B3c：颜色贴图 → sRGB（硬件解码）；法线/高度 → 线性数据
+                const bool colorTex = tex.name.rfind("texture_diffuse", 0) == 0
+                                   || tex.name.rfind("texture_specular", 0) == 0;
+                td.format = colorTex ? rhi::Format::RGBA8_SRGB : rhi::Format::RGBA8_UNorm;
                 td.initialData = rgba.data();
                 th = device->createTexture(td);
                 m_rhiTexCache[tex.filepath] = th;

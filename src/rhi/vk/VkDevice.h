@@ -132,6 +132,7 @@ private:
 
     VkSwapchainKHR             _swapchain      = VK_NULL_HANDLE;
     VkFormat                   _swapchainFormat = VK_FORMAT_UNDEFINED;
+    VkColorSpaceKHR            _swapchainColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     VkExtent2D                 _swapchainExtent = {0, 0};
     std::vector<VkImage>       _swapchainImages;
     std::vector<VkImageView>   _swapchainViews;

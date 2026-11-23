@@ -53,7 +53,7 @@ bool ImageRectangle::draw(const Matrix &mtx) {
     
     shader->use();
     
-    int texture = TextureMng::getInstance().getTexture(m_image_diffuse);
+    int texture = TextureMng::getInstance().getTexture(m_image_diffuse, true);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     shader->setInt("uTexture", 0);

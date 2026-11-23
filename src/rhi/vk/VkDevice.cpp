@@ -455,17 +455,50 @@ void VulkanDevice::createSwapchainObjects() {
         _swapchainExtent.height = std::clamp(static_cast<uint32_t>(fbH), caps.minImageExtent.height, caps.maxImageExtent.height);
     }
 
-    // surface 格式：优先 BGRA8_UNORM，其次 RGBA8_UNORM
+    // surface 格式（B3c）：优先 sRGB 交换链（线性工作流的编码端）。
+    // 优先级：BGRA8_SRGB > RGBA8_SRGB > BGRA8_UNORM > RGBA8_UNORM > 驱动首选项。
     uint32_t fmtCount = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, &fmtCount, nullptr);
     std::vector<VkSurfaceFormatKHR> formats(fmtCount);
     vkGetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, &fmtCount, formats.data());
-    _swapchainFormat = formats[0].format;
-    for (auto& f : formats) {
-        if (f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) {
-            _swapchainFormat = f.format;
-            break;
+    if (formats.empty()) {
+        ENGINE_LOG_ERROR("[VK] surface exposes no formats");
+        std::abort();
+    }
+    auto formatRank = [](VkFormat f) {
+        switch (f) {
+            case VK_FORMAT_B8G8R8A8_SRGB:  return 4;
+            case VK_FORMAT_R8G8B8A8_SRGB:  return 3;
+            case VK_FORMAT_B8G8R8A8_UNORM: return 2;
+            case VK_FORMAT_R8G8B8A8_UNORM: return 1;
+            default: return 0;
         }
+    };
+    // SRGB_NONLINEAR 是显示器的标准编码空间；只在它提供的格式对里挑选，
+    // 没有任何匹配时退回驱动首选项（format/colorSpace 始终成对取自 surface 列表）。
+    bool haveStandard = false;
+    int bestRank = 0;
+    for (const auto& f : formats) {
+        if (f.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) continue;
+        const int r = formatRank(f.format);
+        if (!haveStandard || r > bestRank) {
+            bestRank             = r;
+            _swapchainFormat     = f.format;
+            _swapchainColorSpace = f.colorSpace;
+            haveStandard         = true;
+        }
+    }
+    if (!haveStandard) {
+        _swapchainFormat     = formats[0].format;
+        _swapchainColorSpace = formats[0].colorSpace;
+    }
+    const bool swapchainSrgb = (_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB ||
+                                _swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB);
+    ENGINE_LOG_INFO("[VK] swapchain format=%d colorSpace=%d sRGB=%d",
+                    static_cast<int>(_swapchainFormat),
+                    static_cast<int>(_swapchainColorSpace), swapchainSrgb ? 1 : 0);
+    if (!swapchainSrgb) {
+        ENGINE_LOG_WARN("[VK] no sRGB surface format; linear workflow will look different from GL");
     }
 
     uint32_t imageCount = std::max(2u, caps.minImageCount);
@@ -475,7 +508,7 @@ void VulkanDevice::createSwapchainObjects() {
     sci.surface          = _surface;
     sci.minImageCount    = imageCount;
     sci.imageFormat      = _swapchainFormat;
-    sci.imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    sci.imageColorSpace  = _swapchainColorSpace;
     sci.imageExtent      = _swapchainExtent;
     sci.imageArrayLayers = 1;
     sci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;  // TRANSFER_SRC 供 RHI_PROBE 回读验证
@@ -1004,10 +1037,12 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         ENGINE_LOG_ERROR("[VK] unsupported format bpp (%d)", static_cast<int>(desc.format));
         return {};
     }
-    // mip 级数：显式指定 > 0 用之；否则只有 generateMips 时分配完整链
+    // mip 级数：mipLevels==0 = 完整链；generateMips=true 且未显式给多级时
+    // 也按完整链分配（B3c：此前 generateMips 单独使用时只分配 1 级，天空盒
+    // 的 mip 链实际没有生成）
     uint32_t mipLevels = desc.mipLevels > 0 ? desc.mipLevels : 1;
     bool generateMips = desc.generateMips && desc.initialData;
-    if (desc.mipLevels == 0 && desc.generateMips) {
+    if (generateMips && mipLevels <= 1) {
         mipLevels = fullMipChainLevels(desc.width, desc.height);
     }
     if (generateMips && mipLevels > 1 && !formatBlitSupported(_physicalDevice, vkFmt)) {
@@ -1116,6 +1151,22 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
                         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                                              0, nullptr, 0, nullptr, 1, &srcBar);
+
+                        // 目标级此前从未使用（UNDEFINED），先转为 TRANSFER_DST。
+                        // B3c：mip 链此前因 mipLevels 恒为 1 从未真正生成，
+                        // 该缺失屏障未暴露；启用完整链后被验证层捕获。
+                        VkImageMemoryBarrier dstBar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                        dstBar.srcAccessMask = 0;
+                        dstBar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                        dstBar.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        dstBar.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                        dstBar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        dstBar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        dstBar.image = t.image;
+                        dstBar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, layer, 1};
+                        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                             0, nullptr, 0, nullptr, 1, &dstBar);
 
                         VkImageBlit blit{};
                         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, layer, 1};

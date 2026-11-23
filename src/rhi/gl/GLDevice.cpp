@@ -11,6 +11,36 @@
 
 namespace rhi {
 
+// Format → (internalFormat, dataFormat, dataType)。B3c：颜色格式用 sRGB 内部格式，
+// 硬件采样时解码到线性；法线/高度/ID 等数据格式保持线性。
+static void glFormatOf(Format f, GLenum& internal, GLenum& dataFmt, GLenum& dataType) {
+    internal = GL_RGBA8; dataFmt = GL_RGBA; dataType = GL_UNSIGNED_BYTE;
+    switch (f) {
+        case Format::RGBA8_SRGB: internal = GL_SRGB8_ALPHA8; dataFmt = GL_RGBA; break;
+        case Format::BGRA8_UNorm: internal = GL_RGBA8;   dataFmt = GL_BGRA; break;
+        case Format::BGRA8_SRGB:  internal = GL_SRGB8_ALPHA8; dataFmt = GL_BGRA; break;
+        case Format::R8_UNorm:    internal = GL_R8;      dataFmt = GL_RED; break;
+        case Format::R16F:        internal = GL_R16F;    dataFmt = GL_RED;  dataType = GL_FLOAT; break;
+        case Format::RGBA16F:     internal = GL_RGBA16F; dataFmt = GL_RGBA; dataType = GL_FLOAT; break;
+        case Format::RGBA32F:     internal = GL_RGBA32F; dataFmt = GL_RGBA; dataType = GL_FLOAT; break;
+        case Format::R32_UInt:    internal = GL_R32UI;   dataFmt = GL_RED_INTEGER; dataType = GL_UNSIGNED_INT; break;
+        case Format::Depth32F:    internal = GL_DEPTH_COMPONENT32F; dataFmt = GL_DEPTH_COMPONENT; dataType = GL_FLOAT; break;
+        case Format::D24S8:       internal = GL_DEPTH24_STENCIL8;   dataFmt = GL_DEPTH_STENCIL;
+                                  dataType = GL_UNSIGNED_INT_24_8; break;
+        case Format::RGBA8_UNorm:
+        default: break;
+    }
+}
+
+static GLenum glWrapOf(WrapMode m) {
+    switch (m) {
+        case WrapMode::Repeat:      return GL_REPEAT;
+        case WrapMode::ClampToEdge: return GL_CLAMP_TO_EDGE;
+        case WrapMode::Mirror:      return GL_MIRRORED_REPEAT;
+    }
+    return GL_REPEAT;
+}
+
 static std::string shaderFileOf(const GraphicsPipelineDesc& desc, ShaderStage stage) {
     for (const auto& s : desc.shaders) {
         if (s.stage == stage) return s.path;
@@ -63,37 +93,58 @@ BufferHandle GLDevice::createBuffer(const BufferDesc& desc) {
 TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     GLTexture tex;
     glGenTextures(1, &tex.id);
+
+    GLenum internalFmt = GL_RGBA8, dataFmt = GL_RGBA, dataType = GL_UNSIGNED_BYTE;
+    glFormatOf(desc.format, internalFmt, dataFmt, dataType);
+
+    const GLenum target = desc.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+    glBindTexture(target, tex.id);
+
     if (desc.cubemap) {
-        // 立方体贴图：6 面连续 RGBA8
-        glBindTexture(GL_TEXTURE_CUBE_MAP, tex.id);
-        const size_t faceBytes = static_cast<size_t>(desc.width) * desc.height * 4;
+        // 立方体贴图：6 面连续存放
+        const uint32_t bpp = formatBytesPerPixel(desc.format);
+        const size_t faceBytes = static_cast<size_t>(desc.width) * desc.height * bpp;
         const unsigned char* base = static_cast<const unsigned char*>(desc.initialData);
         for (int face = 0; face < 6; ++face) {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA8,
-                         desc.width, desc.height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                         base + face * faceBytes);
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, internalFmt,
+                         desc.width, desc.height, 0, dataFmt, dataType,
+                         base ? base + face * faceBytes : nullptr);
         }
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
         tex.cubemap = true;
-
-        _textures.push_back(std::move(tex));
-        TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
-        return h;
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFmt, desc.width, desc.height, 0,
+                     dataFmt, dataType, desc.initialData);
     }
-    glBindTexture(GL_TEXTURE_2D, tex.id);
-    GLenum internalFmt = (desc.format == Format::Depth32F) ? GL_DEPTH_COMPONENT32F : GL_RGBA8;
-    GLenum dataFmt     = (desc.format == Format::Depth32F) ? GL_DEPTH_COMPONENT  : GL_RGBA;
-    GLenum dataType    = (desc.format == Format::Depth32F) ? GL_FLOAT            : GL_UNSIGNED_BYTE;
-    glTexImage2D(GL_TEXTURE_2D, 0, internalFmt, desc.width, desc.height, 0,
-                 dataFmt, dataType, desc.initialData);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // B3c：mipmap（generateMips / mipLevels==0 语义与 VK 对齐）
+    const bool wantMips = desc.generateMips || desc.mipLevels == 0;
+    if (wantMips) {
+        glGenerateMipmap(target);
+    }
+
+    // B3：采样参数由 TextureDesc::sampler 驱动（GL 侧在纹理对象上烘焙）
+    const SamplerDesc& sd = desc.sampler;
+    GLenum minFilter;
+    if (wantMips) {
+        minFilter = (sd.mipFilter == FilterMode::Nearest) ? GL_NEAREST_MIPMAP_NEAREST
+                                                          : GL_LINEAR_MIPMAP_LINEAR;
+    } else {
+        minFilter = (sd.minFilter == FilterMode::Nearest) ? GL_NEAREST : GL_LINEAR;
+    }
+    const GLenum magFilter = (sd.magFilter == FilterMode::Nearest) ? GL_NEAREST : GL_LINEAR;
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, minFilter);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, magFilter);
+    glTexParameteri(target, GL_TEXTURE_WRAP_S, glWrapOf(sd.wrapU));
+    glTexParameteri(target, GL_TEXTURE_WRAP_T, glWrapOf(sd.wrapV));
+    if (desc.cubemap) {
+        // GL 与 VK 一致：立方体采样禁用 REPEAT（天空盒用 ClampToEdge）
+        glTexParameteri(target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    } else {
+        glTexParameteri(target, GL_TEXTURE_WRAP_R, glWrapOf(sd.wrapW));
+    }
+    glTexParameterf(target, GL_TEXTURE_MIN_LOD, sd.minLod);
+    glTexParameterf(target, GL_TEXTURE_MAX_LOD, sd.maxLod);
+    glBindTexture(target, 0);
 
     _textures.push_back(std::move(tex));
     TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());

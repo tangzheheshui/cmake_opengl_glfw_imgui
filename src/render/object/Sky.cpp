@@ -181,6 +181,8 @@ void Sky::ensureRHIResources(rhi::IRHIDevice* device) {
     td.width = static_cast<uint32_t>(fw);
     td.height = static_cast<uint32_t>(fh);
     td.usage = rhi::TEX_SAMPLED;
+    // B3c：天空盒是颜色贴图；sRGB 解码 + sRGB 交换链编码 = 往返不变
+    td.format = rhi::Format::RGBA8_SRGB;
     td.cubemap = true;
     td.initialData = packed.data();
     // B3：天空盒远景明显 — 开 mipmap（GPU blit 生成链）+ 各向异性过滤，

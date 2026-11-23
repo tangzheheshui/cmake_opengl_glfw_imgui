@@ -83,6 +83,7 @@ ImGui 窗口"渲染调试"（`src/render/DebugPanel.cpp`）：
 | **A3** | **VkCaps 能力探测（启动日志能力表）+ Pipeline Cache 持久化 + 调试面板能力表**；顺带修复：pipeline layout 每管线泄漏、退出时对象在命令缓冲中即销毁、单例析构晚于 `glfwTerminate` | ✅ |
 | **A2** | **CMakePresets（mac/linux/win + GL-only）+ VULKAN_SDK 探测 + glslang 硬校验 + `ENGINE_HAS_VULKAN` 对 app 可见 + 临时目录跨平台** | ✅ macOS 验证；Win/Linux 待实机 |
 | **B0** | **RHI v2 契约冻结**：DeviceDesc/NativeWindow、RenderTarget、SamplerDesc、TextureDesc(mip/sRGB/sampler)、ReadbackDesc、对象级销毁、结构化 DeviceCapabilities、setScissor。tag `rhi-v2-contract` | ✅ |
+| **B3c** | **sRGB 线性工作流 + mipmap**：VK sRGB 交换链与颜色纹理；GL sRGB 默认帧缓冲与 `GL_SRGB8_ALPHA8`；ImGui 双端色彩空间处理；GL RHI 纹理 Format/采样器/mipmap 对齐；修复 mip 链未生成与缺屏障 | ✅ |
 | M5 | 打包：MoltenVK Frameworks 内嵌（消除 DYLD_LIBRARY_PATH）、启动参数选后端 | 待做 |
 
 ## M3 调试历程（关键经验，都是真金白银换的）
@@ -112,6 +113,8 @@ Vulkan 后端从"创建即崩"到"像素回读验证通过"，共定位修复 **
 
 `RHI_PROBE=1`：第 30 帧 `vkCmdCopyImageToBuffer` 回读 swapchain 中心像素。
 冒烟三角形质心预期颜色 `119,136,119,255`，实测一致 ✅。GL/Vulkan 同源验证。
+B3c 改为线性工作流后，同一探针输出为 BGRA 字节 `215,140,122`（RGB `122,140,215`，
+线性插值后 sRGB 编码的预期值）；`RHI_TEXQUAD` 中心像素仍精确等于纹理色。
 
 ### M4.2b 调试战果（重要修复 + 经验）
 
@@ -241,6 +244,30 @@ Vulkan 后端在内部统一消化 GL↔VK 的坐标系差异，GL 路径与上�
 巨大鸭眼弧形。GL 侧 selfTestAB 的 frame_rhi.ppm 同样复现 → 属 DrawRHI/场景内容
 既有问题，与后端无关。
 
+### B3c：sRGB 线性工作流 + mipmap（2026-11-23，macOS MoltenVK 验证）
+
+颜色空间约定改为**线性工作流**，两端语义一致：
+
+| 环节 | GL | Vulkan |
+|---|---|---|
+| 交换链/默认帧缓冲 | `GL_FRAMEBUFFER_SRGB`（macOS 实测 `glClearColor(0.5)` 回读 188，编码生效） | 优先 `B8G8R8A8_SRGB`/`R8G8B8A8_SRGB` surface format；无则告警回退 UNORM |
+| 颜色纹理 | `GL_SRGB8_ALPHA8`（diffuse/specular/天空盒/地面 diffuse） | `Format::RGBA8_SRGB` |
+| 数据纹理 | `RGBA8/R8` 原值（法线/高度/遮罩/字体图集） | `Format::RGBA8_UNorm` |
+| 作者 sRGB 常量 | 清屏色、冒烟顶点色在 CPU 侧 `srgbToLinear`（`src/core/color/ColorSpace.h`） | 同一份 `RenderPassDesc`/顶点数据，行为一致 |
+| ImGui | 绘制前 `glDisable(GL_FRAMEBUFFER_SRGB)`，保持既有 gamma UI | 初始化后把 `ImGuiStyle::Colors` RGB 预转线性，写回编码后恢复原色 |
+
+- GL RHI 纹理创建补齐 `Format` 映射、sRGB、mipmap（`generateMips`/`mipLevels==0`）
+  与 `SamplerDesc` 的 filter/wrap/LOD；mip 链由 `glGenerateMipmap` 生成。
+- 顺带修复两个 B3 遗留缺陷：
+  1. `generateMips=true` 但未显式设 `mipLevels=0` 时只分配 1 级 —— 天空盒 mip
+     链实际从未生成；现改为“`generateMips` 且级数 ≤1 → 完整链”。
+  2. mip blit 的目标级没有 `UNDEFINED → TRANSFER_DST` 屏障（此前链路未真正启用，
+     验证层未暴露）；现逐级补屏障。
+- 验证：VK 验证层 0 error；`RHI_TEXQUAD` 中心像素仍精确 `180,60,220`（sRGB
+  解码+编码往返无损）；`RHI_SMOKE` 探针字节 `215,140,122`（BGRA → RGB
+  `122,140,215`）为线性插值再编码的预期结果；GL `selfTestAB` 的 RHI/GL 两张
+  帧图在天空/水面采样逐像素一致（差异仅剩已知的光源指示鸭 RHI 路径问题）。
+
 ### M4.3b 已知问题（M4.3c 优先）
 
 - **VK 模式 ImGui 面板不显示**：overlay 每帧调用（716 顶点）、DisplaySize=800×500
@@ -281,7 +308,7 @@ RHI 版本为树合并（`-s ours`），远程功能清单如下，待逐项移�
 
 - Vulkan 模式跳过全部 GL Pass（旧 Pass 构造/绘制是 GL 代码）；已迁移内容：
   冒烟三角形、贴图四边形（`RHI_TEXQUAD=1`，像素回读精确等于纹理颜色）
-- 纹理无 mipmap、暂无 sRGB、单采样级别；大纹理 staging 上传为一次性同步提交
+- ~~纹理无 mipmap、暂无 sRGB~~（B3/B3c 已完成：sRGB 纹理/交换链 + GPU mip 链）；大纹理 staging 上传为一次性同步提交
 - 描述符集为 frame-in-flight=1 的简化实现（bindTexture 直接更新，多飞行帧需换池化策略）
 - uniform 仅 push constant（80B：MVP+颜色）；材质/骨骼/光照数据需 UBO+描述符（M4.2）
 - `beginRenderPass` 不支持非默认帧缓冲（离屏渲染/阴影深度图 M4.2）

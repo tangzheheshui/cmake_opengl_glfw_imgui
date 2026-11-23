@@ -32,18 +32,28 @@
 - ✅ **B3b Reversed-Z + 深度范围**（同日验证）：MVP 类 mat4 在 VK setUniform
   后乘 `z'=0.5*(w-z)`（GL [-1,1] → VK [0,1] 且反转），比较算子 GREATER 族、
   清屏 0，天空盒远平面改 `z=0`；鸭子遮挡天空盒作回归断言。
-  B3 剩余：sRGB 交换链 + mipmap（见 P0 表 B3c）
+- ✅ **B3c sRGB 线性工作流 + mipmap 生效**（2026-11-23，macOS MoltenVK 验证）：
+  VK 优先选 sRGB 交换链（`B8G8R8A8_SRGB`，无则告警回退 UNORM）；RHI 颜色纹理
+  （diffuse/specular/天空盒/验证四边形）用 sRGB 格式，法线/高度保持线性；GL 侧
+  颜色贴图用 `GL_SRGB8_ALPHA8` + 默认帧缓冲 `GL_FRAMEBUFFER_SRGB`（实测编码
+  生效），ImGui 在 GL 下关闭该开关、VK 下预转线性样式色；清屏色/冒烟顶点色等
+  作者 sRGB 常量上传前转线性。顺带修复：`generateMips` 单独使用时只分配 1 级
+  （天空盒 mip 链实际未生成）+ mip blit 目标级缺 UNDEFINED→TRANSFER_DST 屏障
+  （启用完整链后被验证层捕获）。验证：VK 验证层 0 error；`RHI_TEXQUAD` 中心
+  像素仍精确 180,60,220（sRGB 解码+编码往返无损）；`RHI_SMOKE` 探针字节
+  215,140,122（BGRA → RGB 122,140,215）为顶点色在线性空间插值后再编码的预期
+  结果（旧 gamma 管线为 119,136,119，差异属色彩空间修正）。
 - ✅ **顺带修复退出段错误**（基线即崩，非 B3 引入）：`FontManager::face`
   未初始化，VK 模式不加载字体时 `FT_Done_Face(垃圾指针)` 崩溃；
   `RHI_EXIT_AFTER` 回归路径恢复可用（exit=0）
 - ⚠ **已知小问题（不阻塞，已记录）**：
   1. 中文安装路径下 Assimp 打不开模型（A4：Windows UTF-8/宽字符路径）；
-  2. resize 仍走“重建 PSO”路径（B1：Dynamic Rendering）；
-  3. B3 剩余：sRGB 交换链 + mipmap（VK 当前 UNORM 交换链、mipLevels=1）；
-  4. 光源指示鸭（objLight，scale 0.5）包住相机 → 画面顶部巨鸭弧形，
+  2. 光源指示鸭（objLight，scale 0.5）包住相机 → 画面顶部巨鸭弧形，
      RHI 绘制路径固有（GL selfTestAB 的 frame_rhi.ppm 同样复现），随 D 系列处理
-- ✅ **收尾状态**：所有改动已提交并推送（origin/master）；
-  Windows Vulkan 实机可运行，验证层 0 error；ImGui 面板可见（CJK 字体）
+- ✅ **已解决**：resize 重建 PSO（B1 Dynamic Rendering）；
+  sRGB 交换链/纹理与 mipmap 未生成（B3c）
+- ✅ **收尾状态**：B1/B5/B3c 已落地；Windows Vulkan 实机可运行，
+  验证层 0 error；ImGui 面板可见（CJK 字体）
 
 ## 剩余工作总览（2026-11-23 收尾版，评审用）
 
@@ -54,9 +64,9 @@
 |--------|----|--------|------|------|--------|------|
 | P0 | B3a | ~~Y 翻转：负高度 viewport，并移除 dump 行翻转~~ | ✅ 完成（2026-11-23 实机验证） | B0 | — | S–M |
 | P0 | B3b | ~~深度：Vulkan 投影 z∈[0,1] + Reversed-Z~~ | ✅ 完成（同日验证） | B3a | — | M |
-| P0 | B3c | sRGB 交换链 + 纹理 sRGB/mipmap（GL/VK 视觉对齐的剩余项） | VK UNORM 交换链、mipLevels=1 | B3b | 与 A4 并行 | S–M |
+| P0 | B3c | ~~sRGB 交换链 + 纹理 sRGB/mipmap（GL/VK 视觉对齐）~~ | ✅ 完成（2026-11-23，VK 验证层 0 error） | B3b | 与 A4 并行 | S–M |
 | P0 | A4 | Windows UTF-8/宽字符路径（Assimp IOSystem、纹理/着色器/缓存路径） | 中文安装路径加载失败 | 无 | **可与 B3 并行**（资源/IO） | M |
-| P0 | B1 | Dynamic Rendering + resize/ImGui 失效收尾 | 固定 render pass；resize 重建 PSO | B0 | 与 B3 串行（VkDevice/管线） | M |
+| P0 | B1 | ~~Dynamic Rendering + resize/ImGui 失效收尾~~ | ✅ 完成（2026-11-23） | B0 | 与 B3 串行（VkDevice/管线） | M |
 | P0 | B2 | GL 后端 v2：render target / sampler / readback / caps | 契约已冻结，GL 未实现 | B0 | **可并行** | M |
 | P0 | B4 | 离屏 RenderTarget + readback | 仅默认 framebuffer | B1 | 与 B2 并行；与 B1 串行（VkDevice） | M |
 | P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
@@ -71,10 +81,9 @@
 
 ### 推荐执行顺序（评审后再定）
 
-1. **第一波（正确性收尾）**：~~B3a → B3b~~ ✅ 已完成（2026-11-23）；
-   剩余 **B3c（sRGB/mipmap）+ A4**。B3c 与本机 VK 环境可直接验证；
-   A4 只动资源/IO 层，可同时进行。
-2. **第二波（RHI 基座）**：B1 → B4；B2 并行。B1/B4 同改 `VkDevice`，需串行或同一人。
+1. **第一波（正确性收尾）**：~~B3a → B3b → B3c~~ ✅ 已完成（2026-11-23）；
+   剩余 **A4**（只动资源/IO 层）。
+2. **第二波（RHI 基座）**：~~B1~~ ✅ → B4；B2 并行。B1/B4 同改 `VkDevice`，需串行或同一人。
 3. **第三波（ZW3D 接入）**：C1/C2 + D2/D4/D7；D1 等 B3 完成后做。
 4. **第四波（大装配）**：E1/E2 → E3/E5。
 5. **第五波（工程化）**：F1/F2。
@@ -204,10 +213,11 @@ EDS 1、多队列、Subgroup、Ray Query 拾取、HDR、GPL。
 | 只构建 app 时缺 SPIR-V | ✅ 已解决（`11d4dfa`） | `my_app` 依赖 `vk_shaders` |
 | swapchain semaphore 复用 / probe 布局 | ✅ 已解决（`e19a227`） | per-image render-done + probe 移到 present 前 |
 | Y 翻转 | ✅ 已解决（B3a，2026-11-23） | 负高度 viewport + maintenance1 扩展 + frontFace=CW；dump 行翻转已移除 |
-| 深度范围 z∈[-1,1] / 大范围精度 | ✅ 已解决（B3b，2026-11-23） | Reversed-Z：setUniform 后乘 z 修正 + GREATER 族 + 清屏 0；sRGB/mipmap 归 B3c |
+| 深度范围 z∈[-1,1] / 大范围精度 | ✅ 已解决（B3b，2026-11-23） | Reversed-Z：setUniform 后乘 z 修正 + GREATER 族 + 清屏 0 |
+| sRGB / mipmap 未生效 | ✅ 已解决（B3c，2026-11-23） | VK sRGB 交换链/纹理 + GL sRGB 帧缓冲/纹理；`generateMips` 完整链 + 每级 DST 屏障修复 |
 | VK 模式退出段错误 | ✅ 已解决（2026-11-23） | `FontManager::face` 未初始化；VK 不加载字体时 FT_Done_Face 崩溃，NSDMI + 空值保护 |
 | 中文安装路径加载失败 | ⏳ 待修 A4 | Assimp/纹理/着色器路径需 UTF-8/宽字符 |
-| resize 重建 PSO / ImGui 失效 | ⏳ 待修 B1 | Dynamic Rendering 一并解决 |
+| resize 重建 PSO / ImGui 失效 | ✅ 已解决（B1，2026-11-23） | Dynamic Rendering；resize 不再重建 PSO |
 | 描述符“当前块”隐式残留 | ⏳ 待修 B1/E1 | 每 draw 显式 block 或每 draw 独立描述符集 |
 | 阴影 / 地面 / 文字（demo） | 部分 | 文字 D4；阴影/地面非产品需求，不投入 |
 | pipeline layout 生命周期 | ✅ A3 已修 | 后续 B1 重建管线时保持 |

@@ -31,6 +31,7 @@
 #include "app/DebugPanel.h"
 #include "rhi/IRHICommandList.h"
 #include "rhi/IRHIDevice.h"   // UI 层：ImGui 面板只在 app 层使用，不进引擎库
+#include "color/ColorSpace.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -85,6 +86,8 @@ int main()
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        // B3c：线性工作流要求默认帧缓冲可做 sRGB 编码
+        glfwWindowHint(GLFW_SRGB_CAPABLE, GLFW_TRUE);
     }
 
 #ifdef __APPLE__
@@ -116,6 +119,24 @@ int main()
     {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
+    }
+    if (!useVulkan) {
+        // B3c：GLFW 不报告 GLFW_SRGB_CAPABLE（macOS 所有像素格式都支持 sRGB，
+        // 无该查询项），直接向默认帧缓冲询问颜色编码。
+        GLint encoding = 0;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glGetFramebufferAttachmentParameteriv(
+            GL_FRAMEBUFFER, GL_BACK, GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &encoding);
+        std::printf("[GL] default framebuffer color encoding = %s\n",
+                    encoding == GL_SRGB ? "sRGB" : "linear");
+        // 诊断：GL_FRAMEBUFFER_SRGB 是否真的生效（0.5 线性 → sRGB ≈ 188）
+        glEnable(GL_FRAMEBUFFER_SRGB);
+        glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        unsigned char probe[4] = {0, 0, 0, 0};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, probe);
+        glDisable(GL_FRAMEBUFFER_SRGB);
+        std::printf("[GL] sRGB encode probe = %d (128=linear, 188=sRGB)\n", probe[0]);
     }
     
     // ��ʼ�� ImGui
@@ -247,6 +268,17 @@ int main()
         };
         ImGui_ImplVulkan_Init(&init);
 
+        // B3c：VK 交换链为 sRGB，写回时硬件做 linear→sRGB 编码。ImGui 样式色
+        // 是 sRGB 作者值，若直接写会被二次编码（UI 发白）→ 预转线性。
+        {
+            ImVec4* colors = ImGui::GetStyle().Colors;
+            for (int i = 0; i < ImGuiCol_COUNT; ++i) {
+                colors[i].x = color::srgbToLinear(colors[i].x);
+                colors[i].y = color::srgbToLinear(colors[i].y);
+                colors[i].z = color::srgbToLinear(colors[i].z);
+            }
+        }
+
         // UI 在 RHI render pass 内渲染（场景之后）
         RenderSystem::getInstance().setOverlayRenderer([](rhi::IRHICommandList* cmd) {
             ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
@@ -300,6 +332,9 @@ int main()
         RenderSystem::getInstance().draw();
 
         if (!useVulkan) {
+            // B3c：ImGui（GL backend）保持既有 gamma 空间外观；场景已在
+            // RenderSystem::draw() 内开启 GL_FRAMEBUFFER_SRGB。
+            glDisable(GL_FRAMEBUFFER_SRGB);
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();

@@ -67,20 +67,22 @@ ImageBuffer TextureMng::getTextureData(const std::string &filename, int &width, 
     return iter->second.data;
 }
 
-unsigned int TextureMng::getTexture(const std::string &filename) {
+unsigned int TextureMng::getTexture(const std::string &filename, bool srgbColor) {
     // 阴影深度纹理惰性创建（首次使用时才触碰 GL）
     if (filename == STR_DEPTH_TEXTURE && m_map_textures.find(STR_DEPTH_TEXTURE) == m_map_textures.end()) {
         createShadowTexture();
     }
+    // 同一图像可能既作颜色贴图又作数据贴图（罕见）：按色彩空间分键缓存
+    const std::string cacheKey = srgbColor ? filename + "\x01srgb" : filename;
     std::lock_guard guard(m_mutex);
-    auto iter = m_map_textures.find(filename);
+    auto iter = m_map_textures.find(cacheKey);
     if (iter != m_map_textures.end()) {
         return iter->second;
     }
-    
+
     auto iter1 = m_map_tex_data.find(filename);
     if (iter1 != m_map_tex_data.end()) {
-        auto tex = genTexture(iter1->second);
+        auto tex = genTexture(iter1->second, srgbColor);
         
         // M4.2b：不再擦除原始数据——RHI 路径需要用它创建后端纹理对象
         //（原实现用完即删，导致 GL 路径先取数后 RHI 路径拿到空数据）。
@@ -121,11 +123,11 @@ void TextureMng::createSkyTexture() {
     
 }
 
-unsigned int TextureMng::genTexture(const Texture& tex) {
+unsigned int TextureMng::genTexture(const Texture& tex, bool srgbColor) {
     unsigned int textureID = -1;
     if (!tex.data->empty()) {
         glGenTextures(1, &textureID);
-        
+
         GLenum format = 0;
         if (tex.format == 1)
             format = GL_RED;
@@ -133,17 +135,26 @@ unsigned int TextureMng::genTexture(const Texture& tex) {
             format = GL_RGB;
         else if (tex.format == 4)
             format = GL_RGBA;
-        
+
+        // B3c：颜色贴图用 sRGB 内部格式（采样时硬件解码到线性）。
+        // 单通道是数据/遮罩，不参与颜色转换。
+        GLenum internalFormat = format;
+        if (srgbColor && tex.format >= 3) {
+            internalFormat = GL_SRGB8_ALPHA8;
+        }
+
         glBindTexture(GL_TEXTURE_2D, textureID);
-        glTexImage2D(GL_TEXTURE_2D, 0, format, tex.width, tex.height, 0, format, GL_UNSIGNED_BYTE, tex.data->data());
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, tex.width, tex.height, 0,
+                     format, GL_UNSIGNED_BYTE, tex.data->data());
         glGenerateMipmap(GL_TEXTURE_2D);
-        
+
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        
-        m_map_textures[tex.filepath] = textureID;
+
+        const std::string cacheKey = srgbColor ? tex.filepath + "\x01srgb" : tex.filepath;
+        m_map_textures[cacheKey] = textureID;
     }
     return textureID;
 }
@@ -160,7 +171,9 @@ unsigned int TextureMng::getCubeTexture(std::array<std::string, 6> faces) {
         unsigned char *data = stbi_load(file.c_str(), &width, &height, &nrChannels, 0);
         if (data)
         {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+            // B3c：天空盒是颜色贴图，sRGB 内部格式随交换链 sRGB 编码形成往返
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_SRGB8_ALPHA8,
+                         width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
             stbi_image_free(data);
         }
         else

@@ -123,6 +123,7 @@ device->endFrame();
 |------|----|--------|
 | 着色器 | res/shaders/（GLSL 直编） | res/shaders_vk/（GLSL→SPIR-V 构建期） |
 | uniform | glUniform 按名 | push constant 固定布局（MVP@0 mat4 / color@64 vec4） |
+| 颜色空间 | 默认帧缓冲 `GL_FRAMEBUFFER_SRGB` + 颜色纹理 `GL_SRGB8_ALPHA8` | sRGB 交换链 + `Format::RGBA8_SRGB` 颜色纹理 |
 | Pass 边界状态 | 保存/恢复（GLCommandList） | 天然隔离 |
 | 遗留 GL Pass | 全部可用 | 跳过（M4 迁移） |
 | 字体/文字 | FreeType→GL 纹理 | 未迁移（M4） |
@@ -146,8 +147,8 @@ device->endFrame();
 
 ## 已知限制
 
-- Vulkan 模式仅渲染 RHI 迁移内容（冒烟三角形），GL Pass 未迁移（M4）
-- ImGui Vulkan backend 已接入但 VK 模式面板不可见（B5/M4.3b）；能力表可看启动日志
-- Vulkan 仅 1 个全局平行光 / 无 PBR / 深度附件未接入（M4 管线需要）
+- Vulkan 模式渲染 RHI 迁移内容（模型/天空盒/线/验证叠加）；阴影、拾取、文字等 GL Pass 尚未迁移
+- ImGui Vulkan backend 已接入，VK 模式面板可见（B1 动态渲染模式）
+- Vulkan 仅 1 个全局平行光 / 无 PBR；阴影/拾取/文字 Pass 待迁移
 - 纹理资源 96MB 未用 Git LFS
-- RHI 对象级销毁接口未暴露（资源随 device 生命周期回收）
+- RHI 对象级销毁已实现（buffer/texture/pipeline/uniform block）；离屏 RenderTarget 与 readback 未实现（B4）
