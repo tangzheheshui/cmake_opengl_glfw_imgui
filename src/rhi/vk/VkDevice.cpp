@@ -110,9 +110,13 @@ VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath
     // A1: 加载对象命名函数指针（debug_utils 扩展启用后可用）
     _setNameFn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
         vkGetInstanceProcAddr(_instance, "vkSetDebugUtilsObjectNameEXT"));
-    _commandList = std::make_unique<VkCommandList>(this);
     createWhiteFallbackTexture();   // 先于描述符对象：默认 uniform block 需引用白纹理
     createDescriptorObjects();
+    // B4：命令列表必须在默认 uniform block 之后创建——VkCommandList 构造函数
+    // 取 defaultUniformBlock() 作为 _curUniformBlock 初值（此前命令列表在前，
+    // 初值为无效句柄；所有真实绘制都先调 setDrawUniforms 掩盖了这个潜伏缺陷，
+    // RT 内首个未设 block 的 draw 触发越界）
+    _commandList = std::make_unique<VkCommandList>(this);
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -1029,6 +1033,249 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
     b = VkUniformBlockRes{};
 }
 
+// ---- B4：离屏渲染目标 ----
+RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc) {
+    if (desc.width == 0 || desc.height == 0) {
+        ENGINE_LOG_ERROR("[VK] createRenderTarget: zero-sized target");
+        return {};
+    }
+    VkRenderTargetRes rt;
+    rt.width = desc.width;
+    rt.height = desc.height;
+
+    // 颜色附件走纹理机制：采样（bindTexture/描述符）、附件、回读（TRANSFER_SRC）一体
+    TextureDesc td;
+    td.width  = desc.width;
+    td.height = desc.height;
+    td.format = desc.colorFormat;
+    td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
+    td.mipLevels = desc.mipLevels;
+    td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
+    rt.colorTex = createTexture(td);
+    if (!rt.colorTex.valid()) {
+        return {};
+    }
+
+    // 深度附件：独立 image/view（storeOp=DONT_CARE，跨 Pass 不保内容）
+    if (desc.hasDepth) {
+        VkFormat depthFmt = VK_FORMAT_UNDEFINED;
+        switch (desc.depthFormat) {
+            case Format::Depth32F: depthFmt = VK_FORMAT_D32_SFLOAT; break;
+            case Format::D24S8:    depthFmt = VK_FORMAT_D24_UNORM_S8_UINT; break;
+            default: depthFmt = findSupportedDepthFormat(_physicalDevice); break;
+        }
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = depthFmt;
+        ici.extent        = {desc.width, desc.height, 1};
+        ici.mipLevels     = 1;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VK_CHECK(vkCreateImage(_device, &ici, nullptr, &rt.depthImage));
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(_device, rt.depthImage, &req);
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.allocationSize  = req.size;
+        mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &rt.depthMemory));
+        VK_CHECK(vkBindImageMemory(_device, rt.depthImage, rt.depthMemory, 0));
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image    = rt.depthImage;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = depthFmt;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &rt.depthView));
+    }
+
+    _renderTargets.push_back(rt);
+    const uint32_t id = static_cast<uint32_t>(_renderTargets.size());
+    char name[48];
+    std::snprintf(name, sizeof(name), "RHI_RenderTarget_%u", id);
+    const VkTextureRes& ct = _renderTargets.back().colorTex.valid()
+        ? textureRes(_renderTargets.back().colorTex) : VkTextureRes{};
+    if (ct.image) {
+        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(ct.image), name);
+    }
+    if (_renderTargets.back().depthImage) {
+        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_renderTargets.back().depthImage), name);
+    }
+    ENGINE_LOG_INFO("[VK] render target %ux%u created (id=%u, depth=%d)",
+                    desc.width, desc.height, id, desc.hasDepth ? 1 : 0);
+    RenderTargetHandle h; h.id = id;
+    return h;
+}
+
+void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
+    if (!h.valid() || h.id > _renderTargets.size()) return;
+    VkRenderTargetRes& rt = _renderTargets[h.id - 1];
+    if (!rt.alive && !rt.colorTex.valid()) return;
+    destroyTexture(rt.colorTex);
+    if (rt.depthView)   vkDestroyImageView(_device, rt.depthView, nullptr);
+    if (rt.depthImage)  vkDestroyImage(_device, rt.depthImage, nullptr);
+    if (rt.depthMemory) vkFreeMemory(_device, rt.depthMemory, nullptr);
+    rt = VkRenderTargetRes{};
+    rt.alive = false;   // 槽位保留（id 不复用）
+}
+
+TextureHandle VulkanDevice::renderTargetColorTexture(RenderTargetHandle h) const {
+    if (!h.valid() || h.id > _renderTargets.size()) return {};
+    return _renderTargets[h.id - 1].colorTex;
+}
+
+// ---- B4：同步回读（契约 ReadbackDesc；submitOneTime 等待完成）----
+bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
+                                   const ReadbackDesc& rb) {
+    if (!tex.valid() || tex.id > _textures.size() || !outData) return false;
+    const VkTextureRes& t = _textures[tex.id - 1];
+    if (!t.image || t.bpp == 0) return false;
+
+    // 区域：宽高 0 = 整级（mip 级尺寸按 2^level 收缩）
+    const uint32_t mipW = std::max(1u, t.width  >> rb.mipLevel);
+    const uint32_t mipH = std::max(1u, t.height >> rb.mipLevel);
+    const uint32_t w = rb.width  ? std::min(rb.width,  mipW) : mipW;
+    const uint32_t h = rb.height ? std::min(rb.height, mipH) : mipH;
+    const size_t bytes = static_cast<size_t>(w) * h * t.bpp;
+    if (outSize < bytes) {
+        ENGINE_LOG_WARN("[VK] readback: outSize %zu < %zu bytes", outSize, bytes);
+        return false;
+    }
+
+    // 回读缓冲（HOST_VISIBLE，行距 0 = 紧凑）
+    VkBuffer dst;
+    VkDeviceMemory dstMem;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size  = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &dst));
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(_device, dst, &req);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &dstMem));
+    VK_CHECK(vkBindBufferMemory(_device, dst, dstMem, 0));
+
+    VkImageLayout curLayout = t.layout;   // lambda 内访问布局快照
+    const VkImage image = t.image;
+    submitOneTime([this, image, curLayout, dst, w, h, mip = rb.mipLevel, layer = rb.arrayLayer, bytes](VkCommandBuffer cb) {
+        // 当前布局（SHADER_READ_ONLY/UNDEFINED）→ TRANSFER_SRC
+        VkImageMemoryBarrier toSrc{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toSrc.oldLayout = curLayout;
+        toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.image = image;
+        toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &toSrc);
+        VkBufferImageCopy region{};
+        region.bufferRowLength = 0;   // 紧凑存放
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, layer, 1};
+        region.imageExtent = {w, h, 1};
+        vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, 1, &region);
+        // 回 SHADER_READ_ONLY（采样正常可用）
+        VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toRead.image = image;
+        toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &toRead);
+    }, [this, dst, dstMem, outData, bytes]() {
+        // GPU 完成后回读（submitOneTime 的完成回调）
+        void* mapped = nullptr;
+        if (vkMapMemory(_device, dstMem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
+            std::memcpy(outData, mapped, bytes);
+            vkUnmapMemory(_device, dstMem);
+        }
+        vkDestroyBuffer(_device, dst, nullptr);
+        vkFreeMemory(_device, dstMem, nullptr);
+    });
+    // 布局跟踪回写（submitOneTime 已同步完成）
+    _textures[tex.id - 1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    return true;
+}
+
+// ---- B4：RT 布局屏障（命令列表在 beginRenderPass/endRenderPass 的 RT 分支调用）----
+void VulkanDevice::recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTargetHandle rt) {
+    VkRenderTargetRes& r = _renderTargets[rt.id - 1];
+    if (r.colorTex.valid()) {
+        VkTextureRes& t = _textures[r.colorTex.id - 1];
+        if (t.image && t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            bar.srcAccessMask = (t.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                    ? VK_ACCESS_SHADER_READ_BIT : 0;
+            bar.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            bar.oldLayout = t.layout;
+            bar.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.image = t.image;
+            bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cb,
+                                 t.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                     ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &bar);
+            t.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+    }
+    if (r.depthImage && r.depthLayout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        // 首次使用：UNDEFINED → DEPTH_STENCIL_ATTACHMENT（loadOp 恒 CLEAR，内容本就丢弃）。
+        // 注意用 1.0 时代的 DEPTH_STENCIL_ATTACHMENT_OPTIMAL：DEPTH_ATTACHMENT_OPTIMAL
+        // 是 1.2 布局，需要 separate_depth_stencil_layouts 扩展（实例按 1.0 请求时不可用）
+        VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        bar.srcAccessMask = 0;
+        bar.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        bar.oldLayout = r.depthLayout;
+        bar.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.image = r.depthImage;
+        bar.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &bar);
+        r.depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    }
+}
+
+void VulkanDevice::recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTargetHandle rt) {
+    VkRenderTargetRes& r = _renderTargets[rt.id - 1];
+    if (!r.colorTex.valid()) return;
+    VkTextureRes& t = _textures[r.colorTex.id - 1];
+    if (!t.image || t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
+    VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+    bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    bar.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.image = t.image;
+    bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                         0, nullptr, 0, nullptr, 1, &bar);
+    t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+}
+
 TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     VkTextureRes t;
     t.width = desc.width; t.height = desc.height;
@@ -1064,12 +1311,16 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     ici.samples       = VK_SAMPLE_COUNT_1_BIT;
     if (desc.cubemap) ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    // B4：TRANSFER_SRC 恒开（readbackTexture 回读）；COLOR_ATTACHMENT 按 desc
     ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT
+                      | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
                       | (desc.initialData ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0)
-                      | (generateMips ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+                      | (generateMips ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0)
+                      | ((desc.usage & TEX_COLOR_ATTACHMENT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
     ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VK_CHECK(vkCreateImage(_device, &ici, nullptr, &t.image));
+    t.bpp = bpp;   // B4：readback 区域字节数计算用
 
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(_device, t.image, &req);
@@ -1111,7 +1362,8 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         vkUnmapMemory(_device, stagingMem);
 
         deferGpuWork([this, t, staging, stagingMem, w = desc.width, h = desc.height,
-                      bpp, layerCount, mipLevels, generateMips](VkCommandBuffer cb) {
+                      bpp, layerCount, mipLevels, generateMips,
+                      newTexId = static_cast<uint32_t>(_textures.size()) + 1](VkCommandBuffer cb) {
 
             VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             bar.srcAccessMask = 0;
@@ -1205,6 +1457,10 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
                 vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
                                      0, nullptr, 0, nullptr, 1, &bar);
+            }
+            // B4：布局跟踪（上传完成的稳定布局；附件/回读转换以此为基）
+            if (newTexId <= _textures.size()) {
+                _textures[newTexId - 1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
         }, [this, staging, stagingMem]() {
             vkDestroyBuffer(_device, staging, nullptr);

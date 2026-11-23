@@ -57,8 +57,14 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
     saveState(_savedState);
     _stateSaved = true;
 
-    // 帧缓冲：0 = 屏幕（默认帧缓冲），其它 = 现有 FBO 直通（阴影 Pass）
-    glBindFramebuffer(GL_FRAMEBUFFER, desc.framebufferId);
+    // B4：离屏 RenderTarget（RHI 资源 FBO）优先于 v1 遗留 FBO 直通
+    if (desc.renderTarget.valid()) {
+        const GLRenderTarget& rt = _device->renderTarget(desc.renderTarget);
+        glBindFramebuffer(GL_FRAMEBUFFER, rt.alive ? rt.fbo : 0);
+    } else {
+        // 帧缓冲：0 = 屏幕（默认帧缓冲），其它 = 现有 FBO 直通（阴影 Pass）
+        glBindFramebuffer(GL_FRAMEBUFFER, desc.framebufferId);
+    }
 
     if (desc.clearColor) {
         glClearColor(desc.clearColorValue[0], desc.clearColorValue[1],
@@ -70,11 +76,17 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
         glClear(GL_DEPTH_BUFFER_BIT);
     }
 
-    // 视口：desc 未指定时取窗口大小（Retina 下 framebuffer 尺寸 ≠ 窗口尺寸）
+    // 视口：desc 未指定时取 RT 尺寸（B4）或窗口大小（Retina 下 framebuffer 尺寸 ≠ 窗口尺寸）
     int w = static_cast<int>(desc.viewportWidth);
     int h = static_cast<int>(desc.viewportHeight);
     if (w <= 0 || h <= 0) {
-        glfwGetFramebufferSize(_device->window(), &w, &h);
+        if (desc.renderTarget.valid()) {
+            const GLRenderTarget& rt = _device->renderTarget(desc.renderTarget);
+            w = static_cast<int>(rt.width);
+            h = static_cast<int>(rt.height);
+        } else {
+            glfwGetFramebufferSize(_device->window(), &w, &h);
+        }
     }
     glViewport(0, 0, w, h);
 }

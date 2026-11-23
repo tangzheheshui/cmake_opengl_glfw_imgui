@@ -33,6 +33,7 @@
 #include "rhi/IRHIDevice.h"   // UI 层：ImGui 面板只在 app 层使用，不进引擎库
 #include "color/ColorSpace.h"
 #include "fs/FilePathUtil.h"
+#include "debug/CrashBacktrace.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -63,6 +64,13 @@ static VkDescriptorPool g_imguiDescriptorPool = VK_NULL_HANDLE;
 
 int main()
 {
+    // RHI_DEBUG_LOG=1：stdout 无缓冲（崩溃/abort 时 MoltenVK 内部日志不丢）+
+    // SIGABRT/SIGSEGV 打印 backtrace（MVK 内部静默 abort 的定位手段）
+    if (std::getenv("RHI_DEBUG_LOG")) {
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
+        engine::debug::installCrashBacktrace();
+    }
+
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();

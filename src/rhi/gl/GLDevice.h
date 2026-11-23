@@ -31,6 +31,21 @@ struct GLBuffer {
 struct GLTexture {
     GLuint id = 0;
     bool   cubemap = false;   // 立方体贴图（绑定时用 GL_TEXTURE_CUBE_MAP 目标）
+    // B4：readback 需要的尺寸/格式（回读按创建格式选取 glGetTexImage 参数）
+    uint32_t width  = 0;
+    uint32_t height = 0;
+    Format   format = Format::RGBA8_UNorm;
+};
+
+// B4：离屏渲染目标（FBO + 颜色纹理 + 深度 RBO）。
+// 颜色纹理复用 GLTexture（createTexture），采样/回读通用。
+struct GLRenderTarget {
+    GLuint         fbo = 0;
+    TextureHandle  colorTex;
+    GLuint         depthRbo = 0;
+    uint32_t       width  = 0;
+    uint32_t       height = 0;
+    bool           alive  = true;
 };
 
 struct GLPipeline {
@@ -58,6 +73,13 @@ public:
     void destroyTexture(TextureHandle) override;
     void destroyPipeline(PipelineHandle) override;
 
+    // v2 离屏渲染目标 + 同步回读（B4）
+    RenderTargetHandle createRenderTarget(const RenderTargetDesc& desc) override;
+    void destroyRenderTarget(RenderTargetHandle) override;
+    TextureHandle renderTargetColorTexture(RenderTargetHandle) const override;
+    bool readbackTexture(TextureHandle, void* outData, size_t outSize,
+                         const ReadbackDesc& = {}) override;
+
     void beginFrame() override {}
     void endFrame()   override {}
     void waitIdle()   override;
@@ -70,6 +92,7 @@ public:
     const GLBuffer&   buffer(BufferHandle h) const;
     const GLTexture&  texture(TextureHandle h) const;   // 注意：GL 的 buffer/texture 是独立 id 空间，不可混用
     const GLPipeline& pipeline(PipelineHandle h) const;
+    const GLRenderTarget& renderTarget(RenderTargetHandle h) const;
     GLFWwindow*       window() const { return _window; }
 
 private:
@@ -80,6 +103,7 @@ private:
     std::vector<GLBuffer>   _buffers;
     std::vector<GLTexture>  _textures;
     std::vector<GLPipeline> _pipelines;
+    std::vector<GLRenderTarget> _renderTargets;   // B4
 
     std::unique_ptr<GLCommandList> _commandList;
 };

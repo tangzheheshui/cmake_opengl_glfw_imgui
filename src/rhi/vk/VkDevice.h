@@ -48,6 +48,13 @@ public:
     void destroyPipeline(PipelineHandle) override;
     void destroyUniformBlock(UniformBlockHandle) override;
 
+    // v2 离屏渲染目标 + 同步回读（B4）
+    RenderTargetHandle createRenderTarget(const RenderTargetDesc& desc) override;
+    void destroyRenderTarget(RenderTargetHandle) override;
+    TextureHandle renderTargetColorTexture(RenderTargetHandle) const override;
+    bool readbackTexture(TextureHandle, void* outData, size_t outSize,
+                         const ReadbackDesc& = {}) override;
+
     void beginFrame() override;
     void endFrame()   override;
     void waitIdle()   override;
@@ -73,6 +80,8 @@ public:
     const VkPipelineRes& pipelineRes(PipelineHandle h) const { return _pipelines[h.id - 1]; }
     const VkTextureRes&  textureRes(TextureHandle h) const { return _textures[h.id - 1]; }
     const VkUniformBlockRes& uniformBlockRes(UniformBlockHandle h) const { return _uniformBlocks[h.id - 1]; }
+    const VkRenderTargetRes& renderTargetRes(RenderTargetHandle h) const { return _renderTargets[h.id - 1]; }
+    VkTextureRes&       textureResMut(TextureHandle h) { return _textures[h.id - 1]; }
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
     VkDescriptorSetLayout texSetLayout() const { return _texSetLayout; }
     VkDescriptorPool      texDescriptorPool() const { return _texDescriptorPool; }
@@ -83,6 +92,9 @@ public:
     VkImageView depthImageView() const { return _depthView; }
     // beginRenderPass 前的图像布局屏障（color → COLOR_ATTACHMENT / depth 首帧转换）
     void recordBeginPassBarriers(VkCommandBuffer cb, bool clearColor, bool clearDepth);
+    // B4：离屏 RT 的布局屏障（命令列表在 RT 分支调用）
+    void recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTargetHandle rt);
+    void recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTargetHandle rt);
     // endFrame 提交前的 color → PRESENT_SRC 转换（dynamic rendering 无自动 finalLayout）
     void recordPresentBarrier(VkCommandBuffer cb);
     VkCommandBuffer commandBuffer() const { return _commandBuffer; }
@@ -173,6 +185,7 @@ private:
     std::vector<VkTextureRes> _textures;
     TextureHandle _whiteTex;
     TextureHandle _whiteCubeTex;
+    std::vector<VkRenderTargetRes> _renderTargets;   // B4：离屏渲染目标
     std::vector<VkUniformBlockRes> _uniformBlocks;
     UniformBlockHandle _defaultUniformBlock;   // 未显式持有 block 的绘制使用
 

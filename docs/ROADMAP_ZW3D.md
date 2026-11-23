@@ -55,6 +55,25 @@
   （临时目录可能含中文用户名）。验证：GL/VK 双后端 `RHI_EXIT_AFTER=60`
   exit=0；整个工程复制到 `/tmp/中文路径A4测试/` 后模型/纹理/着色器/字体/
   管线缓存全部正常加载。**Windows 中文安装路径待实机复验**
+- ✅ **B4 离屏 RenderTarget + readback**（2026-11-23，macOS GL/VK 双端验证）：
+  契约接口全量落地（`createRenderTarget/destroyRenderTarget/renderTargetColorTexture/
+  readbackTexture` + `RenderPassDesc::renderTarget`）。VK：颜色附件复用纹理机制
+  （SAMPLED|COLOR_ATTACHMENT|TRANSFER_SRC，bindTexture 直接采样），深度附件独立
+  image/view，布局跟踪屏障（COLOR_ATTACHMENT↔SHADER_READ_ONLY 回环）；GL：FBO +
+  颜色纹理 + 深度 RBO，beginRenderPass 按 RT 切换（状态保存/恢复沿用既有约定）。
+  顺带修复三个真缺陷：
+  1. **VkCommandList 创建早于默认 uniform block**（潜伏缺陷：`_curUniformBlock`
+     初值无效，所有真实绘制都先调 setDrawUniforms 掩盖；RT 内首个未设 block 的
+     draw 触发 libc++ 越界 abort）→ 调整创建顺序 + applyPushConstants 兜底回退；
+  2. **1.2 图像布局用于 1.0 实例**：`DEPTH_ATTACHMENT_OPTIMAL` 需要
+     separate_depth_stencil_layouts 扩展，RT 深度改用 `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`；
+  3. readback 走 submitOneTime 同步等待，mip/arrayLayer 子资源支持。
+  验证（`RHI_RT_TEST=1`）：128×128 RT + 冒烟三角形，GL/VK 回读**逐字节一致**
+  （corner 124,89,63,255 精确 = 清屏色编码；center 214,142,121,255 = 顶点色线性
+  插值后 sRGB 编码）。已知契约差异：**行序**——VK 图像 row 0 = 画面顶部，
+  GL 附件回读 row 0 = 画面底部（y-up），跨端比对需镜像行（harness 已按后端
+  取样；统一行序随 B2 收口）。**RT 格式约束**：VK 管线烘焙 swapchain 附件格式，
+  RT 颜色/深度格式必须与之兼容（跨格式管线变体属 D5）。
 - ⚠ **已知小问题（不阻塞，已记录）**：
   1. 中文安装路径下 Assimp 打不开模型（A4：Windows UTF-8/宽字符路径）；
   2. 光源指示鸭（objLight，scale 0.5）包住相机 → 画面顶部巨鸭弧形，
@@ -77,7 +96,7 @@
 | P0 | A4 | ~~Windows UTF-8/宽字符路径（Assimp IOSystem、纹理/着色器/缓存路径）~~ | ✅ 完成（2026-11-23 macOS 中文路径验证；Windows 实机待复验） | 无 | — | M |
 | P0 | B1 | ~~Dynamic Rendering + resize/ImGui 失效收尾~~ | ✅ 完成（2026-11-23） | B0 | 与 B3 串行（VkDevice/管线） | M |
 | P0 | B2 | GL 后端 v2：render target / sampler / readback / caps | 契约已冻结，GL 未实现 | B0 | **可并行** | M |
-| P0 | B4 | 离屏 RenderTarget + readback | 仅默认 framebuffer | B1 | 与 B2 并行；与 B1 串行（VkDevice） | M |
+| P0 | B4 | ~~离屏 RenderTarget + readback~~ | ✅ 完成（2026-11-23，GL/VK 双端回读逐字节一致） | B1 | 与 B2 并行 | M |
 | P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
 | P1 | C2 | 多视口 | 单视口 | B0 | 可并行 | M |
 | P1 | D1 | 宽线/边线 + AA + polygon offset | VK 线宽仅 1 | B3 | 可并行 | L |
@@ -92,7 +111,7 @@
 
 1. **第一波（正确性收尾）**：~~B3a → B3b → B3c~~ ✅ 已完成（2026-11-23）；
    ~~A4~~ ✅ 已完成（同日，Windows 实机待复验）。
-2. **第二波（RHI 基座）**：~~B1~~ ✅ → **B4**；B2 并行。B1/B4 同改 `VkDevice`，需串行或同一人。
+2. **第二波（RHI 基座）**：~~B1~~ ✅ → ~~B4~~ ✅ 已完成（2026-11-23）；B2 并行。
 3. **第三波（ZW3D 接入）**：C1/C2 + D2/D4/D7；D1 等 B3 完成后做。
 4. **第四波（大装配）**：E1/E2 → E3/E5。
 5. **第五波（工程化）**：F1/F2。

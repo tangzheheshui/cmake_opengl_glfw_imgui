@@ -6,6 +6,8 @@
 #include "shader.h"                 // 复用现有 GLSL 编译器（include path: src/render）
 #include <GLFW/glfw3.h>
 #include "log/LogMacros.h"
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -99,6 +101,9 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
 
     const GLenum target = desc.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
     glBindTexture(target, tex.id);
+    tex.width  = desc.width;    // B4：readback/RT 需要
+    tex.height = desc.height;
+    tex.format = desc.format;
 
     if (desc.cubemap) {
         // 立方体贴图：6 面连续存放
@@ -198,6 +203,117 @@ void GLDevice::destroyTexture(TextureHandle h) {
     t = GLTexture{};
 }
 
+// ---- B4：离屏渲染目标 ----
+RenderTargetHandle GLDevice::createRenderTarget(const RenderTargetDesc& desc) {
+    if (desc.width == 0 || desc.height == 0) {
+        ENGINE_LOG_ERROR("[GL] createRenderTarget: zero-sized target");
+        return {};
+    }
+    GLRenderTarget rt;
+    rt.width  = desc.width;
+    rt.height = desc.height;
+
+    // 颜色纹理：复用 createTexture（可采样、可回读；GL 下附件绑定到 FBO）
+    TextureDesc td;
+    td.width  = desc.width;
+    td.height = desc.height;
+    td.format = desc.colorFormat;
+    td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
+    td.mipLevels = desc.mipLevels;
+    td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
+    rt.colorTex = createTexture(td);
+    if (!rt.colorTex.valid()) return {};
+
+    glGenFramebuffers(1, &rt.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, texture(rt.colorTex).id, 0);
+
+    if (desc.hasDepth) {
+        GLenum depthInternal = GL_DEPTH_COMPONENT32F;
+        if (desc.depthFormat == Format::D24S8) depthInternal = GL_DEPTH24_STENCIL8;
+        glGenRenderbuffers(1, &rt.depthRbo);
+        glBindRenderbuffer(GL_RENDERBUFFER, rt.depthRbo);
+        glRenderbufferStorage(GL_RENDERBUFFER, depthInternal, desc.width, desc.height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  GL_RENDERBUFFER, rt.depthRbo);
+    }
+
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        ENGINE_LOG_ERROR("[GL] createRenderTarget: incomplete FBO (0x%x)", status);
+        destroyTexture(rt.colorTex);
+        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
+        glDeleteFramebuffers(1, &rt.fbo);
+        return {};
+    }
+
+    _renderTargets.push_back(rt);
+    RenderTargetHandle h; h.id = static_cast<uint32_t>(_renderTargets.size());
+    ENGINE_LOG_INFO("[GL] render target %ux%u created (id=%u, fbo=%u, depth=%d)",
+                    desc.width, desc.height, h.id, rt.fbo, desc.hasDepth ? 1 : 0);
+    return h;
+}
+
+void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
+    if (!h.valid() || h.id > _renderTargets.size()) return;
+    GLRenderTarget& rt = _renderTargets[h.id - 1];
+    if (rt.fbo) {
+        destroyTexture(rt.colorTex);
+        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
+        glDeleteFramebuffers(1, &rt.fbo);
+        rt = GLRenderTarget{};
+    }
+    rt.alive = false;   // 槽位保留（id 不复用）
+}
+
+TextureHandle GLDevice::renderTargetColorTexture(RenderTargetHandle h) const {
+    if (!h.valid() || h.id > _renderTargets.size()) return {};
+    return _renderTargets[h.id - 1].colorTex;
+}
+
+// B4：同步回读。glGetTexImage 直接把整级读出（mipLevel 参数原生支持），
+// 再裁出区域；GL 是即时语义，无需额外同步。
+bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
+                               const ReadbackDesc& rb) {
+    if (!tex.valid() || tex.id > _textures.size() || !outData) return false;
+    const GLTexture& t = _textures[tex.id - 1];
+    if (!t.id) return false;
+
+    const uint32_t bpp = formatBytesPerPixel(t.format);
+    if (bpp == 0) return false;
+    const uint32_t mipW = std::max(1u, t.width  >> rb.mipLevel);
+    const uint32_t mipH = std::max(1u, t.height >> rb.mipLevel);
+    const uint32_t w = rb.width  ? std::min(rb.width,  mipW) : mipW;
+    const uint32_t h = rb.height ? std::min(rb.height, mipH) : mipH;
+    const size_t bytes = static_cast<size_t>(w) * h * bpp;
+    if (outSize < bytes) {
+        ENGINE_LOG_WARN("[GL] readback: outSize %zu < %zu bytes", outSize, bytes);
+        return false;
+    }
+    if (t.cubemap || rb.arrayLayer != 0) {
+        ENGINE_LOG_WARN_ONCE("[GL] readback: cubemap/array readback not supported yet");
+        return false;
+    }
+
+    GLenum internalFmt = GL_RGBA8, dataFmt = GL_RGBA, dataType = GL_UNSIGNED_BYTE;
+    glFormatOf(t.format, internalFmt, dataFmt, dataType);
+
+    std::vector<unsigned char> full(static_cast<size_t>(mipW) * mipH * bpp);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, t.id);
+    glGetTexImage(GL_TEXTURE_2D, static_cast<int>(rb.mipLevel), dataFmt, dataType, full.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    for (uint32_t y = 0; y < h; ++y) {
+        std::memcpy(static_cast<unsigned char*>(outData) + static_cast<size_t>(y) * w * bpp,
+                    full.data() + (static_cast<size_t>(y) * mipW + rb.x) * bpp,
+                    static_cast<size_t>(w) * bpp);
+    }
+    return true;
+}
+
 void GLDevice::destroyPipeline(PipelineHandle h) {
     if (!h.valid() || h.id > _pipelines.size()) return;
     GLPipeline& p = _pipelines[h.id - 1];
@@ -234,6 +350,10 @@ const GLTexture& GLDevice::texture(TextureHandle h) const {
 
 const GLPipeline& GLDevice::pipeline(PipelineHandle h) const {
     return _pipelines[h.id - 1];
+}
+
+const GLRenderTarget& GLDevice::renderTarget(RenderTargetHandle h) const {
+    return _renderTargets[h.id - 1];
 }
 
 } // namespace rhi

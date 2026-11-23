@@ -185,6 +185,8 @@ void RenderSystem::drawRhiScene() {
     if (!cmd) return;
 
     m_rhiDevice->beginFrame();
+    // B4 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交完成）
+    runRenderTargetReadbackTest();
     rhi::RenderPassDesc rp;
     rp.clearColor = true;
     rp.clearDepth = true;
@@ -238,6 +240,7 @@ void RenderSystem::draw() {
     renderScenePasses();
     drawSceneOverlays();
     selfTestAB();   // M4.2 验证设施：同帧 A/B 逐像素对比（调试用）
+    runRenderTargetReadbackTest();   // B4 验证设施（GL 即时语义，渲染/回读可同帧）
 }
 
 // M4.2 验证设施：同帧 A/B 对比（调试用）
@@ -328,6 +331,107 @@ void RenderSystem::selfTestAB() {
     }
     m_settings.modelUseRHI = original;
     std::fflush(stdout);
+}
+
+// ---- B4 验证设施（RHI_RT_TEST=1）：离屏 RT 渲染 → 同步回读 ----
+// 两阶段状态机：阶段 0 在帧内渲染冒烟三角形到 128x128 RT；
+// 阶段 1（下一帧，VK 上一帧命令已提交完成）readbackTexture 回读，
+// 打印中心/角落像素并与 GL 后端交叉比对。
+// RT 颜色格式 = BGRA8_SRGB（与管线烘焙格式兼容，见 stage 0 注释），
+// 双端存储/回读字节均为 sRGB 编码 + BGRA 序：
+//   中心 ≈ <B>,<G>,<R>,255 = 213,141,122（顶点色线性插值后 sRGB 编码，60% 高处）
+//   角落 ≈ 124,89,63,255（clear linear 0.05/0.1/0.2 编码）
+void RenderSystem::runRenderTargetReadbackTest() {
+    static bool enabled = (std::getenv("RHI_RT_TEST") != nullptr);
+    static int stage = 0;
+    if (!enabled || !m_rhiDevice) return;
+    auto* cmd = m_rhiDevice->commandList();
+    if (!cmd) return;
+
+    if (stage == 0) {
+        // GL：sRGB RT 写入需 GL_FRAMEBUFFER_SRGB 开启才编码（VK 由格式驱动，无此状态）。
+        // 保存/恢复开关，保证 Pass 对周边状态中性。
+        GLboolean srgbWasOn = GL_FALSE;
+        if (_backend == rhi::Backend::OpenGL) {
+            srgbWasOn = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+            if (!srgbWasOn) glEnable(GL_FRAMEBUFFER_SRGB);
+        }
+        rhi::RenderTargetDesc rtd;
+        rtd.width  = 128;
+        rtd.height = 128;
+        // VK dynamic rendering 契约：管线创建时烘焙附件格式（PipelineRenderingCreateInfo
+        // = swapchain 格式），RT 颜色/深度格式必须与管线兼容 → 用交换链同款格式。
+        // （跨格式 RT 需要"管线格式集"，属 D5 显示模式阶段的管线变体工作）
+        rtd.colorFormat = rhi::Format::BGRA8_SRGB;
+        rtd.depthFormat = rhi::Format::Depth32F;
+        // 深度附件必须存在：冒烟管线开深度测试，Vulkan 要求 rendering
+        // 提供兼容的深度附件（无深度附件 + 深度测试管线 = MoltenVK abort）
+        rtd.hasDepth    = true;
+        m_rtTestTarget = m_rhiDevice->createRenderTarget(rtd);
+        if (!m_rtTestTarget.valid()) {
+            ENGINE_LOG_ERROR("[RTTEST] createRenderTarget failed");
+            stage = 2;
+            return;
+        }
+        rhi::RenderPassDesc rp;
+        rp.renderTarget = m_rtTestTarget;
+        rp.clearColor   = true;
+        rp.clearDepth   = true;
+        rp.clearColorValue[0] = 0.05f;   // 线性值直接写入 UNORM（RT 无 sRGB 编码）
+        rp.clearColorValue[1] = 0.10f;
+        rp.clearColorValue[2] = 0.20f;
+        rp.clearColorValue[3] = 1.0f;
+        cmd->beginRenderPass(rp);
+        recordSmokeTriangle(cmd);
+        cmd->endRenderPass();
+        if (_backend == rhi::Backend::OpenGL && !srgbWasOn) {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
+        stage = 1;
+        return;
+    }
+    if (stage != 1) return;
+    stage = 2;
+
+    std::vector<unsigned char> px(128 * 128 * 4);
+    const rhi::TextureHandle colorTex = m_rhiDevice->renderTargetColorTexture(m_rtTestTarget);
+    const bool ok = m_rhiDevice->readbackTexture(colorTex, px.data(), px.size());
+    if (!ok) {
+        ENGINE_LOG_ERROR("[RTTEST] readbackTexture failed");
+    } else {
+        // 冒烟三角形质心 NDC(0,-0.2) → 60% 高处。行序契约差异（B4 已知）：
+        // VK 图像 row 0 = 画面顶部；GL 附件回读 row 0 = 画面底部（GL y-up 纹理
+        // 约定）→ 同一画面点在两端落在镜像行上，取样行按后端镜像取。
+        const size_t cx  = 128 / 2;
+        const size_t cy  = 128 * 3 / 5;
+        const size_t row = (m_rhiDevice->backend() == rhi::Backend::Vulkan) ? (127 - cy) : cy;
+        const size_t off    = (row * 128 + cx) * 4;
+        const size_t corner = 0;
+        ENGINE_LOG_INFO("[RTTEST] center bytes = %d,%d,%d,%d (BGRA, expect ~213,141,122,255)",
+                        px[off], px[off+1], px[off+2], px[off+3]);
+        ENGINE_LOG_INFO("[RTTEST] corner bytes = %d,%d,%d,%d (BGRA, expect ~124,89,63,255)",
+                        px[corner], px[corner+1], px[corner+2], px[corner+3]);
+        // PPM 导出（目视检查；与 RHI_DUMP 同目录约定）
+        std::error_code ec;
+        auto tmpDir = std::filesystem::temp_directory_path(ec);
+        if (ec) tmpDir = ".";
+        const char* tag = (m_rhiDevice->backend() == rhi::Backend::Vulkan) ? "vk" : "gl";
+        FILE* fp = engine::fs::openWrite(tmpDir / (std::string("frame_rt_") + tag + ".ppm"));
+        if (fp) {
+            std::fprintf(fp, "P6\n128 128\n255\n");
+            for (int y = 0; y < 128; ++y) {
+                for (int x = 0; x < 128; ++x) {
+                    const size_t i = (static_cast<size_t>(y) * 128 + x) * 4;
+                    std::fwrite(&px[i], 1, 3, fp);
+                }
+            }
+            std::fclose(fp);
+            ENGINE_LOG_INFO("[RTTEST] frame written: frame_rt_%s.ppm", tag);
+        }
+    }
+    m_rhiDevice->destroyRenderTarget(m_rtTestTarget);
+    m_rtTestTarget = rhi::RenderTargetHandle{};
+    ENGINE_LOG_INFO("[RTTEST] done");
 }
 
 void RenderSystem::drawSceneOverlays() {

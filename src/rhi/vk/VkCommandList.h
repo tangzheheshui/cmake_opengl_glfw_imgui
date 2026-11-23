@@ -46,6 +46,7 @@ private:
     BufferHandle   _curVertexBuffer;
     BufferHandle   _curIndexBuffer;
     bool           _inRenderPass = false;
+    RenderTargetHandle _curRenderTarget;   // B4：当前离屏 RT（invalid = swapchain）
 
     UniformBlockHandle _curUniformBlock;        // 当前绘制使用的 uniform block（默认为 device 默认块）
 

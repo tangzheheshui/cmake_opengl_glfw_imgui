@@ -22,6 +22,7 @@ file(GLOB SRC_PASS       "${SRC_ENGINE_ROOT}/render/pass/*.cpp")
 file(GLOB SRC_CAMERA     "${SRC_ENGINE_ROOT}/render/camera/*.cpp")
 file(GLOB SRC_MATH       "${SRC_ENGINE_ROOT}/core/math/*.cpp")
 file(GLOB SRC_FS         "${SRC_ENGINE_ROOT}/core/fs/*.cpp")
+file(GLOB SRC_DEBUG      "${SRC_ENGINE_ROOT}/core/debug/*.cpp")
 
 # 头文件列表（仅供 IDE 分组显示）
 file(GLOB_RECURSE ENGINE_HEADERS "${SRC_ENGINE_ROOT}/*.h")
@@ -44,6 +45,7 @@ add_library(engine STATIC
     ${SRC_CAMERA}
     ${SRC_MATH}
     ${SRC_FS}
+    ${SRC_DEBUG}
     ${ENGINE_HEADERS}
 )
 

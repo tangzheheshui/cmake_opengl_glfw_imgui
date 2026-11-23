@@ -6,6 +6,7 @@
 #define VkCommon_h
 
 #include <vulkan/vulkan.h>
+#include "../RhiTypes.h"
 #include "log/LogMacros.h"
 #include <cstdlib>
 
@@ -38,6 +39,25 @@ struct VkTextureRes {
     VkSampler      sampler = VK_NULL_HANDLE;
     uint32_t       width   = 0;
     uint32_t       height  = 0;
+    // B4：字节/像素（readback 计算区域字节数用）
+    uint32_t       bpp     = 0;
+    // B4：布局跟踪（dynamic rendering 无自动布局转换；上传后 = SHADER_READ_ONLY，
+    // 作 RT 颜色附件时 COLOR_ATTACHMENT ↔ SHADER_READ_ONLY 往返，回读时 TRANSFER_SRC）
+    VkImageLayout  layout  = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+
+// B4：离屏渲染目标。颜色附件复用纹理机制（SAMPLED|COLOR_ATTACHMENT，
+// 采样/描述符/bindTexture 全部通用）；深度附件独立 image/view
+// （storeOp=DONT_CARE + 每次 begin CLEAR，跨 Pass 不保内容）。
+struct VkRenderTargetRes {
+    TextureHandle  colorTex;                            // 颜色附件（VkTextureRes）
+    VkImage        depthImage  = VK_NULL_HANDLE;
+    VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+    VkImageView    depthView   = VK_NULL_HANDLE;
+    uint32_t       width  = 0;
+    uint32_t       height = 0;
+    VkImageLayout  depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    bool           alive  = true;   // 对象级销毁：句柄 id 不复用，dead 槽位保留
 };
 
 // 绘制级 uniform 块（M4.2）：独立 UBO + 独立描述符集（避免共享 UBO 逐帧覆盖）

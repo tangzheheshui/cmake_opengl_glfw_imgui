@@ -199,10 +199,10 @@ B1–B4 逐后端落地；冻结后公共头的任何改动必须同步本节并
 | 契约项 | 定义 | 实现状态 |
 |---|---|---|
 | `DeviceDesc` / `NativeWindow` | 宿主窗口（Win32/Xlib/Xcb/Wayland/Cocoa/MetalLayer）或离屏设备；引擎不再硬依赖 GLFW | C1 实现；`RHIFactory::createDevice(DeviceDesc)` 当前明确告警返回空 |
-| `RenderTargetDesc` / `RenderTargetHandle` | 离屏颜色/深度附件，`RenderPassDesc::renderTarget`；invalid = 默认帧缓冲 | B4 实现 |
+| `RenderTargetDesc` / `RenderTargetHandle` | 离屏颜色/深度附件，`RenderPassDesc::renderTarget`；invalid = 默认帧缓冲 | ✅ B4（GL/VK 双端；颜色附件可采样可回读；VK 格式须与管线烘焙格式兼容） |
 | `SamplerDesc` | filter/wrap/LOD/aniso/compare；在 `TextureDesc::sampler` 内提供 | GL B2、VK B3 生效 |
 | `TextureDesc` 扩展 | `mipLevels` / `generateMips` / `arrayLayers`；sRGB 通过 `Format` 表达 | B3 生效 |
-| `ReadbackDesc` + `readbackTexture` | 同步回读（缩略图/拾取/验证） | B4 实现 |
+| `ReadbackDesc` + `readbackTexture` | 同步回读（缩略图/拾取/验证） | ✅ B4（GL/VK；VK submitOneTime 同步；已知行序差异：VK row0=画面顶、GL row0=画面底，统一随 B2） |
 | 对象级销毁 | `destroyBuffer/Texture/Pipeline/UniformBlock`；句柄 id 不复用，槽位保留 | ✅ GL/VK 已实现 |
 | `DeviceCapabilities` | 结构化能力（limits/扩展特性）+ `details` 人类可读表 | ✅ VK 已填充；GL 在 B2 对齐 |
 | `setScissor` | 多视口裁剪（C2 前置） | C2 实现 |

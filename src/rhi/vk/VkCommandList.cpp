@@ -13,8 +13,57 @@ VkCommandList::VkCommandList(VulkanDevice* device)
 }
 
 void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
+    // B4：离屏 RenderTarget 分支（dynamic rendering 附件来自 RT 资源）
+    if (desc.renderTarget.valid()) {
+        const VkRenderTargetRes& rt = _device->renderTargetRes(desc.renderTarget);
+        if (!rt.alive || !rt.colorTex.valid()) {
+            ENGINE_LOG_WARN_ONCE("[VK] beginRenderPass: dead/invalid render target");
+            return;
+        }
+        const VkExtent2D extent{rt.width, rt.height};
+
+        VkRenderingAttachmentInfo colorAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        colorAtt.imageView   = _device->textureRes(rt.colorTex).view;
+        colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAtt.loadOp      = desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAtt.clearValue.color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
+                                       desc.clearColorValue[2], desc.clearColorValue[3] }};
+
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea.offset = {0, 0};
+        ri.renderArea.extent = extent;
+        ri.layerCount        = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments    = &colorAtt;
+
+        VkRenderingAttachmentInfo depthAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        if (rt.depthView) {
+            depthAtt.imageView   = rt.depthView;
+            // 1.0 布局（DEPTH_ATTACHMENT_OPTIMAL 需 1.2 扩展，见 recordRenderTargetBeginBarriers）
+            depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depthAtt.loadOp      = desc.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            // B3b：VK 后端深度语义反转，清屏值固定 0（最远），与 swapchain 路径一致
+            depthAtt.clearValue.depthStencil = {0.0f, 0};
+            ri.pDepthAttachment = &depthAtt;
+        }
+
+        _device->recordRenderTargetBeginBarriers(_device->commandBuffer(), desc.renderTarget);
+        _device->beginRenderingFn()(_device->commandBuffer(), &ri);
+        _inRenderPass    = true;
+        _curRenderTarget = desc.renderTarget;
+
+        // 与 swapchain 路径相同的负高度 viewport（B3a）+ scissor
+        setViewport(0, static_cast<float>(extent.height),
+                    static_cast<float>(extent.width), -static_cast<float>(extent.height));
+        VkRect2D scissor{{0, 0}, extent};
+        vkCmdSetScissor(_device->commandBuffer(), 0, 1, &scissor);
+        return;
+    }
+
     // M3：仅支持默认帧缓冲（swapchain）；desc.framebufferId 的 FBO 直通是 GL 专属能力，
-    // Vulkan 侧等价物（RenderTargetHandle）在 B4 引入
+    // Vulkan 侧等价物（RenderTargetHandle）已由上面的 B4 分支处理
     if (desc.framebufferId != 0) {
         static bool warned = false;
         if (!warned) {
@@ -23,6 +72,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         }
         return;
     }
+    _curRenderTarget = RenderTargetHandle{};
 
     // B1：Dynamic Rendering —— vkCmdBeginRendering 取代 VkRenderPass/framebuffer。
     // loadOp 按 desc 决定（CLEAR/LOAD），store 恒 STORE（颜色）/DONT_CARE（深度）。
@@ -73,6 +123,11 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
 
 void VkCommandList::endRenderPass() {
     if (!_inRenderPass) return;
+    // B4：离屏 RT 收尾 → 颜色附件转回 SHADER_READ_ONLY（采样/回读就绪）
+    if (_curRenderTarget.valid()) {
+        _device->recordRenderTargetEndBarriers(_device->commandBuffer(), _curRenderTarget);
+        _curRenderTarget = RenderTargetHandle{};
+    }
     _device->endRenderingFn()(_device->commandBuffer());
     _inRenderPass = false;
 }
@@ -195,7 +250,10 @@ void VkCommandList::applyPushConstants() {
         _pushDirty = false;
     }
     // uniform block 描述符集（binding0=UBO 数据，1..4=纹理），每 draw 绑定
-    VkDescriptorSet set = _device->uniformBlockRes(_curUniformBlock).set;
+    // B4：未显式 setDrawUniforms 时回退设备默认块（防御无效句柄越界）
+    UniformBlockHandle blk = _curUniformBlock.valid() ? _curUniformBlock
+                                                      : _device->defaultUniformBlock();
+    VkDescriptorSet set = _device->uniformBlockRes(blk).set;
     vkCmdBindDescriptorSets(_device->commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
                             _device->pipelineLayout(), 0, 1, &set, 0, nullptr);
 }
