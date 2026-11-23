@@ -137,9 +137,20 @@ int main()
     // 是 CFF 轮廓（stb_truetype 不支持），必须用 TrueType 轮廓的中文字体
     {
         const char* fontCandidates[] = {
+#if defined(__APPLE__)
             "/System/Library/Fonts/STHeiti Medium.ttc",      // 黑体（TrueType 轮廓）
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
             "/Library/Fonts/Arial Unicode.ttf",
+#elif defined(_WIN32)
+            "C:/Windows/Fonts/msyh.ttc",                     // 微软雅黑
+            "C:/Windows/Fonts/msyh.ttf",
+            "C:/Windows/Fonts/simhei.ttf",                   // 黑体
+            "C:/Windows/Fonts/simsun.ttc",                   // 宋体
+#elif defined(__linux__)
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+#endif
         };
         bool fontLoaded = false;
         for (const char* f : fontCandidates) {
