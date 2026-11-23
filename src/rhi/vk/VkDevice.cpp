@@ -89,8 +89,8 @@ VulkanDevice::~VulkanDevice() {
     }
     destroySwapchainObjects();
     if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
-    if (_semRenderDone)     vkDestroySemaphore(_device, _semRenderDone, nullptr);
     if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
+    // _semRenderDone 为 per-image，随 swapchain 销毁（destroySwapchainObjects）
     if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
     for (auto& b : _buffers) {
         if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
@@ -398,6 +398,16 @@ void VulkanDevice::createSwapchainObjects() {
         setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(_swapchainViews[i]), name);
     }
 
+    // per-image render-done semaphores（随 swapchain 生命周期重建）
+    _semRenderDone.resize(n, VK_NULL_HANDLE);
+    VkSemaphoreCreateInfo rsci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    for (uint32_t i = 0; i < n; ++i) {
+        VK_CHECK(vkCreateSemaphore(_device, &rsci, nullptr, &_semRenderDone[i]));
+        char name[64];
+        std::snprintf(name, sizeof(name), "RHI_RenderDone_%u", i);
+        setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semRenderDone[i]), name);
+    }
+
     // render pass：颜色附件 + 深度附件（M4）
     _depthFormat = findSupportedDepthFormat(_physicalDevice);
     VkAttachmentDescription attachments[2] = {};
@@ -503,6 +513,8 @@ void VulkanDevice::createSwapchainObjects() {
 }
 
 void VulkanDevice::destroySwapchainObjects() {
+    for (auto s : _semRenderDone)   if (s)              vkDestroySemaphore(_device, s, nullptr);
+    _semRenderDone.clear();
     for (auto fb : _framebuffers)   if (fb)             vkDestroyFramebuffer(_device, fb, nullptr);
     for (auto v : _swapchainViews)  if (v)              vkDestroyImageView(_device, v, nullptr);
     if (_depthView)   vkDestroyImageView(_device, _depthView, nullptr);
@@ -536,13 +548,12 @@ void VulkanDevice::createCommandObjects() {
 void VulkanDevice::createSyncObjects() {
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VK_CHECK(vkCreateSemaphore(_device, &sci, nullptr, &_semImageAvailable));
-    VK_CHECK(vkCreateSemaphore(_device, &sci, nullptr, &_semRenderDone));
 
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;   // 首帧可直接等待
     VK_CHECK(vkCreateFence(_device, &fci, nullptr, &_fenceInFlight));
     setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semImageAvailable), "RHI_ImageAvailable");
-    setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semRenderDone), "RHI_RenderDone");
+    // _semRenderDone 为 per-image，在 createSwapchainObjects 中创建
     setObjName(VK_OBJECT_TYPE_FENCE, reinterpret_cast<uint64_t>(_fenceInFlight), "RHI_InFlightFence");
 }
 
@@ -730,6 +741,14 @@ void VulkanDevice::endFrame() {
 
     VK_CHECK(vkEndCommandBuffer(_commandBuffer));
 
+    if (_imageIndex >= _semRenderDone.size()) {
+        ENGINE_LOG_ERROR("[VK] missing render-done semaphore for image %u", _imageIndex);
+        return;
+    }
+    // 每个 swapchain image 使用独立的 render-done semaphore：
+    // presentation 完成前不能复用同一个 binary semaphore（VUID-...-00067）
+    VkSemaphore renderDone = _semRenderDone[_imageIndex];
+
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.waitSemaphoreCount = 1;
@@ -738,25 +757,16 @@ void VulkanDevice::endFrame() {
     si.commandBufferCount = 1;
     si.pCommandBuffers    = &_commandBuffer;
     si.signalSemaphoreCount = 1;
-    si.pSignalSemaphores    = &_semRenderDone;
+    si.pSignalSemaphores    = &renderDone;
     VK_CHECK(vkQueueSubmit(_queue, 1, &si, _fenceInFlight));
 
-    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    pi.waitSemaphoreCount = 1;
-    pi.pWaitSemaphores    = &_semRenderDone;
-    pi.swapchainCount     = 1;
-    pi.pSwapchains        = &_swapchain;
-    pi.pImageIndices      = &_imageIndex;
-    VkResult r = vkQueuePresentKHR(_queue, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
-        _needsRecreate = true;
-    }
-
     // ---- RHI_PROBE=1：第 30 帧回读中心像素（M3 验证用，之后可移除）----
+    // 必须在 present 之前执行：此时图像仍处于 acquired 状态，布局转换合法。
+    // 单帧调试路径，允许同步 vkQueueWaitIdle。
     static int frameCount = 0;
     static bool probeEnabled = (std::getenv("RHI_PROBE") != nullptr);
     if (probeEnabled && ++frameCount == 30) {
-        vkQueueWaitIdle(_queue);
+        vkQueueWaitIdle(_queue);   // 主提交完成；图像处于 PRESENT_SRC，仍 acquired
         VkBuffer readback;
         VkDeviceMemory readbackMem;
         VkDeviceSize bufSize = _swapchainExtent.width * _swapchainExtent.height * 4;
@@ -774,6 +784,7 @@ void VulkanDevice::endFrame() {
         VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &readbackMem));
         VK_CHECK(vkBindBufferMemory(_device, readback, readbackMem, 0));
 
+        // 主命令缓冲已完成，可 reset 后复用录制回读
         VkCommandBuffer cb = _commandBuffer;
         VK_CHECK(vkResetCommandBuffer(cb, 0));
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -795,6 +806,19 @@ void VulkanDevice::endFrame() {
         region.imageExtent = {_swapchainExtent.width, _swapchainExtent.height, 1};
         vkCmdCopyImageToBuffer(cb, _swapchainImages[_imageIndex],
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &region);
+        // 拷贝后必须恢复 PRESENT_SRC，才能交给 present
+        VkImageMemoryBarrier toPresent{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toPresent.dstAccessMask = 0;
+        toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.image = _swapchainImages[_imageIndex];
+        toPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &toPresent);
         VK_CHECK(vkEndCommandBuffer(cb));
         VkSubmitInfo s2{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         s2.commandBufferCount = 1;
@@ -819,6 +843,8 @@ void VulkanDevice::endFrame() {
             FILE* fp = fopen(ppmPath.c_str(), "wb");
             if (fp) {
                 std::fprintf(fp, "P6\n%u %u\n255\n", _swapchainExtent.width, _swapchainExtent.height);
+                // 注意：当前 3D 内容相对 UI 上下翻转（B3 待修），
+                // 这里翻转行序让导出的场景看起来正立。
                 for (uint32_t y = 0; y < _swapchainExtent.height; ++y) {
                     const uint8_t* row = px + static_cast<size_t>(_swapchainExtent.height - 1 - y) * _swapchainExtent.width * 4;
                     for (uint32_t x = 0; x < _swapchainExtent.width; ++x) {
@@ -834,6 +860,17 @@ void VulkanDevice::endFrame() {
         vkDestroyBuffer(_device, readback, nullptr);
         vkFreeMemory(_device, readbackMem, nullptr);
         std::fflush(stdout);
+    }
+
+    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    pi.waitSemaphoreCount = 1;
+    pi.pWaitSemaphores    = &renderDone;
+    pi.swapchainCount     = 1;
+    pi.pSwapchains        = &_swapchain;
+    pi.pImageIndices      = &_imageIndex;
+    VkResult r = vkQueuePresentKHR(_queue, &pi);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+        _needsRecreate = true;
     }
 }
 

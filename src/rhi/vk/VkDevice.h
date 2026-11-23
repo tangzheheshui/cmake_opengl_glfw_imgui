@@ -166,7 +166,9 @@ private:
     UniformBlockHandle _defaultUniformBlock;   // 未显式持有 block 的绘制使用
 
     VkSemaphore _semImageAvailable = VK_NULL_HANDLE;
-    VkSemaphore _semRenderDone     = VK_NULL_HANDLE;
+    // 每个 swapchain image 一个 render-done semaphore：
+    // 单个 semaphore 在不同 image 间复用会触发 VUID-vkQueueSubmit-pSignalSemaphores-00067
+    std::vector<VkSemaphore> _semRenderDone;
     VkFence     _fenceInFlight     = VK_NULL_HANDLE;
 
     uint32_t _imageIndex     = 0;
