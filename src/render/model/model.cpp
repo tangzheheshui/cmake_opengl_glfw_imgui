@@ -383,6 +383,17 @@ bool Model::drawPick() {
     return true;
 }
 
+// D2: RHI 拾取绘制——所有网格经 pick 管线直出本对象 ID 色
+bool Model::drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj) {
+    Matrix mtx;
+    for (auto mesh : m_mesh) {
+        if (!mesh->DrawPickRHI(cmd, pickPipeline, viewProj, m_vec_modelMat, GetID())) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void Model::updateNode(Node* node, Node* nodeParent) {
     if (!node) {
         return;

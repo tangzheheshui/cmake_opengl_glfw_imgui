@@ -88,6 +88,20 @@ private:
 	// 两阶段状态机：第 N 帧渲染、第 N+1 帧回读（VK 上一帧已提交完成）
 	void runRenderTargetReadbackTest();
 	rhi::RenderTargetHandle m_rtTestTarget;
+
+	// D2: RHI 拾取（ID 渲染 + 回读）。requestPick 记录点击点，第 N 帧渲染 ID 图、
+	// 第 N+1 帧回读 1px 解码对象 ID。RHI_PICK_TEST=1 启动后自动在屏幕中心拾取一次。
+	void ensurePickResources();
+	void requestPick(double x, double y);
+	void runPickPass();
+	rhi::PipelineHandle m_pickPipeline;
+	rhi::RenderTargetHandle m_pickRT;
+	struct PickRequest {
+		bool  pending = false;   // 已请求、待渲染
+		bool  rendered = false;  // 渲染完成、待回读
+		uint32_t x = 0, y = 0;   // 回读点（RT 像素坐标）
+	};
+	PickRequest m_pickReq;
 	void loadTexture(const std::filesystem::path& dirPath);
     std::shared_ptr<TextureMng> m_texMng;
     std::shared_ptr<FontManager> m_fontMng;

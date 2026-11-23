@@ -55,6 +55,23 @@
   （临时目录可能含中文用户名）。验证：GL/VK 双后端 `RHI_EXIT_AFTER=60`
   exit=0；整个工程复制到 `/tmp/中文路径A4测试/` 后模型/纹理/着色器/字体/
   管线缓存全部正常加载。**Windows 中文安装路径待实机复验**
+- ✅ **D2 RHI 拾取（ID 渲染 + 回读）**（2026-11-23，macOS GL/VK 双端验证）：
+  新 pick 管线（vert_pick_rhi/frag_pick_rhi，GL 330 / VK 450 双变体），ID 编码色经
+  push constant uPickColor（offset 64 槽位）直出；Model::drawPickRHI 复用绘制管线
+  的 VB/IB/实例缓冲。点击（onMouseLeftUp 判定）→ requestPick → 第 N 帧渲染 ID 图、
+  第 N+1 帧 1px 回读解码（两阶段状态机，VK 需帧边界）。要点：
+  1. pick RT = BGRA8_SRGB（管线格式兼容约束同 B4），ID 写入须过 srgbToLinear
+     预解码（sRGB 编码往返 8bit 精度可逆；alpha 不编码直存 255）；
+  2. 回读字节序 BGRA 双端一致，解码 R|G<<8；
+  3. GL 修了一个真缺陷：**GLCommandList endRenderPass 不恢复 FBO 绑定**——
+     RT pass 后宿主渲染（ImGui overlay）直接画进离屏 RT。FBO 绑定纳入
+     Pass 边界状态快照（Pass 中性约定补全）；
+  4. GL readbackTexture 改 FBO + glReadPixels（glGetTexImage 在 core profile
+     不存在，compat-only，函数指针为空即段错误）；顺带修区域回读 y 偏移错；
+  5. VK setUniform 补 uPickColor → offset 64 映射（未知名此前静默丢弃）。
+  验证（RHI_PICK_TEST=1 全图扫描）：GL id=4/5、VK id=3/4（GL 多创建一个
+  BaseDraw 的正常偏移），像素数**逐个完全一致**（16995 / 770979）。
+  已知限制：多视口拾取随 C2；命中后仅日志，选中高亮（D8）待接。
 - ✅ **B4 离屏 RenderTarget + readback**（2026-11-23，macOS GL/VK 双端验证）：
   契约接口全量落地（`createRenderTarget/destroyRenderTarget/renderTargetColorTexture/
   readbackTexture` + `RenderPassDesc::renderTarget`）。VK：颜色附件复用纹理机制
@@ -100,7 +117,7 @@
 | P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
 | P1 | C2 | 多视口 | 单视口 | B0 | 可并行 | M |
 | P1 | D1 | 宽线/边线 + AA + polygon offset | VK 线宽仅 1 | B3 | 可并行 | L |
-| P1 | D2 | 拾取 Pass + 回读 | 无拾取回读 | B4 | 可并行 | M |
+| P1 | D2 | ~~拾取 Pass + 回读~~ | RHI 路径完成（2026-11-23，点击拾取 + 全图扫描验证）；多视口随 C2 | B4 ✅ | 可并行 | M |
 | P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | D7 已完成；D3/D4/D8 待做 | B1/B4 | 大部分可并行 | M/S |
 | P2 | E1/E2 | VMA + 异步上传环 + Timeline + fif=2 | 每次上传 `vkQueueWaitIdle` | A3 | E1→E2 串行 | M/L |
 | P2 | E3/E5 | CPU 剔除 / LOD / 流式加载 | 未开始 | 无 / E1 | 可与 E1/E2 并行 | M |

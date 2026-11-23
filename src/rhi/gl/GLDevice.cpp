@@ -508,17 +508,24 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
     GLenum internalFmt = GL_RGBA8, dataFmt = GL_RGBA, dataType = GL_UNSIGNED_BYTE;
     glFormatOf(t.format, internalFmt, dataFmt, dataType);
 
-    std::vector<unsigned char> full(static_cast<size_t>(mipW) * mipH * bpp);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glBindTexture(GL_TEXTURE_2D, t.id);
-    glGetTexImage(GL_TEXTURE_2D, static_cast<int>(rb.mipLevel), dataFmt, dataType, full.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    for (uint32_t y = 0; y < h; ++y) {
-        std::memcpy(static_cast<unsigned char*>(outData) + static_cast<size_t>(y) * w * bpp,
-                    full.data() + (static_cast<size_t>(y) * mipW + rb.x) * bpp,
-                    static_cast<size_t>(w) * bpp);
+    // core profile 无 glGetTexImage（compat-only）：临时 FBO 挂接纹理后
+    // glReadPixels 直接区域回读（顺带省掉整图缓冲）
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, t.id, static_cast<int>(rb.mipLevel));
+    const GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+        ENGINE_LOG_WARN("[GL] readback: incomplete read FBO (0x%x)", status);
+        return false;
     }
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(rb.x, rb.y, w, h, dataFmt, dataType, outData);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
     return true;
 }
 

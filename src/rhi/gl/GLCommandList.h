@@ -59,6 +59,8 @@ private:
         GLboolean blend      = GL_FALSE;
         GLboolean cullFace   = GL_FALSE;
         GLint     cullMode   = GL_BACK;
+        GLint     framebuffer = 0;   // D2：FBO 绑定纳入 Pass 边界（RT pass 后恢复，
+                                     // 否则 ImGui 等宿主渲染会画进离屏 RT）
     };
     void saveState(GLStateSnapshot& s);
     void restoreState(const GLStateSnapshot& s);

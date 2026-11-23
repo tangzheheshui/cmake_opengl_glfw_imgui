@@ -38,12 +38,16 @@ void GLCommandList::saveState(GLStateSnapshot& s) {
     s.blend     = glIsEnabled(GL_BLEND);
     s.cullFace  = glIsEnabled(GL_CULL_FACE);
     glGetIntegerv(GL_CULL_FACE_MODE, &s.cullMode);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.framebuffer);   // D2: RT pass 后恢复 FBO
 }
 
 void GLCommandList::restoreState(const GLStateSnapshot& s) {
     if (s.depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     glDepthMask(s.depthMask);
     if (s.blend)     glEnable(GL_BLEND);     else glDisable(GL_BLEND);
+    // D2：FBO 绑定纳入 Pass 边界——RT pass 后恢复，否则宿主后续渲染
+    //（如 ImGui overlay）会画进离屏 RT
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(s.framebuffer));
     if (s.cullFace) {
         glEnable(GL_CULL_FACE);
         glCullFace(s.cullMode);

@@ -10,6 +10,7 @@
 #include "rhi/IRHIDevice.h"
 #include "rhi/IRHICommandList.h"
 #include "render/DrawUniforms.h"
+#include "color/ColorSpace.h"
 #include "Light.h"
 #include "../scene.h"
 #include "../Light.h"
@@ -445,6 +446,50 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     if (m_rhiInstanceVB.valid()) {
         cmd->bindVertexBuffer(m_rhiInstanceVB, 1);
     }
+    cmd->bindIndexBuffer(m_rhiIB);
+    cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
+                     static_cast<uint32_t>(matModel.size()));
+    return true;
+}
+
+// ================= D2: RHI 拾取绘制 =================
+// pick 管线（vert_pick_rhi/frag_pick_rhi）：ID 编码色经 push constant 直出，
+// 无光照/纹理/FrameData。顶点布局与绘制管线一致（同一套 VB/IB/实例缓冲复用）。
+bool MeshPass::DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
+                           const Matrix& viewProj, const std::vector<Matrix>& matModel,
+                           uint16_t pickID) {
+    auto& rs = RenderSystem::getInstance();
+    auto* device = rs.rhiDevice();
+    if (!device || !cmd || !pickPipeline.valid()) return false;
+
+    ensureRHIResources(device);
+    if (!m_rhiVB.valid() || !m_rhiIB.valid()) return false;
+    const auto& md = m_mesh_data;
+
+    // 实例矩阵刷新（与 DrawRHI 相同的容量保护）
+    const uint32_t instBytes = static_cast<uint32_t>(matModel.size() * sizeof(Matrix));
+    if (matModel.size() * sizeof(Matrix) > 64 * 4) {
+        ENGINE_LOG_WARN_ONCE("[RHI] pick: instance count exceeds buffer capacity");
+        return false;
+    }
+    device->updateBuffer(m_rhiInstanceVB, matModel.data(), instBytes);
+
+    cmd->bindPipeline(pickPipeline);
+
+    // uViewProj → push constant offset 0
+    glm::mat4 vp = Matrix::toMatrix(viewProj);
+    cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
+
+    // ID 编码 → uPickColor。pick RT 是 sRGB 格式（BGRA8_SRGB，与管线烘焙格式兼容），
+    // 写入会做 linear→sRGB 编码：传 srgbToLinear(byte/255) 才能在 8bit 精度下
+    // 精确还原（byte→linear→byte 恒等）；alpha 不编码，1.0 直存 255。
+    const float r = color::srgbToLinear(static_cast<float>(pickID & 0xFF) / 255.0f);
+    const float g = color::srgbToLinear(static_cast<float>((pickID >> 8) & 0xFF) / 255.0f);
+    const float pickColor[4] = { r, g, 0.0f, 1.0f };
+    cmd->setUniform("uPickColor", rhi::UniformValue::fromVec4(pickColor));
+
+    cmd->bindVertexBuffer(m_rhiVB, 0);
+    cmd->bindVertexBuffer(m_rhiInstanceVB, 1);
     cmd->bindIndexBuffer(m_rhiIB);
     cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
                      static_cast<uint32_t>(matModel.size()));

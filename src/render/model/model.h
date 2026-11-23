@@ -58,6 +58,8 @@ public:
     virtual bool draw(const Matrix &mtx) override;
     virtual bool drawShadow() override;
     virtual bool drawPick() override;
+    // D2: RHI 拾取绘制（pick RT 内调用；调用方管理 pass 与回读）
+    bool drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj);
     virtual void update() override;
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) override;
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) override;

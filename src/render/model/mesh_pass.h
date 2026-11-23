@@ -19,6 +19,7 @@
 #include "math/matrix.h"
 
 namespace rhi { class IRHIDevice; }
+namespace rhi { class IRHICommandList; }
 
 class MeshPass {
 public:
@@ -41,6 +42,10 @@ public:
     bool DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID);
     // M4.2: RHI 绘制路径（Vulkan 必走；GL 可经 modelUseRHI 开关切换对比）
     bool DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags);
+    // D2: RHI 拾取绘制（pick 管线 + ID 色直出；调用方管理 RT/pass）
+    bool DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
+                     const Matrix& viewProj, const std::vector<Matrix>& matModel,
+                     uint16_t pickID);
 protected:
     virtual Shader* getShader(uint32_t flags) { return nullptr; }
     virtual bool isTextured() const { return false; }   // PassTexture 覆写为 true

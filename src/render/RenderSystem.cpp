@@ -2,6 +2,7 @@
 #include "RenderSystem.h"
 #include "render/scene.h"
 #include "object/Sky.h"
+#include "model/model.h"
 #include "pass/SkyPass.h"
 #include "pass/ShadowPass.h"
 #include "pass/NormalPass.h"
@@ -187,6 +188,8 @@ void RenderSystem::drawRhiScene() {
     m_rhiDevice->beginFrame();
     // B4 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交完成）
     runRenderTargetReadbackTest();
+    // D2 拾取：同帧内渲染 ID 图（回读推迟到下一帧）
+    runPickPass();
     rhi::RenderPassDesc rp;
     rp.clearColor = true;
     rp.clearDepth = true;
@@ -241,6 +244,7 @@ void RenderSystem::draw() {
     drawSceneOverlays();
     selfTestAB();   // M4.2 验证设施：同帧 A/B 逐像素对比（调试用）
     runRenderTargetReadbackTest();   // B4 验证设施（GL 即时语义，渲染/回读可同帧）
+    runPickPass();                   // D2 拾取（GL 即时语义）
 }
 
 // M4.2 验证设施：同帧 A/B 对比（调试用）
@@ -432,6 +436,209 @@ void RenderSystem::runRenderTargetReadbackTest() {
     m_rhiDevice->destroyRenderTarget(m_rtTestTarget);
     m_rtTestTarget = rhi::RenderTargetHandle{};
     ENGINE_LOG_INFO("[RTTEST] done");
+}
+
+// ---- D2: RHI 拾取（ID 渲染 + 回读）----
+// pick RT = BGRA8_SRGB（与管线烘焙格式兼容，同 B4 约束）；ID 经 push constant
+// uPickColor 直出，sRGB 编码往返在 8bit 精度下可逆（byte→linear→byte 恒等），
+// alpha 通道不编码。requestPick 记录点击点：第 N 帧（runPickPass stage 0）渲染
+// ID 图，第 N+1 帧（stage 1）回读 1px 解码对象 ID。
+// 行序约定（B4 已知差异）：VK row0 = 画面顶（鼠标 y 直接可用）；
+// GL 附件回读 row0 = 画面底 → y 镜像。
+void RenderSystem::ensurePickResources() {
+    if (m_pickPipeline.valid() && m_pickRT.valid()) return;
+    auto* device = m_rhiDevice.get();
+    if (!device) return;
+
+    rhi::GraphicsPipelineDesc pd;
+    pd.shaders = {
+        { rhi::ShaderStage::Vertex,   "vert_pick_rhi" },
+        { rhi::ShaderStage::Fragment, "frag_pick_rhi" },
+    };
+    // 顶点布局与模型绘制管线一致（复用同一套 VB/IB/实例缓冲）
+    pd.vertexLayout.stride = 8 * sizeof(float);          // pos3+normal3+uv2
+    pd.vertexLayout.instanceStride = sizeof(Matrix);     // 实例矩阵 mat4
+    pd.vertexLayout.attributes = {
+        { 0, rhi::VertexFormat::Float3, 0,  false },
+        { 1, rhi::VertexFormat::Float3, 12, false },
+        { 2, rhi::VertexFormat::Float2, 24, false },
+        { 3, rhi::VertexFormat::Float4, 0,  true },
+        { 4, rhi::VertexFormat::Float4, 16, true },
+        { 5, rhi::VertexFormat::Float4, 32, true },
+        { 6, rhi::VertexFormat::Float4, 48, true },
+    };
+    pd.primitive = rhi::PrimitiveType::Triangles;
+    pd.cull      = rhi::CullMode::Back;
+    pd.depth     = { true, true };
+    m_pickPipeline = device->createPipeline(pd);
+
+    // RT 尺寸取窗口 framebuffer（拾取点为 framebuffer 像素坐标）
+    int fbW = 0, fbH = 0;
+    if (_window) {
+        glfwGetFramebufferSize(_window, &fbW, &fbH);
+    }
+    if (fbW <= 0 || fbH <= 0) return;
+
+    rhi::RenderTargetDesc rtd;
+    rtd.width  = static_cast<uint32_t>(fbW);
+    rtd.height = static_cast<uint32_t>(fbH);
+    rtd.colorFormat = rhi::Format::BGRA8_SRGB;   // 与管线烘焙格式兼容（B4 契约）
+    rtd.depthFormat = rhi::Format::Depth32F;
+    rtd.hasDepth    = true;
+    m_pickRT = device->createRenderTarget(rtd);
+    if (m_pickRT.valid()) {
+        ENGINE_LOG_INFO("[PICK] pick RT %dx%d + pipeline ready", fbW, fbH);
+    }
+}
+
+void RenderSystem::requestPick(double x, double y) {
+    if (!m_rhiDevice) return;
+    // 窗口坐标 → framebuffer 像素坐标（Retina 下两者不同）
+    int winW = 0, winH = 0, fbW = 0, fbH = 0;
+    glfwGetWindowSize(_window, &winW, &winH);
+    glfwGetFramebufferSize(_window, &fbW, &fbH);
+    if (winW <= 0 || winH <= 0) return;
+    const double sx = static_cast<double>(fbW) / winW;
+    const double sy = static_cast<double>(fbH) / winH;
+    m_pickReq.pending  = true;
+    m_pickReq.rendered = false;
+    m_pickReq.x = static_cast<uint32_t>(x * sx);
+    m_pickReq.y = static_cast<uint32_t>(y * sy);
+}
+
+void RenderSystem::runPickPass() {
+    static bool selfTest = (std::getenv("RHI_PICK_TEST") != nullptr);
+    static int  selfTestFrame = 0;
+    if (!m_rhiDevice) return;
+    auto* cmd = m_rhiDevice->commandList();
+    if (!cmd) return;
+
+    // RHI_PICK_TEST：第 40 帧自动在屏幕中心拾取一次（场景稳定后）。
+    // requestPick 入参 = 窗口坐标（内部换算 framebuffer 像素）
+    if (selfTest && !m_pickReq.pending && !m_pickReq.rendered && ++selfTestFrame == 40) {
+        int winW = 0, winH = 0;
+        glfwGetWindowSize(_window, &winW, &winH);
+        requestPick(winW / 2.0, winH * 0.55);   // 鸭子群中心附近
+    }
+    if (!m_pickReq.pending && !m_pickReq.rendered) return;
+
+    const Matrix mtxVP = mCurScene->GetActiveCamera()
+        ? mCurScene->GetActiveCamera()->GetVPMatrix() : Matrix();
+
+    if (m_pickReq.pending) {
+        // ---- stage 0: 渲染 ID 图 ----
+        ensurePickResources();
+        if (!m_pickPipeline.valid() || !m_pickRT.valid()) {
+            m_pickReq.pending = false;
+            return;
+        }
+        // GL：sRGB RT 写入需 GL_FRAMEBUFFER_SRGB（同 B4 harness，保存/恢复）
+        GLboolean srgbWasOn = GL_FALSE;
+        if (_backend == rhi::Backend::OpenGL) {
+            srgbWasOn = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+            if (!srgbWasOn) glEnable(GL_FRAMEBUFFER_SRGB);
+        }
+        rhi::RenderPassDesc rp;
+        rp.renderTarget = m_pickRT;
+        rp.clearColor   = true;
+        rp.clearDepth   = true;
+        rp.clearColorValue[0] = 0.0f;   // 清屏 = 无命中（a=0 与对象 a=1 区分）
+        rp.clearColorValue[1] = 0.0f;
+        rp.clearColorValue[2] = 0.0f;
+        rp.clearColorValue[3] = 0.0f;
+        cmd->beginRenderPass(rp);
+        for (auto& obj : mCurScene->GetObjs()) {
+            auto model = std::dynamic_pointer_cast<Model>(obj);
+            if (model) {
+                model->drawPickRHI(cmd, m_pickPipeline, mtxVP);
+            }
+        }
+        cmd->endRenderPass();
+        if (_backend == rhi::Backend::OpenGL && !srgbWasOn) {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
+        m_pickReq.pending  = false;
+        m_pickReq.rendered = true;   // VK：下一帧（本帧命令已提交）再回读
+        return;
+    }
+
+    // ---- stage 1: 回读 + 解码 ----
+    if (!m_pickReq.rendered) return;
+    m_pickReq.rendered = false;
+
+    // RHI_PICK_TEST：全图扫描验证 渲染→回读→解码 全链路（收集命中 ID + 位置）
+    if (selfTest) {
+        auto colorTex = m_rhiDevice->renderTargetColorTexture(m_pickRT);
+        int fbW = 0, fbH = 0;
+        glfwGetFramebufferSize(_window, &fbW, &fbH);
+        std::vector<unsigned char> img(static_cast<size_t>(fbW) * fbH * 4);
+        rhi::ReadbackDesc rbFull;
+        if (!m_rhiDevice->readbackTexture(colorTex, img.data(), img.size(), rbFull)) {
+            ENGINE_LOG_ERROR("[PICK] full readback failed");
+            return;
+        }
+        std::map<uint16_t, size_t> idCount;
+        size_t firstHit = SIZE_MAX;
+        for (size_t i = 0; i < img.size(); i += 4) {
+            if (img[i + 3] >= 128) {
+                // 回读字节序 = BGRA（双端一致，B4 已验证）：R=img[i+2] G=img[i+1]
+                const uint16_t id = static_cast<uint16_t>(img[i + 2] | (img[i + 1] << 8));
+                idCount[id]++;
+                if (firstHit == SIZE_MAX) firstHit = i / 4;
+            }
+        }
+        ENGINE_LOG_INFO("[PICK][selftest] distinct IDs=%zu, first hit pixel index=%zu",
+                        idCount.size(), firstHit == SIZE_MAX ? SIZE_MAX : firstHit);
+        for (const auto& kv : idCount) {
+            ENGINE_LOG_INFO("[PICK][selftest] id=%u pixels=%zu", kv.first, kv.second);
+        }
+        // 调试导出：ID 图原样落盘（PPM）
+        {
+            std::error_code ec;
+            auto tmpDir = std::filesystem::temp_directory_path(ec);
+            if (ec) tmpDir = ".";
+            FILE* fp = engine::fs::openWrite(tmpDir / "pick_debug.ppm");
+            if (fp) {
+                std::fprintf(fp, "P6\n%d %d\n255\n", fbW, fbH);
+                for (size_t i = 0; i < img.size(); i += 4) {
+                    std::fwrite(&img[i], 1, 3, fp);
+                }
+                std::fclose(fp);
+                ENGINE_LOG_INFO("[PICK][selftest] pick_debug.ppm written");
+            }
+        }
+    }
+
+    auto colorTex = m_rhiDevice->renderTargetColorTexture(m_pickRT);
+    unsigned char px[4] = {0, 0, 0, 0};
+    rhi::ReadbackDesc rb;
+    // 行序镜像：VK row0 = 画面顶（鼠标原点），GL row0 = 画面底
+    const int fbH = [this]() { int w = 0, h = 0; glfwGetFramebufferSize(_window, &w, &h); return h; }();
+    rb.x = m_pickReq.x;
+    rb.y = (m_rhiDevice->backend() == rhi::Backend::Vulkan)
+               ? m_pickReq.y
+               : (fbH > 0 ? static_cast<uint32_t>(fbH) - 1 - m_pickReq.y : m_pickReq.y);
+    rb.width = 1;
+    rb.height = 1;
+    if (!m_rhiDevice->readbackTexture(colorTex, px, sizeof(px), rb)) {
+        ENGINE_LOG_ERROR("[PICK] readback failed at (%u,%u)", rb.x, rb.y);
+        return;
+    }
+    if (px[3] < 128) {
+        ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", rb.x, rb.y);
+        return;
+    }
+    // BGRA 序：R=px[2]（ID 低字节） G=px[1]（ID 高字节）
+    const uint16_t hitId = static_cast<uint16_t>(px[2] | (px[1] << 8));
+    // 解析对象：遍历场景 Model，匹配 GetID()
+    for (auto& obj : mCurScene->GetObjs()) {
+        auto model = std::dynamic_pointer_cast<Model>(obj);
+        if (model && model->GetID() == hitId) {
+            ENGINE_LOG_INFO("[PICK] HIT id=%u (%s)", hitId, "Model");
+            return;
+        }
+    }
+    ENGINE_LOG_INFO("[PICK] HIT id=%u (unknown object)", hitId);
 }
 
 void RenderSystem::drawSceneOverlays() {
@@ -644,7 +851,11 @@ void RenderSystem::onMouseLeftUp(double x, double y) {
     // 判断是否为 Click（时间短 & 移动距离小）
     if (duration < 200 && distance < 5) {  // 200ms内 & 移动距离 < 5 像素
         ENGINE_LOG_INFO("Click detected at (%.1f, %.1f)", x, y);
-    } 
+        // D2: RHI 拾取（有 RHI 设备时走 ID 图回读；GL 遗留拾取并行保留）
+        if (_backend == rhi::Backend::Vulkan || m_settings.modelUseRHI) {
+            requestPick(x, y);
+        }
+    }
 }
 
 void RenderSystem::onMouseRightDown(double x, double y) {

@@ -176,8 +176,8 @@ void VkCommandList::setUniform(const char* name, const UniformValue& value) {
         std::memcpy(_pushData + 64 / sizeof(float), value.data, 16 * sizeof(float));
         applyReversedZCorrection(_pushData + 64 / sizeof(float));
         _pushDirty = true;
-    } else if (std::strcmp(name, "uClipPlane") == 0) {
-        // D7 剖切平面：vec4 放在 offset 64（与天空盒 uProjMat 同区，但管线不同）
+    } else if (std::strcmp(name, "uClipPlane") == 0 || std::strcmp(name, "uPickColor") == 0) {
+        // D7 剖切平面 / D2 拾取色：vec4 放在 offset 64（与天空盒 uProjMat 同区，但管线不同）
         std::memcpy(_pushData + 64 / sizeof(float), value.data, 4 * sizeof(float));
         _pushDirty = true;
     } else if (std::strcmp(name, "uColor") == 0) {
