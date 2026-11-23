@@ -148,7 +148,26 @@ Vulkan 后端从"创建即崩"到"像素回读验证通过"，共定位修复 **
   printf，定位顶点变换/裁剪环节。备选排查：viewport/scissor（DisplaySize 点 vs
   帧缓冲像素的 Retina 倍率）、imgui 内部 Frames[ImageCount] 复用。
 
-### 调试设施（保留，正式功能）
+### 远程并行改动移植清单（origin 17 提交，分支 backup/remote-17commits）
+
+背景：远程并行演化的版本做了 `RenderSystem/` 目录重构与类改名
+（Shader→ShaderMng、image→TextureMng/ResMng）。已按主线策略以本地
+RHI 版本为树合并（`-s ours`），远程功能清单如下，待逐项移植：
+
+| 远程提交 | 内容 | 规模 | 移植评估 |
+|---------|------|------|---------|
+| 7138466 | **SDF 字体渲染**（frag_distance 场 + FontManager 扩展） | 74 行 | 高价值——文字渲染质量，随 RHI 文字路径（M4.4）一起移植 |
+| af067ec | **相机重构** + 新增 vector3/vector4 数学类 | 665 行 | 大头——需与现有 camera（原 camera_old）合并评估 |
+| 0fdb9af | **Windows 编译修复**（CMake + camera 头） | 小 | 直接参考——M5 跨平台打包时应用 |
+| 49e136a | 中文编码问题修复（GBK→UTF8） | — | 参考——本地仍有 GBK 注释，逐步转 UTF8 |
+| 7bc9d3f | 天空盒混合问题修复（SkyPass/NormalPass 小改） | 小 | 待对比——评估 RHI 天空路径（LEQUAL 已处理深度）是否受同一问题影响 |
+| 9ace7a2 | 编译警告修复 | 小 | 参考性 |
+| 其余 | 目录结构/删除文件/绘制接口整理 | — | 已被本地三层结构取代，不移植 |
+
+备份分支：`backup/remote-17commits`（17 提交完整可查）；
+本地 RHI 工作备份：`backup/rhi-work-88cbca3`。
+
+## 调试设施（保留，正式功能）
 
 - `selfTestAB()`：同帧 A/B 逐像素对比（RenderSystem，GL 模式）
 - `RHI_PROBE=1`：VK 第 30 帧中心像素回读
