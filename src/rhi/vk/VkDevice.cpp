@@ -103,6 +103,7 @@ VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath
     _caps = VkCaps::query(_physicalDevice, _surface);
     _caps.log();
     createLogicalDevice();
+    _memAlloc.init(_physicalDevice, _device);   // E1：先于任何资源创建
     createPipelineCache();   // A3: 需在逻辑设备之后、创建任何管线之前
     createSwapchainObjects();
     createCommandObjects();
@@ -123,24 +124,28 @@ VulkanDevice::~VulkanDevice() {
     if (_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(_device);
     }
+    // E1：排空帧内延迟的 GPU 工作（如最后帧的纹理 staging）——此前退出路径
+    // 不 drain，其 staging 的释放回调永远不执行（分配器统计暴露的既有泄漏）
+    drainDeferredGpuWork();
     destroySwapchainObjects();
     if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
     if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
     // _semRenderDone 为 per-image，随 swapchain 销毁（destroySwapchainObjects）
     if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
+    // E1：先走子分配器统计/告警，资源对象内存在随行销毁
     for (auto& b : _buffers) {
         if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
-        if (b.memory) vkFreeMemory(_device, b.memory, nullptr);
+        _memAlloc.free(b.memAlloc);   // E1：内存归分配器（防双重释放）
     }
     for (auto& t : _textures) {
         if (t.sampler) vkDestroySampler(_device, t.sampler, nullptr);
         if (t.view)    vkDestroyImageView(_device, t.view, nullptr);
         if (t.image)   vkDestroyImage(_device, t.image, nullptr);
-        if (t.memory)  vkFreeMemory(_device, t.memory, nullptr);
+        _memAlloc.free(t.memAlloc);   // E1
     }
     for (auto& b : _uniformBlocks) {
         if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
-        if (b.memory) vkFreeMemory(_device, b.memory, nullptr);
+        _memAlloc.free(b.memAlloc);   // E1
         // 描述符集随 pool 销毁
     }
     // destroySwapchainObjects 只回收 swapchain/renderPass，不回收管线
@@ -153,6 +158,7 @@ VulkanDevice::~VulkanDevice() {
     if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
     savePipelineCache();     // A3: 管线销毁后仍可导出缓存内容；在 destroy device 之前
     if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
+    _memAlloc.shutdown();    // E1：设备销毁前回收页/专用分配（泄漏在此告警）
     if (_device)   vkDestroyDevice(_device, nullptr);
     if (_surface)  vkDestroySurfaceKHR(_instance, _surface, nullptr);
     if (_debugMessenger && _destroyDebugMessengerFn) {
@@ -574,12 +580,13 @@ void VulkanDevice::createSwapchainObjects() {
         VK_CHECK(vkCreateImage(_device, &ici, nullptr, &_depthImage));
         VkMemoryRequirements req;
         vkGetImageMemoryRequirements(_device, _depthImage, &req);
-        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        mai.allocationSize  = req.size;
-        mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &_depthMemory));
-        VK_CHECK(vkBindImageMemory(_device, _depthImage, _depthMemory, 0));
+        _depthMemAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);   // E1
+        if (!_depthMemAlloc.valid()) {
+            ENGINE_LOG_ERROR("[VK] depth memory alloc failed");
+            std::abort();
+        }
+        _depthMemory = _depthMemAlloc.memory;
+        VK_CHECK(vkBindImageMemory(_device, _depthImage, _depthMemory, _depthMemAlloc.offset));
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vci.image    = _depthImage;
@@ -600,7 +607,10 @@ void VulkanDevice::destroySwapchainObjects() {
     for (auto v : _swapchainViews)  if (v)              vkDestroyImageView(_device, v, nullptr);
     if (_depthView)   vkDestroyImageView(_device, _depthView, nullptr);
     if (_depthImage)  vkDestroyImage(_device, _depthImage, nullptr);
-    if (_depthMemory) vkFreeMemory(_device, _depthMemory, nullptr);
+    if (_depthMemory) {
+        _memAlloc.free(_depthMemAlloc);   // E1：分配器负责 vkFreeMemory（专用分配）
+        _depthMemory = VK_NULL_HANDLE;
+    }
     _depthView = VK_NULL_HANDLE; _depthImage = VK_NULL_HANDLE; _depthMemory = VK_NULL_HANDLE;
     if (_swapchain)  vkDestroySwapchainKHR(_device, _swapchain, nullptr);
     _swapchainLayouts.clear();
@@ -829,7 +839,7 @@ void VulkanDevice::endFrame() {
     if (probeEnabled && ++frameCount == 30) {
         vkQueueWaitIdle(_queue);   // 主提交完成；图像处于 PRESENT_SRC，仍 acquired
         VkBuffer readback;
-        VkDeviceMemory readbackMem;
+        VkMemAlloc readbackMem;   // E1：子分配 + 页持久映射
         VkDeviceSize bufSize = _swapchainExtent.width * _swapchainExtent.height * 4;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size  = bufSize;
@@ -838,12 +848,9 @@ void VulkanDevice::endFrame() {
         VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &readback));
         VkMemoryRequirements req;
         vkGetBufferMemoryRequirements(_device, readback, &req);
-        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        mai.allocationSize  = req.size;
-        mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &readbackMem));
-        VK_CHECK(vkBindBufferMemory(_device, readback, readbackMem, 0));
+        readbackMem = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                          | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VK_CHECK(vkBindBufferMemory(_device, readback, readbackMem.memory, readbackMem.offset));
 
         // 主命令缓冲已完成，可 reset 后复用录制回读
         VkCommandBuffer cb = _commandBuffer;
@@ -887,9 +894,8 @@ void VulkanDevice::endFrame() {
         VK_CHECK(vkQueueSubmit(_queue, 1, &s2, VK_NULL_HANDLE));
         VK_CHECK(vkQueueWaitIdle(_queue));
 
-        void* mapped = nullptr;
-        VK_CHECK(vkMapMemory(_device, readbackMem, 0, bufSize, 0, &mapped));
-        const uint8_t* px = static_cast<const uint8_t*>(mapped);
+        // E1：页持久映射，直接取指针
+        const uint8_t* px = static_cast<const uint8_t*>(readbackMem.mapped);
         uint32_t cx = _swapchainExtent.width / 2, cy = _swapchainExtent.height * 2 / 5;
         const size_t off = (static_cast<size_t>(cy) * _swapchainExtent.width + cx) * 4;
         // swapchain 格式可能是 BGRA：打印原始字节 + 两种解释
@@ -916,9 +922,8 @@ void VulkanDevice::endFrame() {
                 fclose(fp);
             }
         }
-        vkUnmapMemory(_device, readbackMem);
         vkDestroyBuffer(_device, readback, nullptr);
-        vkFreeMemory(_device, readbackMem, nullptr);
+        _memAlloc.free(readbackMem);   // E1
         std::fflush(stdout);
     }
 
@@ -964,13 +969,17 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
 
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(_device, res.buffer, &req);
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize  = req.size;
-    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &res.memory));
-    VK_CHECK(vkBindBufferMemory(_device, res.buffer, res.memory, 0));
-    VK_CHECK(vkMapMemory(_device, res.memory, 0, desc.size, 0, &res.mapped));
+    // E1：HOST_VISIBLE 子分配（页持久映射，mapped 直接可得，省 per-object map）
+    res.memAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                       | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!res.memAlloc.valid()) {
+        ENGINE_LOG_ERROR("[VK] buffer memory alloc failed (%u bytes)", desc.size);
+        vkDestroyBuffer(_device, res.buffer, nullptr);
+        return {};
+    }
+    res.memory = res.memAlloc.memory;
+    res.mapped = res.memAlloc.mapped;
+    VK_CHECK(vkBindBufferMemory(_device, res.buffer, res.memory, res.memAlloc.offset));
     if (desc.initialData && desc.size > 0) {
         std::memcpy(res.mapped, desc.initialData, desc.size);
     }
@@ -997,7 +1006,7 @@ void VulkanDevice::destroyBuffer(BufferHandle h) {
     VkBufferRes& b = _buffers[h.id - 1];
     if (!b.buffer) return;
     vkDestroyBuffer(_device, b.buffer, nullptr);
-    if (b.memory) vkFreeMemory(_device, b.memory, nullptr);   // free 隐含 unmap
+    _memAlloc.free(b.memAlloc);   // E1：free 隐含 unmap（页/专用）
     b = VkBufferRes{};
 }
 
@@ -1008,7 +1017,7 @@ void VulkanDevice::destroyTexture(TextureHandle h) {
     if (t.sampler) vkDestroySampler(_device, t.sampler, nullptr);
     if (t.view)    vkDestroyImageView(_device, t.view, nullptr);
     vkDestroyImage(_device, t.image, nullptr);
-    if (t.memory)  vkFreeMemory(_device, t.memory, nullptr);
+    _memAlloc.free(t.memAlloc);   // E1
     t = VkTextureRes{};
 }
 
@@ -1029,7 +1038,7 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
     VkUniformBlockRes& b = _uniformBlocks[h.id - 1];
     if (!b.buffer) return;
     vkDestroyBuffer(_device, b.buffer, nullptr);
-    if (b.memory) vkFreeMemory(_device, b.memory, nullptr);   // 描述符集随 pool 回收（无 FREE_DESCRIPTOR_SET_BIT）
+    _memAlloc.free(b.memAlloc);   // E1（描述符集随 pool 回收，无 FREE_DESCRIPTOR_SET_BIT）
     b = VkUniformBlockRes{};
 }
 
@@ -1078,12 +1087,15 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
         VK_CHECK(vkCreateImage(_device, &ici, nullptr, &rt.depthImage));
         VkMemoryRequirements req;
         vkGetImageMemoryRequirements(_device, rt.depthImage, &req);
-        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        mai.allocationSize  = req.size;
-        mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &rt.depthMemory));
-        VK_CHECK(vkBindImageMemory(_device, rt.depthImage, rt.depthMemory, 0));
+        rt.depthMemAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);   // E1
+        if (!rt.depthMemAlloc.valid()) {
+            ENGINE_LOG_ERROR("[VK] RT depth memory alloc failed");
+            vkDestroyImageView(_device, rt.depthView, nullptr);
+            vkDestroyImage(_device, rt.depthImage, nullptr);
+            return {};
+        }
+        rt.depthMemory = rt.depthMemAlloc.memory;
+        VK_CHECK(vkBindImageMemory(_device, rt.depthImage, rt.depthMemory, rt.depthMemAlloc.offset));
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vci.image    = rt.depthImage;
@@ -1118,7 +1130,7 @@ void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
     destroyTexture(rt.colorTex);
     if (rt.depthView)   vkDestroyImageView(_device, rt.depthView, nullptr);
     if (rt.depthImage)  vkDestroyImage(_device, rt.depthImage, nullptr);
-    if (rt.depthMemory) vkFreeMemory(_device, rt.depthMemory, nullptr);
+    _memAlloc.free(rt.depthMemAlloc);   // E1
     rt = VkRenderTargetRes{};
     rt.alive = false;   // 槽位保留（id 不复用）
 }
@@ -1146,9 +1158,9 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
         return false;
     }
 
-    // 回读缓冲（HOST_VISIBLE，行距 0 = 紧凑）
+    // 回读缓冲（HOST_VISIBLE，行距 0 = 紧凑；E1 子分配，页持久映射免 map）
     VkBuffer dst;
-    VkDeviceMemory dstMem;
+    VkMemAlloc dstMem;
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bci.size  = bytes;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -1156,12 +1168,14 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
     VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &dst));
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(_device, dst, &req);
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize  = req.size;
-    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &dstMem));
-    VK_CHECK(vkBindBufferMemory(_device, dst, dstMem, 0));
+    dstMem = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                 | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!dstMem.valid()) {
+        ENGINE_LOG_ERROR("[VK] readback staging alloc failed");
+        vkDestroyBuffer(_device, dst, nullptr);
+        return false;
+    }
+    VK_CHECK(vkBindBufferMemory(_device, dst, dstMem.memory, dstMem.offset));
 
     VkImageLayout curLayout = t.layout;   // lambda 内访问布局快照
     const VkImage image = t.image;
@@ -1198,14 +1212,12 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
                              0, nullptr, 0, nullptr, 1, &toRead);
     }, [this, dst, dstMem, outData, bytes]() {
-        // GPU 完成后回读（submitOneTime 的完成回调）
-        void* mapped = nullptr;
-        if (vkMapMemory(_device, dstMem, 0, bytes, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(outData, mapped, bytes);
-            vkUnmapMemory(_device, dstMem);
+        // GPU 完成后回读（submitOneTime 的完成回调；E1：页持久映射直接拷）
+        if (dstMem.mapped) {
+            std::memcpy(outData, dstMem.mapped, bytes);
         }
         vkDestroyBuffer(_device, dst, nullptr);
-        vkFreeMemory(_device, dstMem, nullptr);
+        _memAlloc.free(dstMem);
     });
     // 布局跟踪回写（submitOneTime 已同步完成）
     _textures[tex.id - 1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1324,12 +1336,14 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
 
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(_device, t.image, &req);
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize  = req.size;
-    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &t.memory));
-    VK_CHECK(vkBindImageMemory(_device, t.image, t.memory, 0));
+    t.memAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);   // E1
+    if (!t.memAlloc.valid()) {
+        ENGINE_LOG_ERROR("[VK] texture memory alloc failed (%ux%u)", desc.width, desc.height);
+        vkDestroyImage(_device, t.image, nullptr);
+        return {};
+    }
+    t.memory = t.memAlloc.memory;
+    VK_CHECK(vkBindImageMemory(_device, t.image, t.memory, t.memAlloc.offset));
 
     // ---- 数据上传：staging → 拷贝 + （可选）mipmap blit + 布局转换 ----
     // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
@@ -1340,9 +1354,10 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
             static_cast<const unsigned char*>(desc.initialData),
             static_cast<const unsigned char*>(desc.initialData) + static_cast<size_t>(bytes));
         // staging 在宿主阶段创建并填充（宿主操作可安全执行于帧内）；
-        // 拷贝命令延迟录制；staging 的销毁在 GPU 执行完成后由完成回调执行
+        // 拷贝命令延迟录制；staging 的销毁在 GPU 执行完成后由完成回调执行。
+        // E1：HOST_VISIBLE 子分配（页持久映射，免 map/unmap）
         VkBuffer staging;
-        VkDeviceMemory stagingMem;
+        VkMemAlloc stagingMem;
         VkBufferCreateInfo sbi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         sbi.size  = bytes;
         sbi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -1350,16 +1365,17 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         VK_CHECK(vkCreateBuffer(_device, &sbi, nullptr, &staging));
         VkMemoryRequirements req2;
         vkGetBufferMemoryRequirements(_device, staging, &req2);
-        VkMemoryAllocateInfo mai2{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        mai2.allocationSize  = req2.size;
-        mai2.memoryTypeIndex = findMemoryType(_physicalDevice, req2.memoryTypeBits,
-                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        VK_CHECK(vkAllocateMemory(_device, &mai2, nullptr, &stagingMem));
-        VK_CHECK(vkBindBufferMemory(_device, staging, stagingMem, 0));
-        void* mapped;
-        VK_CHECK(vkMapMemory(_device, stagingMem, 0, bytes, 0, &mapped));
+        stagingMem = _memAlloc.alloc(req2, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                         | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (!stagingMem.valid()) {
+            ENGINE_LOG_ERROR("[VK] staging alloc failed (%llu bytes)",
+                             static_cast<unsigned long long>(bytes));
+            vkDestroyBuffer(_device, staging, nullptr);
+            return {};
+        }
+        VK_CHECK(vkBindBufferMemory(_device, staging, stagingMem.memory, stagingMem.offset));
+        void* mapped = stagingMem.mapped;
         std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(bytes));
-        vkUnmapMemory(_device, stagingMem);
 
         deferGpuWork([this, t, staging, stagingMem, w = desc.width, h = desc.height,
                       bpp, layerCount, mipLevels, generateMips,
@@ -1464,7 +1480,7 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
             }
         }, [this, staging, stagingMem]() {
             vkDestroyBuffer(_device, staging, nullptr);
-            vkFreeMemory(_device, stagingMem, nullptr);
+            _memAlloc.free(stagingMem);   // E1
         });
     }
     // ---- view + sampler ----
@@ -1869,13 +1885,17 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     VK_CHECK(vkCreateBuffer(_device, &bi, nullptr, &blk.buffer));
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(_device, blk.buffer, &req);
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize  = req.size;
-    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &blk.memory));
-    VK_CHECK(vkBindBufferMemory(_device, blk.buffer, blk.memory, 0));
-    VK_CHECK(vkMapMemory(_device, blk.memory, 0, size, 0, &blk.mapped));
+    // E1：HOST_VISIBLE 子分配（页持久映射）
+    blk.memAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                       | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (!blk.memAlloc.valid()) {
+        ENGINE_LOG_ERROR("[VK] uniform block alloc failed (%u bytes)", size);
+        vkDestroyBuffer(_device, blk.buffer, nullptr);
+        return {};
+    }
+    blk.memory = blk.memAlloc.memory;
+    blk.mapped = blk.memAlloc.mapped;
+    VK_CHECK(vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset));
 
     // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};

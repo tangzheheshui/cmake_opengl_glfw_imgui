@@ -8,6 +8,7 @@
 #include <vulkan/vulkan.h>
 #include "../RhiTypes.h"
 #include "log/LogMacros.h"
+#include "VkMemoryAllocator.h"
 #include <cstdlib>
 
 namespace rhi {
@@ -29,6 +30,7 @@ struct VkBufferRes {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     void*          mapped = nullptr;
     uint32_t       size   = 0;
+    VkMemAlloc     memAlloc;   // E1：子分配上下文（free 用；专用/页内皆可）
 };
 
 // 后端内部纹理资源（M4：DEVICE_LOCAL + staging 一次性上传，无 mipmap）
@@ -44,6 +46,7 @@ struct VkTextureRes {
     // B4：布局跟踪（dynamic rendering 无自动布局转换；上传后 = SHADER_READ_ONLY，
     // 作 RT 颜色附件时 COLOR_ATTACHMENT ↔ SHADER_READ_ONLY 往返，回读时 TRANSFER_SRC）
     VkImageLayout  layout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkMemAlloc     memAlloc;   // E1
 };
 
 // B4：离屏渲染目标。颜色附件复用纹理机制（SAMPLED|COLOR_ATTACHMENT，
@@ -53,6 +56,7 @@ struct VkRenderTargetRes {
     TextureHandle  colorTex;                            // 颜色附件（VkTextureRes）
     VkImage        depthImage  = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+    VkMemAlloc     depthMemAlloc;                       // E1
     VkImageView    depthView   = VK_NULL_HANDLE;
     uint32_t       width  = 0;
     uint32_t       height = 0;
@@ -67,6 +71,7 @@ struct VkUniformBlockRes {
     void*          mapped = nullptr;
     VkDescriptorSet set   = VK_NULL_HANDLE;
     uint32_t       size   = 0;
+    VkMemAlloc     memAlloc;   // E1
 };
 
 struct VkPipelineRes {

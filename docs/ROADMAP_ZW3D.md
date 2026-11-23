@@ -72,6 +72,18 @@
   验证（RHI_PICK_TEST=1 全图扫描）：GL id=4/5、VK id=3/4（GL 多创建一个
   BaseDraw 的正常偏移），像素数**逐个完全一致**（16995 / 770979）。
   已知限制：多视口拾取随 C2；命中后仅日志，选中高亮（D8）待接。
+- ✅ **E1 提前：最小内存子分配器**（2026-11-24，macOS VK 实机验证）：新增
+  `src/rhi/vk/VkMemoryAllocator`——小分配（<1MB）进 8MB 页 first-fit 空闲链表
+  （邻接合并 + 整页空闲回收），大分配（≥1MB）专用 vkAllocateMemory；
+  HOST_VISIBLE 页持久映射（子分配直接拿映射指针，省 per-object map/unmap）。
+  全部 11 处 vkAllocateMemory/vkFreeMemory 收口（buffer/纹理/UBO/staging/
+  回读缓冲/RT 深度/swapchain 深度）。修一个统计器暴露的既有泄漏：退出路径
+  不 drain 帧内延迟 GPU 工作，最后帧 staging 的释放回调永不执行。子分配
+  身份用页 memory 句柄而非下标（页回收 erase 会使下标整体错位——首版真踩过）。
+  顺带：`findMemoryType` 逻辑移入分配器。验证：VK 60 帧 exit=0 且
+  **shutdown live=0**（账目严格平衡）；GL/VK RT 基线逐字节保持、拾取像素数
+  一致、多视口正常。maxMemoryAllocationCount（典型 4096）风险解除——
+  CAD 上万小 buffer 只消耗页数。后续：E2 上传环把 staging 换成 ring。
 - ✅ **B4 离屏 RenderTarget + readback**（2026-11-23，macOS GL/VK 双端验证）：
   契约接口全量落地（`createRenderTarget/destroyRenderTarget/renderTargetColorTexture/
   readbackTexture` + `RenderPassDesc::renderTarget`）。VK：颜色附件复用纹理机制
@@ -116,10 +128,12 @@
 | P0 | B4 | ~~离屏 RenderTarget + readback~~ | ✅ 完成（2026-11-23，GL/VK 双端回读逐字节一致） | B1 | 与 B2 并行 | M |
 | P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
 | P1 | C2 | ~~多视口~~ | v1 完成（2026-11-23：viewport/scissor tile 循环，2/4 分屏验证）；多相机视口待接 | B0 ✅ | 可并行 | M |
-| P1 | D1 | 宽线/边线 + AA + polygon offset | VK 线宽仅 1 | B3 | 可并行 | L |
+| P1 | D1 | ~~宽线核心版~~（屏幕空间三角形展开，GL/VK 像素级一致）✅ 2026-11-23 | AA/端点圆头/接线随 D6 | B3 ✅ | 可并行 | L→M 已减 |
 | P1 | D2 | ~~拾取 Pass + 回读~~ | RHI 路径完成（2026-11-23，点击拾取 + 全图扫描验证）；多视口随 C2 | B4 ✅ | 可并行 | M |
 | P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | D7 已完成；D3/D4/D8 待做 | B1/B4 | 大部分可并行 | M/S |
-| P2 | E1/E2 | VMA + 异步上传环 + Timeline + fif=2 | 每次上传 `vkQueueWaitIdle` | A3 | E1→E2 串行 | M/L |
+| P2 | E1/E2 | VMA + 异步上传环 + Timeline + fif=2 | **E1 最小子分配器 ✅ 提前完成**（2026-11-24：8MB 页 first-fit 空闲链表 + ≥1MB 专用，双端回归全绿）；E2（上传环/Timeline/fif=2）维持 Phase 4 | A3 | E1→E2 串行 | M/L |
+| — | **B6**（新增，2026-11-23 评审） | **着色器反射 + 逐管线布局**：spvReflect/GL 反射 → ShaderReflection → PipelineLayoutDesc，替换全局 128B push 字符串约定 | 字符串约定是当前最大坏味道（uPickColor 漏映射即静默丢失） | 无 | **D5 前置** | M |
+| — | **B7**（新增，2026-11-23 评审） | **TextureView**：TextureViewDesc{mipRange, layerRange, aspect}，契约 v2.1 追加；解 B3c 的 sRGB 双纹理 hack，触发场景 = CSM/D8/烘焙到 mip | 完全缺失 | B0 | 随触发 | S–M |
 | P2 | E3/E5 | CPU 剔除 / LOD / 流式加载 | 未开始 | 无 / E1 | 可与 E1/E2 并行 | M |
 | P3 | F1 | headless 测试 + CI | 无 | B4 | 可并行 | S |
 | P3 | F2 | 打包 / GL 回退验证 / 设备丢失恢复 | 未开始 | C1/C4 | 部分并行 | M |
@@ -128,8 +142,9 @@
 
 1. **第一波（正确性收尾）**：~~B3a → B3b → B3c~~ ✅ 已完成（2026-11-23）；
    ~~A4~~ ✅ 已完成（同日，Windows 实机待复验）。
-2. **第二波（RHI 基座）**：~~B1~~ ✅ → ~~B4~~ ✅ 已完成（2026-11-23）；B2 并行。
-3. **第三波（ZW3D 接入）**：C1/C2 + D2/D4/D7；D1 等 B3 完成后做。
+2. **第二波（RHI 基座）**：~~B1~~ ✅ → ~~B4~~ ✅ 已完成（2026-11-23）；~~B2~~ ✅（同日子代理并行完成）。
+3. **第三波（ZW3D 接入）**：~~C2 v1~~ ✅、~~D2~~ ✅、~~D1 核心~~ ✅（均为 2026-11-23）；
+   剩 C1/D4/D7 收尾；**E1 提前至本波末尾**（allocation count 爆点）；B6（反射）为 D5 前置。
 4. **第四波（大装配）**：E1/E2 → E3/E5。
 5. **第五波（工程化）**：F1/F2。
 

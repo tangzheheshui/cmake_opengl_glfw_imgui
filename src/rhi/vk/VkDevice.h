@@ -156,6 +156,7 @@ private:
     VkFormat                   _depthFormat = VK_FORMAT_UNDEFINED;
     VkImage                    _depthImage  = VK_NULL_HANDLE;
     VkDeviceMemory             _depthMemory = VK_NULL_HANDLE;
+    VkMemAlloc                 _depthMemAlloc;   // E1：深度附件子分配
     VkImageView                _depthView   = VK_NULL_HANDLE;
 
     VkCommandPool   _commandPool   = VK_NULL_HANDLE;
@@ -170,6 +171,9 @@ private:
     std::string    _pipelineCachePath;
     bool           _pipelineCacheFromDisk = false;   // 本次启动是否成功加载了旧缓存
     size_t         _pipelineCacheLoadedBytes = 0;
+
+    // E1：内存子分配器（页内 first-fit + 大额专用），替换逐资源 vkAllocateMemory
+    VkMemoryAllocator _memAlloc;
 
     // 纹理描述符（M4）+ 绘制级 uniform UBO（M4.2）
     VkDescriptorSetLayout _texSetLayout      = VK_NULL_HANDLE;
