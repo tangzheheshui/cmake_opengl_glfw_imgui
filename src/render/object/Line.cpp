@@ -26,10 +26,12 @@ void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsig
 }
 
 bool Line::draw(const Matrix &mtx) {
-    // ---- M2: RHI 迁移路径（开关在调试面板"迁移验证"分组）----
+    // ---- RHI 路径：Vulkan 后端必须走（GL 路径依赖 ShaderCache，VK 模式未初始化）；
+    //      GL 后端可通过调试面板 "Line 走 RHI" 开关切换对比 ----
     auto& renderSys = RenderSystem::getInstance();
     auto* device = renderSys.rhiDevice();
-    if (device && renderSys.settings().lineUseRHI) {
+    if (device && (device->backend() == rhi::Backend::Vulkan
+                   || renderSys.settings().lineUseRHI)) {
         return drawRHI(mtx);
     }
 

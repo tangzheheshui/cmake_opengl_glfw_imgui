@@ -73,9 +73,12 @@ private:
 	~RenderSystem();
 private:
 	void createSmokeTriangle();     // RHI 冒烟资源初始化
-	void drawSmokeTriangle();       // RHI 冒烟绘制
+	void drawSmokeTriangle();       // RHI 冒烟绘制（GL 叠加路径：自建 frame/pass）
 	void createTexturedQuad();      // M4 贴图四边形资源
-	void drawTexturedQuad();        // M4 贴图四边形绘制
+	void drawTexturedQuad();        // M4 贴图四边形绘制（GL 叠加路径：自建 frame/pass）
+	// 在当前已开启的 render pass 内录制（VK 场景路径复用，不自行 beginFrame）
+	void recordSmokeTriangle(rhi::IRHICommandList* cmd);
+	void recordTexturedQuad(rhi::IRHICommandList* cmd);
 	void renderScenePasses();       // 帧级 Pass 循环
 	void drawSceneOverlays();       // RHI 叠加内容（冒烟三角形/贴图四边形）
 	void drawRhiScene();            // Vulkan 后端：RHI 场景绘制
@@ -103,4 +106,6 @@ private:
     rhi::BufferHandle m_quadIB;
     rhi::TextureHandle m_quadTex;
     rhi::PipelineHandle m_quadPipeline;
+    // 四边形专属 uniform 块：避免 bindTexture 污染上一个模型对象的描述符集
+    rhi::UniformBlockHandle m_quadUB;
 }; 

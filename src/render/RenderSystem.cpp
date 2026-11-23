@@ -185,12 +185,18 @@ void RenderSystem::drawRhiScene() {
             for (auto& obj : mCurScene->GetObjs()) {
                 obj->draw(vp);
             }
-            // 天空盒（RHI 路径，M4.3）
-            if (auto sky = mCurScene->GetSkyBox()) {
-                sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
+            // 天空盒（RHI 路径，M4.3；调试面板开关生效）
+            if (m_settings.drawSkyPass) {
+                if (auto sky = mCurScene->GetSkyBox()) {
+                    sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
+                }
             }
         }
     }
+    // RHI 验证叠加内容（调试面板 / RHI_SMOKE / RHI_TEXQUAD 开关）
+    // 在同一个 render pass 内录制，不再自建 frame/pass
+    if (m_settings.rhiSmokeTriangle) recordSmokeTriangle(cmd);
+    if (m_settings.rhiTexQuad)       recordTexturedQuad(cmd);
     // UI 层叠加（ImGui Vulkan 等）在 render pass 内渲染
     if (m_overlayFn) {
         m_overlayFn(cmd);
@@ -361,6 +367,10 @@ void RenderSystem::createTexturedQuad() {
     texDesc.usage = rhi::TEX_SAMPLED;
     texDesc.initialData = purple;
     m_quadTex = m_rhiDevice->createTexture(texDesc);
+
+    // 四边形专属 uniform 块：VK 后端 bindTexture 会写入“当前块”的描述符集，
+    // 若沿用上一个模型的块会污染其纹理槽（描述符写入不按命令顺序生效）
+    m_quadUB = m_rhiDevice->createUniformBlock(256);
 }
 
 void RenderSystem::drawTexturedQuad() {
@@ -373,18 +383,33 @@ void RenderSystem::drawTexturedQuad() {
     rp.clearColor = false;
     rp.clearDepth = false;
     cmd->beginRenderPass(rp);
+    recordTexturedQuad(cmd);
+    cmd->endRenderPass();
+
+    m_rhiDevice->endFrame();
+}
+
+void RenderSystem::recordTexturedQuad(rhi::IRHICommandList* cmd) {
+    if (!cmd || !m_quadPipeline.valid() || !m_quadVB.valid() || !m_quadIB.valid() || !m_quadTex.valid()) return;
+
     cmd->pushDebugLabel("RHITexQuad");
     cmd->bindPipeline(m_quadPipeline);
     cmd->setUniform("uMatrixMVP", rhi::UniformValue::fromMat4(kIdentityMat4));
     cmd->setUniform("uTex", rhi::UniformValue::fromInt(0));
+    // VK：切到四边形专属 uniform 块后再绑纹理。
+    // bindTexture 写入“当前块”的描述符集，沿用模型块会污染模型纹理槽。
+    // GL 后端按名直传，不需要此步骤。
+    auto* device = RenderSystem::getInstance().rhiDevice();
+    if (device && device->backend() == rhi::Backend::Vulkan) {
+        if (!m_quadUB.valid()) return;   // 无专属块时宁可不画，避免污染模型描述符集
+        static const unsigned char zeroBlock[256] = {};
+        cmd->setDrawUniforms(m_quadUB, zeroBlock, sizeof(zeroBlock));
+    }
     cmd->bindTexture(m_quadTex, 0);
     cmd->bindVertexBuffer(m_quadVB);
     cmd->bindIndexBuffer(m_quadIB);
     cmd->drawIndexed(6);
     cmd->popDebugLabel();
-    cmd->endRenderPass();
-
-    m_rhiDevice->endFrame();
 }
 
 void RenderSystem::renderScenePasses() {
@@ -422,6 +447,15 @@ void RenderSystem::drawSmokeTriangle() {
     rp.clearColor = false;      // 叠加在主场景上，不清屏
     rp.clearDepth = false;
     cmd->beginRenderPass(rp);
+    recordSmokeTriangle(cmd);
+    cmd->endRenderPass();
+
+    m_rhiDevice->endFrame();
+}
+
+void RenderSystem::recordSmokeTriangle(rhi::IRHICommandList* cmd) {
+    if (!cmd || !m_smokePipeline.valid() || !m_smokeVB.valid()) return;
+
     cmd->pushDebugLabel("RHISmokeTriangle");
     cmd->bindPipeline(m_smokePipeline);
     cmd->setUniform("uMatrixMVP", rhi::UniformValue::fromMat4(kIdentityMat4));
@@ -433,9 +467,6 @@ void RenderSystem::drawSmokeTriangle() {
         cmd->draw(3);
     }
     cmd->popDebugLabel();
-    cmd->endRenderPass();
-
-    m_rhiDevice->endFrame();
 }
 
 void RenderSystem::preloadTextures(const std::string& dirPath) {
