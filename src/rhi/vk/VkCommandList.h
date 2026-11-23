@@ -26,6 +26,7 @@ public:
     void bindIndexBuffer(BufferHandle buffer) override;
     void bindTexture(TextureHandle texture, uint32_t slot = 0) override;
     void setViewport(float x, float y, float w, float h) override;
+    void setScissor(int x, int y, int w, int h) override;   // C2：VK 帧缓冲即左上原点，直接透传
 
     void draw(uint32_t vertexCount, uint32_t firstVertex = 0) override;
     void drawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0) override;

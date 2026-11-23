@@ -206,14 +206,53 @@ void RenderSystem::drawRhiScene() {
     if (!emptyScene) {
         if (auto cam = mCurScene->GetActiveCamera()) {
             auto vp = cam->GetVPMatrix();
-            for (auto& obj : mCurScene->GetObjs()) {
-                obj->draw(vp);
-            }
-            // 天空盒（RHI 路径，M4.3；调试面板开关生效）
-            if (m_settings.drawSkyPass) {
-                if (auto sky = mCurScene->GetSkyBox()) {
-                    sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
+
+            // C2：多视口（RHI_VIEWPORTS=2 左右分屏 / 4 四分屏）。
+            // 同一相机同一场景，逐 tile 切 viewport/scissor 重绘；UI/overlay 在
+            // tile 循环外按全目标绘制。tile 坐标约定 = 目标左上原点（与窗口一致）。
+            static int multiView = [] {
+                if (const char* e = std::getenv("RHI_VIEWPORTS")) {
+                    return std::atoi(e);
                 }
+                return 1;
+            }();
+            const bool multi = multiView > 1;
+            int fw = 0, fh = 0;
+            if (multi) {
+                glfwGetFramebufferSize(_window, &fw, &fh);
+            }
+
+            auto drawSceneContent = [&]() {
+                for (auto& obj : mCurScene->GetObjs()) {
+                    obj->draw(vp);
+                }
+                // 天空盒（RHI 路径，M4.3；调试面板开关生效）
+                if (m_settings.drawSkyPass) {
+                    if (auto sky = mCurScene->GetSkyBox()) {
+                        sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
+                    }
+                }
+            };
+
+            if (multi && fw > 0 && fh > 0) {
+                const int cols = (multiView == 2) ? 2 : 2;   // 2=左右分屏，4=2×2
+                const int rows = (multiView == 2) ? 1 : 2;
+                const int tw = fw / cols, th = fh / rows;
+                for (int r = 0; r < rows; ++r) {
+                    for (int c = 0; c < cols; ++c) {
+                        const int tx = c * tw, ty = r * th;
+                        // VK：负高度 viewport（B3a），锚点 y = tile 底（tileY + tileH）
+                        cmd->setViewport(static_cast<float>(tx), static_cast<float>(ty + th),
+                                         static_cast<float>(tw), -static_cast<float>(th));
+                        cmd->setScissor(tx, ty, tw, th);
+                        drawSceneContent();
+                    }
+                }
+                // 恢复全目标（overlay/UI 按 swapchain 全尺寸绘制）
+                cmd->setViewport(0, static_cast<float>(fh), static_cast<float>(fw), -static_cast<float>(fh));
+                cmd->setScissor(0, 0, fw, fh);
+            } else {
+                drawSceneContent();
             }
         }
     }

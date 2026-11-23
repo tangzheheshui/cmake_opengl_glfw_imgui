@@ -115,7 +115,7 @@
 | P0 | B2 | GL 后端 v2：render target / sampler / readback / caps | 契约已冻结，GL 未实现 | B0 | **可并行** | M |
 | P0 | B4 | ~~离屏 RenderTarget + readback~~ | ✅ 完成（2026-11-23，GL/VK 双端回读逐字节一致） | B1 | 与 B2 并行 | M |
 | P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
-| P1 | C2 | 多视口 | 单视口 | B0 | 可并行 | M |
+| P1 | C2 | ~~多视口~~ | v1 完成（2026-11-23：viewport/scissor tile 循环，2/4 分屏验证）；多相机视口待接 | B0 ✅ | 可并行 | M |
 | P1 | D1 | 宽线/边线 + AA + polygon offset | VK 线宽仅 1 | B3 | 可并行 | L |
 | P1 | D2 | ~~拾取 Pass + 回读~~ | RHI 路径完成（2026-11-23，点击拾取 + 全图扫描验证）；多视口随 C2 | B4 ✅ | 可并行 | M |
 | P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | D7 已完成；D3/D4/D8 待做 | B1/B4 | 大部分可并行 | M/S |

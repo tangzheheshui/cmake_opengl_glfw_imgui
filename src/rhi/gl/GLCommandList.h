@@ -36,6 +36,7 @@ public:
     void bindIndexBuffer(BufferHandle buffer) override;
     void bindTexture(TextureHandle texture, uint32_t slot = 0) override;
     void setViewport(float x, float y, float w, float h) override;
+    void setScissor(int x, int y, int w, int h) override;   // C2：坐标 = 目标左上原点
 
     void draw(uint32_t vertexCount, uint32_t firstVertex = 0) override;
     void drawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0) override;
@@ -61,6 +62,9 @@ private:
         GLint     cullMode   = GL_BACK;
         GLint     framebuffer = 0;   // D2：FBO 绑定纳入 Pass 边界（RT pass 后恢复，
                                      // 否则 ImGui 等宿主渲染会画进离屏 RT）
+        GLint     viewport[4] = {0, 0, 0, 0};   // C2：视口纳入 Pass 边界
+        GLboolean scissorTest = GL_FALSE;       // C2：裁剪测试纳入 Pass 边界
+        GLint     scissorBox[4] = {0, 0, 0, 0};
     };
     void saveState(GLStateSnapshot& s);
     void restoreState(const GLStateSnapshot& s);
@@ -79,6 +83,7 @@ private:
 
     GLStateSnapshot _savedState;
     bool _stateSaved = false;
+    int  _curTargetHeight = 0;   // C2：当前 pass 目标高度（scissor 坐标换算用）
 
     // B2：本次 Pass 内绑定过独立采样器的纹理单元（endRenderPass 统一解绑为 0，
     // 把"Pass 边界状态中性"约定扩展到 GL_SAMPLER_BINDING）

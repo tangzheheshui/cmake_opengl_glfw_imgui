@@ -242,6 +242,13 @@ void VkCommandList::setViewport(float x, float y, float w, float h) {
     vkCmdSetViewport(_device->commandBuffer(), 0, 1, &vp);
 }
 
+// C2：裁剪矩形。VK 帧缓冲坐标即左上原点，与契约一致，直接透传。
+// （负高度 viewport 只翻转光栅化 y，scissor 仍在帧缓冲坐标系）
+void VkCommandList::setScissor(int x, int y, int w, int h) {
+    VkRect2D sc{{x, y}, {static_cast<uint32_t>(w), static_cast<uint32_t>(h)}};
+    vkCmdSetScissor(_device->commandBuffer(), 0, 1, &sc);
+}
+
 void VkCommandList::applyPushConstants() {
     if (_pushDirty && _curPipeline.valid()) {
         vkCmdPushConstants(_device->commandBuffer(), _device->pipelineLayout(),

@@ -39,6 +39,9 @@ void GLCommandList::saveState(GLStateSnapshot& s) {
     s.cullFace  = glIsEnabled(GL_CULL_FACE);
     glGetIntegerv(GL_CULL_FACE_MODE, &s.cullMode);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.framebuffer);   // D2: RT pass 后恢复 FBO
+    glGetIntegerv(GL_VIEWPORT, s.viewport);                  // C2: 视口/裁剪纳入 Pass 边界
+    s.scissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_SCISSOR_BOX, s.scissorBox);
 }
 
 void GLCommandList::restoreState(const GLStateSnapshot& s) {
@@ -48,6 +51,10 @@ void GLCommandList::restoreState(const GLStateSnapshot& s) {
     // D2：FBO 绑定纳入 Pass 边界——RT pass 后恢复，否则宿主后续渲染
     //（如 ImGui overlay）会画进离屏 RT
     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(s.framebuffer));
+    // C2：视口/裁剪恢复（Pass 不向周边泄漏多视口状态）
+    glViewport(s.viewport[0], s.viewport[1], s.viewport[2], s.viewport[3]);
+    glScissor(s.scissorBox[0], s.scissorBox[1], s.scissorBox[2], s.scissorBox[3]);
+    if (s.scissorTest) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
     if (s.cullFace) {
         glEnable(GL_CULL_FACE);
         glCullFace(s.cullMode);
@@ -96,6 +103,16 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
         }
     }
     glViewport(0, 0, w, h);
+    _curTargetHeight = h;   // C2: scissor 坐标换算基准
+}
+
+// C2：裁剪矩形。契约坐标 = 当前 pass 目标的左上原点（与窗口/鼠标一致），
+// GL 帧缓冲原点在左下 → y 翻转换算。
+void GLCommandList::setScissor(int x, int y, int w, int h) {
+    const int targetH = _curTargetHeight > 0 ? _curTargetHeight : 0;
+    const int yGL = targetH - y - h;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x, yGL, w, h);
 }
 
 void GLCommandList::endRenderPass() {
