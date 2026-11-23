@@ -61,7 +61,17 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
     }
     
     shader->use();
-    
+
+    // D7：剖切平面（关闭时传 (0,0,0,1)，dot + 1 >= 0 不裁剪任何点）
+    {
+        auto& settings = RenderSystem::getInstance().settings();
+        glm::vec4 clipPlane = settings.clipPlaneEnabled
+            ? glm::vec4(settings.clipPlaneNormal[0], settings.clipPlaneNormal[1],
+                        settings.clipPlaneNormal[2], settings.clipPlaneDistance)
+            : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        shader->setFloat4("uClipPlane", clipPlane.x, clipPlane.y, clipPlane.z, clipPlane.w);
+    }
+
     bool bDrawPick = (flags & DrawOption::DRAW_PICK);
  
     if (bDrawShadow) {
@@ -324,6 +334,16 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     // uViewProj → push constant offset 0
     glm::mat4 vp = Matrix::toMatrix(mtx);
     cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
+
+    // D7：剖切平面 → push constant offset 64
+    {
+        const auto& settings = rs.settings();
+        glm::vec4 clipPlane = settings.clipPlaneEnabled
+            ? glm::vec4(settings.clipPlaneNormal[0], settings.clipPlaneNormal[1],
+                        settings.clipPlaneNormal[2], settings.clipPlaneDistance)
+            : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        cmd->setUniform("uClipPlane", rhi::UniformValue::fromVec4(glm::value_ptr(clipPlane)));
+    }
 
     // 绘制级 uniform（灯光/材质/相机）
     engine::DrawUniforms du{};

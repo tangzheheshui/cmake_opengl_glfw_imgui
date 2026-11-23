@@ -24,6 +24,8 @@
   验证层 0 error、`RHI_PROBE` 中心像素 119,136,119,255、ImGui 面板可见（CJK 字体已加载）；
   同时修复：MSVC 代码页 936 需 `/utf-8`、只构建 app 时 SPIR-V 缺失、
   per-image render-done semaphore、`RHI_PROBE` present 后布局转换
+- ✅ **D7 剖切平面**：模型着色路径（GL 330 / Vulkan 450）+ 调试面板
+  + `RHI_CLIP=<距离>` 调试入口；文字/线暂不裁剪（随 D4/D1 处理）
 - ⚠ **已知小问题（不阻塞，已记录）**：
   1. 3D 内容相对 ImGui 上下翻转（B3a：负高度 viewport）；
   2. 深度范围仍是 GL 约定 z∈[-1,1]，Vulkan 需要 [0,1]（B3b：Reversed-Z/投影）；
@@ -49,7 +51,7 @@
 | P1 | C2 | 多视口 | 单视口 | B0 | 可并行 | M |
 | P1 | D1 | 宽线/边线 + AA + polygon offset | VK 线宽仅 1 | B3 | 可并行 | L |
 | P1 | D2 | 拾取 Pass + 回读 | 无拾取回读 | B4 | 可并行 | M |
-| P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | 未迁移 | B1/B4 | 大部分可并行 | M/S |
+| P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | D7 已完成；D3/D4/D8 待做 | B1/B4 | 大部分可并行 | M/S |
 | P2 | E1/E2 | VMA + 异步上传环 + Timeline + fif=2 | 每次上传 `vkQueueWaitIdle` | A3 | E1→E2 串行 | M/L |
 | P2 | E3/E5 | CPU 剔除 / LOD / 流式加载 | 未开始 | 无 / E1 | 可与 E1/E2 并行 | M |
 | P3 | F1 | headless 测试 + CI | 无 | B4 | 可并行 | S |

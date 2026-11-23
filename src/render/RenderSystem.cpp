@@ -118,6 +118,11 @@ void RenderSystem::init(const std::string& rootPath) {
             if (std::getenv("RHI_TEXQUAD")) {
                 m_settings.rhiTexQuad = true;
             }
+            // D7 调试入口：RHI_CLIP=<距离> 启用剖切（法线 (1,0,0)）
+            if (const char* clip = std::getenv("RHI_CLIP")) {
+                m_settings.clipPlaneEnabled = true;
+                m_settings.clipPlaneDistance = static_cast<float>(std::atof(clip));
+            }
         }
     }
 }

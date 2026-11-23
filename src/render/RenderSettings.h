@@ -19,6 +19,12 @@ struct RenderSettings {
     bool drawSkyPass    = true;
     bool drawPickPass   = true;     // 关闭后鼠标拾取失效（PickPass 提供 ID 图）
 
+    // ---- CAD 剖切平面（D7）----
+    // 世界空间平面，保留满足 dot(normal, p) + distance >= 0 的一侧
+    bool  clipPlaneEnabled  = false;
+    float clipPlaneNormal[3] = {1.0f, 0.0f, 0.0f};
+    float clipPlaneDistance  = 0.0f;
+
     // ---- 全局 ----
     bool vsync          = true;
     // 注：UI 相关状态（如 ImGui Demo 窗口开关）不属于引擎设置，由 app 层面板自持

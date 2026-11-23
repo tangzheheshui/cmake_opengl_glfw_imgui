@@ -2,7 +2,8 @@
 out vec4 FragColor;
 
 in vec3 pFragPos;
-in vec3 pNormal; 
+in vec3 pNormal;
+in float vClipDistance;   // D7：剖切平面
 
 struct Materail {
     vec3 ambient;
@@ -28,6 +29,7 @@ uniform vec3 uCameraPos;
 
 void main()
 {
+    if (vClipDistance < 0.0) discard;   // D7：剖切
     vec3 result;
     if (uLight.is_open) {
         vec3 normal = normalize(pNormal);

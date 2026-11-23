@@ -79,6 +79,10 @@ void VkCommandList::setUniform(const char* name, const UniformValue& value) {
         // 天空盒：第二个 mat4 在 push 区 offset 64
         std::memcpy(_pushData + 64 / sizeof(float), value.data, 16 * sizeof(float));
         _pushDirty = true;
+    } else if (std::strcmp(name, "uClipPlane") == 0) {
+        // D7 剖切平面：vec4 放在 offset 64（与天空盒 uProjMat 同区，但管线不同）
+        std::memcpy(_pushData + 64 / sizeof(float), value.data, 4 * sizeof(float));
+        _pushDirty = true;
     } else if (std::strcmp(name, "uColor") == 0) {
         float rgba[4] = { value.data[0], value.data[1], value.data[2], 1.0f };
         std::memcpy(_pushData + kPushColorOffset / sizeof(float), rgba, 4 * sizeof(float));

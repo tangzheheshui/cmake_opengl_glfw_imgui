@@ -23,12 +23,14 @@ layout(location = 0) in VS_OUT
     layout(location = 1) vec3 pNormal;
     layout(location = 2) vec2 pTexCoord;
     layout(location = 3) mat3 pMatNormal;
+    layout(location = 6) float pClipDistance;
 } fs_in;
 
 layout(location = 0) out vec4 FragColor;
 
 void main()
 {
+    if (fs_in.pClipDistance < 0.0) discard;   // D7：剖切
     vec3 color = texture(texture_diffuse0, fs_in.pTexCoord).xyz;
     vec3 result = color;
 

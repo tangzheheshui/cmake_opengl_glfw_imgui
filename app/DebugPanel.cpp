@@ -73,6 +73,15 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
         }
     }
 
+    // ---- CAD 显示（D7 剖切平面）----
+    if (ImGui::CollapsingHeader("CAD 显示", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("剖切平面", &settings.clipPlaneEnabled);
+        if (settings.clipPlaneEnabled) {
+            ImGui::SliderFloat("剖切位置 X", &settings.clipPlaneDistance, -20.0f, 20.0f);
+            ImGui::TextDisabled("法线 (1,0,0)：保留 dot(n,p)+d >= 0 一侧");
+        }
+    }
+
     // ---- 全局 ----
     if (ImGui::CollapsingHeader("全局", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Checkbox("垂直同步", &settings.vsync)) {
