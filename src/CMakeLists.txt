@@ -45,6 +45,12 @@ add_library(engine STATIC
     ${ENGINE_HEADERS}
 )
 
+# Windows 中文代码页（936）下 MSVC 默认按 GBK 解析源码；本项目源码为 UTF-8，
+# 不指定时会误判中文字符串（C4819 警告，严重时 C2001「常量中有换行符」）。
+if(MSVC)
+    target_compile_options(engine PRIVATE /utf-8)
+endif()
+
 if(ENGINE_HAS_VULKAN)
     target_include_directories(engine PRIVATE "${VULKAN_INCLUDE_DIR}")
     target_link_libraries(engine PRIVATE "${VULKAN_LIBRARY}")

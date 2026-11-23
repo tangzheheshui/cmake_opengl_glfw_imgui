@@ -18,6 +18,11 @@ add_executable(my_app
     ${SRC_APP}
 )
 
+# Windows 中文代码页（936）下的 UTF-8 源码解析（见 src/CMakeLists.txt）
+if(MSVC)
+    target_compile_options(my_app PRIVATE /utf-8)
+endif()
+
 target_include_directories(my_app
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"          # app 自己的头（DebugPanel.h）
