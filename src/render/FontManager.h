@@ -28,7 +28,10 @@ public:
 
 private:
     FT_Library ft;               // FreeType 库对象
-    FT_Face face;                // 字体面（每个字体文件对应一个 face）
+    FT_Face face = nullptr;      // 字体面（每个字体文件对应一个 face）。
+                                 // 必须初始化为空：VK 模式不加载引擎字体时，
+                                 // ~FontManager 若对未初始化指针调 FT_Done_Face 会段错误
+                                 //（Windows 实机退出崩溃的根因，B3 验证期修复）
     std::unordered_map<uint32_t, Character> characters; // 字符缓存
     std::vector<unsigned int> m_textures; // 追踪所有分配的纹理用于清理
     bool LoadCharacter(uint32_t unicode);     // 支持Unicode字符

@@ -294,6 +294,7 @@ void VulkanDevice::createLogicalDevice() {
     vkEnumerateDeviceExtensionProperties(_physicalDevice, nullptr, &devExtCount, avail.data());
     devExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     bool hasIndexing = false;
+    bool hasMaintenance1 = false;
     bool hasMaintenance3 = false;
     for (auto& e : avail) {
         if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0) {
@@ -302,12 +303,23 @@ void VulkanDevice::createLogicalDevice() {
         if (std::strcmp(e.extensionName, "VK_EXT_descriptor_indexing") == 0) {
             hasIndexing = true;
         }
+        if (std::strcmp(e.extensionName, "VK_KHR_maintenance1") == 0) {
+            hasMaintenance1 = true;
+        }
         if (std::strcmp(e.extensionName, "VK_KHR_maintenance3") == 0) {
             hasMaintenance3 = true;
         }
     }
     if (hasIndexing && hasMaintenance3) {
         devExts.push_back("VK_KHR_maintenance3");   // descriptor_indexing 的依赖
+    }
+    // B3a：负高度 viewport（GL 约定 y 向上，见 VkCommandList::beginRenderPass）。
+    // 实例按 1.0 请求（规避 loader/MVK 版本协商问题），验证层按
+    // min(实例, 设备) 版本判定，maintenance1 虽在 1.1 核心化仍需显式启用
+    if (hasMaintenance1) {
+        devExts.push_back("VK_KHR_maintenance1");
+    } else {
+        ENGINE_LOG_WARN("[VK] VK_KHR_maintenance1 unavailable: negative-viewport y-flip not spec-legal");
     }
     // A1/M4.2c: bindTexture 需要 update-after-bind 描述符更新
     if (hasIndexing) {
@@ -843,10 +855,9 @@ void VulkanDevice::endFrame() {
             FILE* fp = fopen(ppmPath.c_str(), "wb");
             if (fp) {
                 std::fprintf(fp, "P6\n%u %u\n255\n", _swapchainExtent.width, _swapchainExtent.height);
-                // 注意：当前 3D 内容相对 UI 上下翻转（B3 待修），
-                // 这里翻转行序让导出的场景看起来正立。
+                // B3a 完成后 3D 内容已是正立，按屏幕行序直接导出
                 for (uint32_t y = 0; y < _swapchainExtent.height; ++y) {
-                    const uint8_t* row = px + static_cast<size_t>(_swapchainExtent.height - 1 - y) * _swapchainExtent.width * 4;
+                    const uint8_t* row = px + static_cast<size_t>(y) * _swapchainExtent.width * 4;
                     for (uint32_t x = 0; x < _swapchainExtent.width; ++x) {
                         const uint8_t* px4 = row + static_cast<size_t>(x) * 4;
                         const uint8_t rgb[3] = { px4[2], px4[1], px4[0] };   // BGRA → RGB 真色
@@ -1170,7 +1181,9 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rs.polygonMode = VK_POLYGON_MODE_FILL;
     rs.cullMode    = (desc.cull == CullMode::Back) ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
-    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    // B3a：负高度 viewport 把 NDC y 镜像到屏幕，绕序相对 GL 约定翻转；
+    // GL 网格（CCW 正面）在此后端声明 CLOCKWISE 才能正确剔除背面
+    rs.frontFace   = VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -1180,8 +1193,10 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     // M4：render pass 已有深度附件，深度状态由管线描述符驱动
     ds.depthTestEnable  = desc.depth.depthTest  ? VK_TRUE : VK_FALSE;
     ds.depthWriteEnable = desc.depth.depthWrite ? VK_TRUE : VK_FALSE;
-    ds.depthCompareOp   = desc.depth.depthLessEqual ? VK_COMPARE_OP_LESS_OR_EQUAL
-                                                    : VK_COMPARE_OP_LESS;
+    // B3b Reversed-Z：深度语义反转（近=1/远=0，清屏 0，见 VkCommandList::setUniform），
+    // 比较算子相应改为 GREATER 族；depthLessEqual（天空盒远景）映射 GREATER_OR_EQUAL
+    ds.depthCompareOp   = desc.depth.depthLessEqual ? VK_COMPARE_OP_GREATER_OR_EQUAL
+                                                    : VK_COMPARE_OP_GREATER;
 
     VkPipelineColorBlendAttachmentState att{};
     att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT

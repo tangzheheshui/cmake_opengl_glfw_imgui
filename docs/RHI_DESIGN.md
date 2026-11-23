@@ -210,6 +210,37 @@ B1–B4 逐后端落地；冻结后公共头的任何改动必须同步本节并
   只回收 UBO 内存，描述符集随 pool 回收（pool 未开 FREE_DESCRIPTOR_SET_BIT，E1 细化）。
 - 设备默认 uniform block 由设备持有，`destroyUniformBlock` 对其告警并忽略。
 
+### B3a/B3b：VK 后端坐标与深度约定（2026-11-23，Windows 实机验证）
+
+Vulkan 后端在内部统一消化 GL↔VK 的坐标系差异，GL 路径与上层代码零改动：
+
+1. **Y 翻转（B3a）**：所有 VK pass 用**负高度 viewport**（origin.y=高、height=-高）。
+   实例仍按 API 1.0 请求（规避 loader/MVK 版本协商），验证层按 min(实例,设备)
+   版本判定，maintenance1 虽已核心化仍须**显式启用 `VK_KHR_maintenance1`
+   设备扩展**（否则 VUID-VkViewport-apiVersion-07917 报错）。
+   配套地所有管线 `frontFace = CLOCKWISE`：负高度镜像使屏幕绕序翻转，
+   GL 网格的 CCW 正面才能正确剔除背面。
+2. **Reversed-Z（B3b）**：`VkCommandList::setUniform` 对 MVP 类 mat4
+   （uMatrixMVP / uViewProj / uProjMat；不含 uViewMat）后乘修正
+   `z' = 0.5*(w - z)`：GL 的 z∈[-1,1]（近=-1/远=+1）映射为 VK 的 z∈[0,1]
+   且**深度反转**（近=1/远=0），吃满浮点深度的近端精度（CAD 大深跨必需）。
+   深度清屏值固定 0（最远）；管线比较算子 LESS→GREATER、
+   LEQUAL（天空盒）→GREATER_OR_EQUAL；天空盒 vert_sky 的远平面技巧相应从
+   `pos.xyww`（GL 远=1）改为 `z=0`（reversed 远=0）。
+
+验证（GTX 1050 Ti / Vulkan 1.3.280）：验证层 0 error；画面正立、UI 不受影响；
+鸭子正确遮挡天空盒——若比较算子泄漏成 LEQUAL 语义，后画的天空盒会糊掉鸭子，
+可作回归断言。`RHI_DUMP` 的行翻转 hack 已随 B3a 移除（dump 即屏幕行序）。
+
+顺带修复退出段错误（基线即崩，非 B3 引入）：`FontManager::face`（FT_Face）
+未初始化，VK 模式不加载引擎字体时 `~FontManager` 对垃圾指针调 `FT_Done_Face`
+崩溃；GL 模式永远加载字体所以从未暴露。已 NSDMI 初始化 nullptr + 空值保护。
+
+已知遗留（非回归，随 D 系列处理）：光源指示鸭 `objLight`（scale 0.5，duck.dae
+原始尺寸约百单位 → 约 50 单位高，位于 (0,10,0)）会包住轨道相机，画面顶部出现
+巨大鸭眼弧形。GL 侧 selfTestAB 的 frame_rhi.ppm 同样复现 → 属 DrawRHI/场景内容
+既有问题，与后端无关。
+
 ### M4.3b 已知问题（M4.3c 优先）
 
 - **VK 模式 ImGui 面板不显示**：overlay 每帧调用（716 顶点）、DisplaySize=800×500

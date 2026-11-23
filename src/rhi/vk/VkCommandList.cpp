@@ -33,7 +33,9 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     VkClearValue clears[2];
     clears[0].color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
                          desc.clearColorValue[2], desc.clearColorValue[3] }};
-    clears[1].depthStencil = {desc.depthClearValue, 0};
+    // B3b Reversed-Z：VK 后端深度语义反转（1=近平面 / 0=远平面），清屏值固定 0（最远）。
+    // GL 路径的 desc.depthClearValue=1 约定在此后端内转换，调用方无需感知。
+    clears[1].depthStencil = {0.0f, 0};
     bi.clearValueCount = 2;   // 颜色 + 深度（M4 深度附件）
     bi.pClearValues    = clears;
 
@@ -43,7 +45,11 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     // 动态 viewport/scissor（desc 未指定时用 swapchain 尺寸）
     uint32_t w = desc.viewportWidth  ? desc.viewportWidth  : bi.renderArea.extent.width;
     uint32_t h = desc.viewportHeight ? desc.viewportHeight : bi.renderArea.extent.height;
-    setViewport(0, 0, static_cast<float>(w), static_cast<float>(h));
+    // B3a：负高度 viewport——网格按 GL 约定（NDC y 向上）提交，Vulkan NDC y 向下，
+    // 负高度视口把投屏上下翻转，3D 内容不再相对 UI 倒置（origin.y=高、height=-高）。
+    // 负高度需要 maintenance1（Vulkan 1.1 起为核心）；镜像同时翻转屏幕绕序，
+    // 管线侧配套 frontFace=CLOCKWISE（见 VulkanDevice::createPipeline）。
+    setViewport(0, static_cast<float>(h), static_cast<float>(w), -static_cast<float>(h));
     VkRect2D scissor{{0, 0}, {w, h}};
     vkCmdSetScissor(_device->commandBuffer(), 0, 1, &scissor);
 }
@@ -67,17 +73,36 @@ void VkCommandList::bindPipeline(PipelineHandle pipeline) {
     _pushDirty = true;
 }
 
+// ---- B3b：GL 约定 clip 空间 → Vulkan Reversed-Z [0,1] ----
+// GL 投影把视锥映射到 z∈[-1,1]（近=-1/远=+1），Vulkan 裁剪体是 z∈[0,1]。
+// 对"含投影矩阵"的 mat4 做后乘修正：z_clip' = 0.5*(w_clip - z_clip)，即
+// 近平面 → 1（最近）、远平面 → 0（最远），配合管线 GREATER 比较 + 清屏 0
+// （Reversed-Z：浮点深度精度集中在近端，CAD 大深跨场景必需）。
+// 仅修正 MVP 类矩阵；uViewMat 是纯视图矩阵（天空盒），不参与深度映射，保持原样。
+static void applyReversedZCorrection(float* m16) {
+    for (int c = 0; c < 4; ++c) {
+        float*       z = m16 + c * 4 + 2;   // glm 列主序：元素[row][col]在 col*4+row
+        const float* w = m16 + c * 4 + 3;
+        *z = 0.5f * (*w - *z);   // z 行：z' = 0.5*w - 0.5*z；w 行不变
+    }
+}
+
 void VkCommandList::setUniform(const char* name, const UniformValue& value) {
     // M3 固定映射（与 res/shaders_vk 的 push_constant 块一致）：
     //   uMatrixMVP → offset 0（mat4）
     //   uColor     → offset 64（vec4；Vec3 补 alpha=1）
-    if (std::strcmp(name, "uMatrixMVP") == 0 || std::strcmp(name, "uViewProj") == 0
-        || std::strcmp(name, "uViewMat") == 0) {
+    if (std::strcmp(name, "uViewMat") == 0) {
+        // 天空盒视图矩阵（offset 0）：不做 Reversed-Z 修正，见 applyReversedZCorrection 注释
         std::memcpy(_pushData + kPushMvpOffset / sizeof(float), value.data, 16 * sizeof(float));
         _pushDirty = true;
+    } else if (std::strcmp(name, "uMatrixMVP") == 0 || std::strcmp(name, "uViewProj") == 0) {
+        std::memcpy(_pushData + kPushMvpOffset / sizeof(float), value.data, 16 * sizeof(float));
+        applyReversedZCorrection(_pushData + kPushMvpOffset / sizeof(float));
+        _pushDirty = true;
     } else if (std::strcmp(name, "uProjMat") == 0) {
-        // 天空盒：第二个 mat4 在 push 区 offset 64
+        // 天空盒：第二个 mat4 在 push 区 offset 64（含投影矩阵 → 同样修正深度映射）
         std::memcpy(_pushData + 64 / sizeof(float), value.data, 16 * sizeof(float));
+        applyReversedZCorrection(_pushData + 64 / sizeof(float));
         _pushDirty = true;
     } else if (std::strcmp(name, "uClipPlane") == 0) {
         // D7 剖切平面：vec4 放在 offset 64（与天空盒 uProjMat 同区，但管线不同）
@@ -138,9 +163,9 @@ void VkCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, 
 }
 
 void VkCommandList::setViewport(float x, float y, float w, float h) {
-    // 注意：Vulkan 的 NDC y 轴向下，与 GL 相反。
-    // M3 暂用正高度 viewport（内容上下翻转对冒烟三角形验证无影响——
-    // 颜色对称，中心像素不变）；正式翻转方案（负高度或 shader 里翻 y）M4 决定
+    // B3a：本后端统一用负高度 viewport 实现 GL 约定的 y 向上
+    // （beginRenderPass 传入 y=+height / h=-height；maintenance1，Vulkan 1.1 核心）。
+    // ImGui 侧用自己的正高度 viewport 录制（动态状态，逐命令生效，互不影响）。
     VkViewport vp{x, y, w, h, 0.0f, 1.0f};
     vkCmdSetViewport(_device->commandBuffer(), 0, 1, &vp);
 }

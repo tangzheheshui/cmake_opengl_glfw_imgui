@@ -15,7 +15,9 @@ FontManager::~FontManager() {
         glDeleteTextures((GLsizei)m_textures.size(), m_textures.data());
         m_textures.clear();
     }
-    FT_Done_Face(face);
+    if (face) {   // 未加载字体时（如 VK 模式）face 为空，不能调 FT_Done_Face
+        FT_Done_Face(face);
+    }
     FT_Done_FreeType(ft);
 }
 
