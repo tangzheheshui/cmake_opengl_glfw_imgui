@@ -70,6 +70,9 @@ VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath
     createSwapchainObjects();
     createCommandObjects();
     createSyncObjects();
+    // A1: 加载对象命名函数指针（debug_utils 扩展启用后可用）
+    _setNameFn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetInstanceProcAddr(_instance, "vkSetDebugUtilsObjectNameEXT"));
     _commandList = std::make_unique<VkCommandList>(this);
     createWhiteFallbackTexture();   // 先于描述符对象：默认 uniform block 需引用白纹理
     createDescriptorObjects();
@@ -103,6 +106,9 @@ VulkanDevice::~VulkanDevice() {
     if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
     if (_device)   vkDestroyDevice(_device, nullptr);
     if (_surface)  vkDestroySurfaceKHR(_instance, _surface, nullptr);
+    if (_debugMessenger && _destroyDebugMessengerFn) {
+        _destroyDebugMessengerFn(_instance, _debugMessenger, nullptr);
+    }
     if (_instance) vkDestroyInstance(_instance, nullptr);
 }
 
@@ -123,24 +129,104 @@ void VulkanDevice::createInstance() {
     vkEnumerateInstanceExtensionProperties(nullptr, &extCount, nullptr);
     std::vector<VkExtensionProperties> avail(extCount);
     vkEnumerateInstanceExtensionProperties(nullptr, &extCount, avail.data());
-    bool hasPortability = false;
+    bool hasPortability = false, hasDebugUtils = false, hasProps2 = false;
     for (auto& e : avail) {
         if (std::strcmp(e.extensionName, "VK_KHR_portability_enumeration") == 0) hasPortability = true;
+        if (std::strcmp(e.extensionName, "VK_EXT_debug_utils") == 0) hasDebugUtils = true;
+        if (std::strcmp(e.extensionName, "VK_KHR_get_physical_device_properties2") == 0) hasProps2 = true;
     }
     if (hasPortability) exts.push_back("VK_KHR_portability_enumeration");
+    if (hasDebugUtils) exts.push_back("VK_EXT_debug_utils");   // A1: 对象命名 + 调试回调（独立于验证层）
+    if (hasProps2) exts.push_back("VK_KHR_get_physical_device_properties2");   // portability_subset / descriptor_indexing 的依赖
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "my_app";
     app.apiVersion       = VK_API_VERSION_1_0;   // 最低版本请求，规避 loader/MVK 版本协商问题
 
+    // A1: 验证层开关（RHI_VK_VALIDATION=1 强制开 / =0 强制关；Debug 构建默认开）
+    const char* venv = std::getenv("RHI_VK_VALIDATION");
+    bool wantValidation = false;
+    if (venv) {
+        wantValidation = (std::strcmp(venv, "0") != 0);
+    }
+#ifndef NDEBUG
+    else {
+        wantValidation = true;   // Debug 构建默认开启
+    }
+#endif
+    _validationEnabled = false;
+    std::vector<const char*> layers;
+    if (wantValidation) {
+        uint32_t layerCount = 0;
+        vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+        std::vector<VkLayerProperties> avail(layerCount);
+        vkEnumerateInstanceLayerProperties(&layerCount, avail.data());
+        for (const auto& l : avail) {
+            if (std::strcmp(l.layerName, "VK_LAYER_KHRONOS_validation") == 0) {
+                layers.push_back("VK_LAYER_KHRONOS_validation");
+                _validationEnabled = true;
+                break;
+            }
+        }
+        if (!_validationEnabled) {
+            ENGINE_LOG_WARN("[VK] validation requested but VK_LAYER_KHRONOS_validation not installed");
+        }
+    }
+
     VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ci.pApplicationInfo = &app;
     ci.enabledExtensionCount   = static_cast<uint32_t>(exts.size());
     ci.ppEnabledExtensionNames = exts.data();
+    ci.enabledLayerCount       = static_cast<uint32_t>(layers.size());
+    ci.ppEnabledLayerNames     = layers.empty() ? nullptr : layers.data();
     if (hasPortability) {
         ci.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
     VK_CHECK(vkCreateInstance(&ci, nullptr, &_instance));
+    _debugUtilsEnabled = hasDebugUtils;
+
+    if (_validationEnabled) {
+        ENGINE_LOG_INFO("[VK] validation layer enabled");
+        createDebugMessenger();
+    }
+}
+
+void VulkanDevice::createDebugMessenger() {
+    _createDebugMessengerFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(_instance, "vkCreateDebugUtilsMessengerEXT"));
+    _destroyDebugMessengerFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(_instance, "vkDestroyDebugUtilsMessengerEXT"));
+    if (!_createDebugMessengerFn) return;
+
+    VkDebugUtilsMessengerCreateInfoEXT mi{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    mi.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+                       | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+    mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                   | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                   | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    mi.pfnUserCallback = VulkanDevice::debugCallback;
+    VK_CHECK(_createDebugMessengerFn(_instance, &mi, nullptr, &_debugMessenger));
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDevice::debugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT /*type*/,
+    const VkDebugUtilsMessengerCallbackDataEXT* data, void* /*userData*/) {
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        ENGINE_LOG_ERROR("[VK-VAL] %s", data->pMessage);
+    } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        ENGINE_LOG_WARN("[VK-VAL] %s", data->pMessage);
+    }
+    return VK_FALSE;
+}
+
+void VulkanDevice::setObjName(VkObjectType type, uint64_t handle, const char* name) {
+    if (!_debugUtilsEnabled || !_setNameFn || handle == 0) return;
+    VkDebugUtilsObjectNameInfoEXT oi{VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+    oi.objectType   = type;
+    oi.objectHandle = handle;
+    oi.pObjectName  = name;
+    _setNameFn(_device, &oi);
 }
 
 void VulkanDevice::createSurface() {
@@ -194,20 +280,44 @@ void VulkanDevice::createLogicalDevice() {
     std::vector<VkExtensionProperties> avail(devExtCount);
     vkEnumerateDeviceExtensionProperties(_physicalDevice, nullptr, &devExtCount, avail.data());
     devExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    bool hasIndexing = false;
+    bool hasMaintenance3 = false;
     for (auto& e : avail) {
         if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0) {
             devExts.push_back("VK_KHR_portability_subset");
-            break;
+        }
+        if (std::strcmp(e.extensionName, "VK_EXT_descriptor_indexing") == 0) {
+            hasIndexing = true;
+        }
+        if (std::strcmp(e.extensionName, "VK_KHR_maintenance3") == 0) {
+            hasMaintenance3 = true;
         }
     }
+    if (hasIndexing && hasMaintenance3) {
+        devExts.push_back("VK_KHR_maintenance3");   // descriptor_indexing 的依赖
+    }
+    // A1/M4.2c: bindTexture 需要 update-after-bind 描述符更新
+    if (hasIndexing) {
+        devExts.push_back("VK_EXT_descriptor_indexing");
+        _descriptorIndexing = true;
+    }
+
+    // A1/M4.2c: UPDATE_AFTER_BIND 特性（bindTexture 需在 draw 期间原位更新描述符）
+    VkPhysicalDeviceVulkan12Features vk12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    vk12.descriptorIndexing = VK_TRUE;
+    vk12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    vk12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 
     VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     ci.queueCreateInfoCount    = 1;
     ci.pQueueCreateInfos       = &qci;
     ci.enabledExtensionCount   = static_cast<uint32_t>(devExts.size());
     ci.ppEnabledExtensionNames = devExts.data();
+    ci.pNext                   = &vk12;
     VK_CHECK(vkCreateDevice(_physicalDevice, &ci, nullptr, &_device));
     vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
+    setObjName(VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(_device), "RHI_VulkanDevice");
+    setObjName(VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(_queue), "RHI_GraphicsQueue");
 }
 
 void VulkanDevice::createSwapchainObjects() {
@@ -253,6 +363,7 @@ void VulkanDevice::createSwapchainObjects() {
     sci.presentMode      = VK_PRESENT_MODE_FIFO_KHR;   // vsync（M3 固定）
     sci.clipped          = VK_TRUE;
     VK_CHECK(vkCreateSwapchainKHR(_device, &sci, nullptr, &_swapchain));
+    setObjName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(_swapchain), "RHI_Swapchain");
 
     // image views
     uint32_t n = 0;
@@ -267,6 +378,11 @@ void VulkanDevice::createSwapchainObjects() {
         vci.format   = _swapchainFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &_swapchainViews[i]));
+        char name[64];
+        std::snprintf(name, sizeof(name), "RHI_SwapchainImage_%u", i);
+        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_swapchainImages[i]), name);
+        std::snprintf(name, sizeof(name), "RHI_SwapchainView_%u", i);
+        setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(_swapchainViews[i]), name);
     }
 
     // render pass：颜色附件 + 深度附件（M4）
@@ -319,8 +435,10 @@ void VulkanDevice::createSwapchainObjects() {
     rpci.dependencyCount = 1;
     rpci.pDependencies   = &dep;
     VK_CHECK(vkCreateRenderPass(_device, &rpci, nullptr, &_renderPass));
+    setObjName(VK_OBJECT_TYPE_RENDER_PASS, reinterpret_cast<uint64_t>(_renderPass), "RHI_MainRenderPass");
 
     // 深度图像（单一深度缓冲，frame-in-flight=1 下共享合法）
+    setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_depthImage), "RHI_DepthImage");
     {
         VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ici.imageType     = VK_IMAGE_TYPE_2D;
@@ -349,6 +467,7 @@ void VulkanDevice::createSwapchainObjects() {
         vci.format   = _depthFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &_depthView));
+        setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(_depthView), "RHI_DepthView");
     }
 
     // framebuffers（每张 swapchain image 一个，共享同一深度视图）
@@ -363,6 +482,9 @@ void VulkanDevice::createSwapchainObjects() {
         fci.height          = _swapchainExtent.height;
         fci.layers          = 1;
         VK_CHECK(vkCreateFramebuffer(_device, &fci, nullptr, &_framebuffers[i]));
+        char fbname[48];
+        std::snprintf(fbname, sizeof(fbname), "RHI_Framebuffer_%u", i);
+        setObjName(VK_OBJECT_TYPE_FRAMEBUFFER, reinterpret_cast<uint64_t>(_framebuffers[i]), fbname);
     }
     _needsRecreate = false;
 }
@@ -394,6 +516,8 @@ void VulkanDevice::createCommandObjects() {
     ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = 1;
     VK_CHECK(vkAllocateCommandBuffers(_device, &ai, &_commandBuffer));
+    setObjName(VK_OBJECT_TYPE_COMMAND_POOL, reinterpret_cast<uint64_t>(_commandPool), "RHI_CommandPool");
+    setObjName(VK_OBJECT_TYPE_COMMAND_BUFFER, reinterpret_cast<uint64_t>(_commandBuffer), "RHI_MainCmdBuffer");
 }
 
 void VulkanDevice::createSyncObjects() {
@@ -404,6 +528,9 @@ void VulkanDevice::createSyncObjects() {
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;   // 首帧可直接等待
     VK_CHECK(vkCreateFence(_device, &fci, nullptr, &_fenceInFlight));
+    setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semImageAvailable), "RHI_ImageAvailable");
+    setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semRenderDone), "RHI_RenderDone");
+    setObjName(VK_OBJECT_TYPE_FENCE, reinterpret_cast<uint64_t>(_fenceInFlight), "RHI_InFlightFence");
 }
 
 // ============================================================
@@ -442,18 +569,18 @@ void VulkanDevice::recreatePipelines() {
     }
 }
 
-void VulkanDevice::deferGpuWork(std::function<void(VkCommandBuffer)> fn) {
+void VulkanDevice::deferGpuWork(std::function<void(VkCommandBuffer)> fn, std::function<void()> onComplete) {
     if (_frameActive) {
-        _deferredGpu.push_back(std::move(fn));   // 帧内：延迟到下一帧开头
+        _deferredGpu.push_back({std::move(fn), std::move(onComplete)});   // 帧内：延迟到下一帧开头
         return;
     }
-    submitOneTime(std::move(fn));                // 帧外：立即执行
+    submitOneTime(std::move(fn), std::move(onComplete));                // 帧外：立即执行
 }
 
 void VulkanDevice::drainDeferredGpuWork() {
     if (_deferredGpu.empty()) return;
     // 用独立一次性提交执行（不动主命令缓冲：此时它可能仍处于 pending 状态）
-    for (auto& fn : _deferredGpu) submitOneTime(std::move(fn));
+    for (auto& w : _deferredGpu) submitOneTime(std::move(w.record), std::move(w.onComplete));
     _deferredGpu.clear();
 }
 
@@ -621,6 +748,9 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
 
     _buffers.push_back(res);
     BufferHandle h; h.id = static_cast<uint32_t>(_buffers.size());
+    char name[48];
+    std::snprintf(name, sizeof(name), "RHI_Buffer_%u", h.id);
+    setObjName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(res.buffer), name);
     return h;
 }
 
@@ -670,27 +800,29 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         auto dataCopy = std::make_shared<std::vector<unsigned char>>(
             static_cast<const unsigned char*>(desc.initialData),
             static_cast<const unsigned char*>(desc.initialData) + static_cast<size_t>(bytes));
-        deferGpuWork([this, t, dataCopy, w = desc.width, h = desc.height, layerCount](VkCommandBuffer cb) {
-            const VkDeviceSize total = static_cast<VkDeviceSize>(w) * h * 4 * layerCount;
-            VkBuffer staging;
-            VkDeviceMemory stagingMem;
-            VkBufferCreateInfo sbi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            sbi.size  = total;
-            sbi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-            sbi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VK_CHECK(vkCreateBuffer(_device, &sbi, nullptr, &staging));
-            VkMemoryRequirements req2;
-            vkGetBufferMemoryRequirements(_device, staging, &req2);
-            VkMemoryAllocateInfo mai2{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            mai2.allocationSize  = req2.size;
-            mai2.memoryTypeIndex = findMemoryType(_physicalDevice, req2.memoryTypeBits,
-                                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            VK_CHECK(vkAllocateMemory(_device, &mai2, nullptr, &stagingMem));
-            VK_CHECK(vkBindBufferMemory(_device, staging, stagingMem, 0));
-            void* mapped;
-            VK_CHECK(vkMapMemory(_device, stagingMem, 0, total, 0, &mapped));
-            std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(total));
-            vkUnmapMemory(_device, stagingMem);
+        // staging 在宿主阶段创建并填充（宿主操作可安全执行于帧内）；
+        // 拷贝命令延迟录制；staging 的销毁在 GPU 执行完成后由完成回调执行
+        VkBuffer staging;
+        VkDeviceMemory stagingMem;
+        VkBufferCreateInfo sbi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        sbi.size  = bytes;
+        sbi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        sbi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VK_CHECK(vkCreateBuffer(_device, &sbi, nullptr, &staging));
+        VkMemoryRequirements req2;
+        vkGetBufferMemoryRequirements(_device, staging, &req2);
+        VkMemoryAllocateInfo mai2{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai2.allocationSize  = req2.size;
+        mai2.memoryTypeIndex = findMemoryType(_physicalDevice, req2.memoryTypeBits,
+                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VK_CHECK(vkAllocateMemory(_device, &mai2, nullptr, &stagingMem));
+        VK_CHECK(vkBindBufferMemory(_device, staging, stagingMem, 0));
+        void* mapped;
+        VK_CHECK(vkMapMemory(_device, stagingMem, 0, bytes, 0, &mapped));
+        std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(bytes));
+        vkUnmapMemory(_device, stagingMem);
+
+        deferGpuWork([this, t, staging, stagingMem, w = desc.width, h = desc.height, layerCount](VkCommandBuffer cb) {
 
             VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             bar.srcAccessMask = 0;
@@ -721,7 +853,7 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
             vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
                                  0, nullptr, 0, nullptr, 1, &bar);
-
+        }, [this, staging, stagingMem]() {
             vkDestroyBuffer(_device, staging, nullptr);
             vkFreeMemory(_device, stagingMem, nullptr);
         });
@@ -747,6 +879,11 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     VK_CHECK(vkCreateSampler(_device, &sci, nullptr, &t.sampler));
 
     _textures.push_back(t);
+    char tname[48];
+    std::snprintf(tname, sizeof(tname), "RHI_Texture_%u", static_cast<uint32_t>(_textures.size()));
+    setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(t.image), tname);
+    setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(t.view), tname);
+    setObjName(VK_OBJECT_TYPE_SAMPLER, reinterpret_cast<uint64_t>(t.sampler), tname);
     TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
     return h;
 }
@@ -882,6 +1019,12 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     gpi.renderPass          = _renderPass;
     gpi.subpass             = 0;
     VK_CHECK(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &gpi, nullptr, &res.pipeline));
+    {
+        char pname[48];
+        std::snprintf(pname, sizeof(pname), "RHI_Pipeline_%u", static_cast<uint32_t>(_pipelines.size() + 1));
+        setObjName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(res.pipeline), pname);
+        setObjName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<uint64_t>(_commandList->_pipelineLayout), "RHI_PipelineLayout");
+    }
 
     for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
 
@@ -930,9 +1073,20 @@ void VulkanDevice::createDescriptorObjects() {
         bindings[i + 1].descriptorCount = 1;
         bindings[i + 1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
+    // bindings 1..4 允许 update-after-bind（draw 期间更新纹理槽位）
+    VkDescriptorBindingFlags bindFlags[5]{};
+    for (uint32_t i = 1; i < 5; ++i) bindFlags[i] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo bfi{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    bfi.bindingCount  = 5;
+    bfi.pBindingFlags = bindFlags;
+
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = 5;
     li.pBindings    = bindings;
+    li.pNext        = &bfi;
+    li.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     VK_CHECK(vkCreateDescriptorSetLayout(_device, &li, nullptr, &_texSetLayout));
 
     VkDescriptorPoolSize poolSizes[2]{};
@@ -941,10 +1095,13 @@ void VulkanDevice::createDescriptorObjects() {
     poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 32;
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     pi.maxSets       = 32;
     pi.poolSizeCount = 2;
     pi.pPoolSizes    = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(_device, &pi, nullptr, &_texDescriptorPool));
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, reinterpret_cast<uint64_t>(_texDescriptorPool), "RHI_TexDescriptorPool");
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<uint64_t>(_texSetLayout), "RHI_TexSetLayout");
 
     // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用
     _defaultUniformBlock = createUniformBlock(kDrawUniformsSize);
@@ -971,7 +1128,7 @@ void VulkanDevice::createWhiteFallbackTexture() {
     _whiteCubeTex = createTexture(cd);
 }
 
-void VulkanDevice::submitOneTime(std::function<void(VkCommandBuffer)> record) {
+void VulkanDevice::submitOneTime(std::function<void(VkCommandBuffer)> record, std::function<void()> onComplete) {
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     ai.commandPool        = _commandPool;
     ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -987,6 +1144,8 @@ void VulkanDevice::submitOneTime(std::function<void(VkCommandBuffer)> record) {
     si.pCommandBuffers    = &cb;
     VK_CHECK(vkQueueSubmit(_queue, 1, &si, VK_NULL_HANDLE));
     VK_CHECK(vkQueueWaitIdle(_queue));
+    // GPU 执行完成后才允许释放回调中引用的资源（如 staging）
+    if (onComplete) onComplete();
     vkFreeCommandBuffers(_device, _commandPool, 1, &cb);
 }
 
@@ -1040,6 +1199,10 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
         writes[i + 1].pImageInfo = &imgInfos[i];
     }
     vkUpdateDescriptorSets(_device, 5, writes, 0, nullptr);
+    char ubname[48];
+    std::snprintf(ubname, sizeof(ubname), "RHI_UniformBlock_%u", static_cast<uint32_t>(_uniformBlocks.size() + 1));
+    setObjName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(blk.buffer), ubname);
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(blk.set), ubname);
 
     _uniformBlocks.push_back(blk);
     UniformBlockHandle h; h.id = static_cast<uint32_t>(_uniformBlocks.size());

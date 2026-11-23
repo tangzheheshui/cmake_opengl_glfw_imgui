@@ -84,12 +84,20 @@ private:
     void createSyncObjects();
     void recreatePipelines();        // swapchain 重建后按描述符重建全部管线
     void createDescriptorObjects();  // 纹理描述符池 + set layout（M4）
-    void deferGpuWork(std::function<void(VkCommandBuffer)> fn);   // 帧内请求 → 下一帧 beginFrame 执行
+    // A1: Validation Layer + Debug Utils
+    void setupDebugValidation(std::vector<const char*>& exts, std::vector<const char*>& layers);
+    void createDebugMessenger();
+    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+        VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+        VkDebugUtilsMessageTypeFlagsEXT type,
+        const VkDebugUtilsMessengerCallbackDataEXT* data, void* userData);
+    void setObjName(VkObjectType type, uint64_t handle, const char* name);   // 对象命名（RenderDoc/capture 可读）
+    void deferGpuWork(std::function<void(VkCommandBuffer)> fn, std::function<void()> onComplete = nullptr);
     void drainDeferredGpuWork();
     void createWhiteFallbackTexture();
     VkFormat findDepthFormat() const;
     // 一次性提交：临时命令缓冲上执行录制回调并等待完成（纹理上传等初始化用）
-    void submitOneTime(std::function<void(VkCommandBuffer)> record);
+    void submitOneTime(std::function<void(VkCommandBuffer)> record, std::function<void()> onComplete = nullptr);
 
     bool beginFrameInternal();       // 失败（swapchain 过期）返回 false，本帧跳过
 
@@ -121,6 +129,14 @@ private:
     // 纹理描述符（M4）+ 绘制级 uniform UBO（M4.2）
     VkDescriptorSetLayout _texSetLayout      = VK_NULL_HANDLE;
     VkDescriptorPool      _texDescriptorPool = VK_NULL_HANDLE;
+    // A1: 验证层与调试工具
+    bool                  _validationEnabled = false;
+    bool                  _descriptorIndexing = false;
+    bool                  _debugUtilsEnabled = false;
+    VkDebugUtilsMessengerEXT _debugMessenger = VK_NULL_HANDLE;
+    PFN_vkSetDebugUtilsObjectNameEXT _setNameFn = nullptr;
+    PFN_vkCreateDebugUtilsMessengerEXT _createDebugMessengerFn = nullptr;
+    PFN_vkDestroyDebugUtilsMessengerEXT _destroyDebugMessengerFn = nullptr;
     std::vector<VkTextureRes> _textures;
     TextureHandle _whiteTex;
     TextureHandle _whiteCubeTex;
@@ -143,7 +159,11 @@ private:
     std::vector<GraphicsPipelineDesc> _pipelineDescs;
     // 帧内请求的一次性 GPU 工作（纹理上传等）：render pass 活跃时提交会触发
     // DEVICE_LOST（MoltenVK），统一延迟到下一帧 beginFrame 执行
-    std::vector<std::function<void(VkCommandBuffer)>> _deferredGpu;
+    struct DeferredGpuWork {
+        std::function<void(VkCommandBuffer)> record;
+        std::function<void()> onComplete;   // 提交并等待完成后执行（如 staging 销毁）
+    };
+    std::vector<DeferredGpuWork> _deferredGpu;
 
     std::unique_ptr<VkCommandList> _commandList;
     std::string _adapterName;

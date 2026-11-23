@@ -78,8 +78,10 @@ ImGui 窗口"渲染调试"（`src/render/DebugPanel.cpp`）：
 | M4.2c | 遗留排查完成：Vulkan 帧顶部大块 = 光源标记鸭（近距离正常内容，非 bug）；GL 原生鸭子不可见 = 原引擎 matModel 上传条件错误（已修） | ✅ |
 | M4.3a | 天空盒 RHI 迁移（cubemap 纹理 GL/VK 双端 + 深度 LEQUAL + push 128B 双 mat4）+ VK 模式天空渲染成功 | ✅ |
 | M4.3a | 天空盒 RHI 迁移（cubemap 纹理 GL/VK 双端 + 深度 LEQUAL + push 128B 双 mat4）+ VK 模式天空渲染成功 | ✅ |
-| M4.3b | ImGui Vulkan backend 接入：VkCommandList 原生命令缓冲暴露、overlay 回调机制、VK 模式面板（帧导出可见性待修，见 M4.3c） | ✅ 代码完成 |
-| M4.3c | VK 模式 ImGui 面板不可见排查（RenderDrawData 调用正确、716 顶点、无 VK 错误，但帧缓冲无面板——需 Metal capture 深查）；阴影/拾取 Pass 迁移 | 进行中 |
+| M4.3b | ImGui Vulkan backend 接入：VkCommandList 原生命令缓冲暴露、overlay 回调机制、VK 模式面板 | ✅ 代码完成 |
+| M4.3c | VK 模式 ImGui 面板可见性（需 Metal capture 深查）；阴影/拾取 Pass 迁移 | 进行中 |
+| **A1** | **Validation Layer + Debug Utils + 对象命名 + RHI_VK_VALIDATION 开关。修复真实缺陷：draw 期间原位更新描述符缺 UPDATE_AFTER_BIND（119 条违规 → 0）** | ✅ |
+| A3 | VkCaps 能力探测 + Pipeline Cache 持久化 + 调试面板展示 | 待做 |
 | M5 | 打包：MoltenVK Frameworks 内嵌（消除 DYLD_LIBRARY_PATH）、启动参数选后端 | 待做 |
 
 ## M3 调试历程（关键经验，都是真金白银换的）
@@ -139,6 +141,19 @@ Vulkan 后端从"创建即崩"到"像素回读验证通过"，共定位修复 **
    （与 M2 坐标轴 VAO0 问题同族的原引擎既有缺陷，均已修复。）
 3. **纹理纵向翻转**：stb top-first 行序 vs UV v=0 底部约定 → RHI 上传时
    翻转行序（不翻则鸭子采样到纹理顶部黑色眼睛区域）。
+
+### A1 验证层使用说明
+
+- 安装：`brew install vulkan-validationlayers`，运行时加
+  `VK_LAYER_PATH=/opt/homebrew/opt/vulkan-validationlayers/share/vulkan/explicit_layer.d`
+- 开关：`RHI_VK_VALIDATION=1` 强制开 / `=0` 强制关；Debug 构建默认开
+- 依赖扩展已自动处理：VK_EXT_debug_utils、VK_KHR_get_physical_device_properties2、
+  VK_EXT_descriptor_indexing、VK_KHR_maintenance3、VK_KHR_portability_subset
+- **已修复的真实缺陷**：bindTexture 在 draw 期间原位更新已绑定的描述符集
+  （缺 UPDATE_AFTER_BIND）→ 命令缓冲失效 → 全部命令静默失败。
+  修复：设备启用 Vulkan12 descriptorBindingSampledImageUpdateAfterBind +
+  set layout/pool 加 UPDATE_AFTER_BIND 位 + descriptorIndexing 特性
+- 场景当前验证层输出：0 error（A1 验收通过）
 
 ### M4.3b 已知问题（M4.3c 优先）
 
