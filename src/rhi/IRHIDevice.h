@@ -7,6 +7,7 @@
 
 #include "RhiTypes.h"
 #include <memory>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -20,6 +21,10 @@ public:
 
     virtual Backend    backend() const = 0;
     virtual DeviceInfo info() const = 0;
+
+    // 设备能力/运行状态列表（调试面板展示 + 启动日志；后端可自选粒度）。
+    // GL 后端在 B2 与 Vulkan 对齐；默认空列表。
+    virtual std::vector<DeviceCapability> capabilities() const { return {}; }
 
     // ---- 资源生命周期 ----
     // v1：句柄由后端内部表管理；对象级销毁在 M2 补齐（当前随 device 析构统一回收）。

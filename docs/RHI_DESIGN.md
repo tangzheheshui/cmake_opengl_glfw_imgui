@@ -77,11 +77,10 @@ ImGui 窗口"渲染调试"（`src/render/DebugPanel.cpp`）：
 | M4.2b | **Vulkan 渲染鸭子场景成功**（帧导出确认：3 只黄鸭、纹理、深度、实例全部正确）+ UniformBlock 每对象独立 + 修复 UBO 描述符缺失/构造顺序/纹理数据源 | ✅ |
 | M4.2c | 遗留排查完成：Vulkan 帧顶部大块 = 光源标记鸭（近距离正常内容，非 bug）；GL 原生鸭子不可见 = 原引擎 matModel 上传条件错误（已修） | ✅ |
 | M4.3a | 天空盒 RHI 迁移（cubemap 纹理 GL/VK 双端 + 深度 LEQUAL + push 128B 双 mat4）+ VK 模式天空渲染成功 | ✅ |
-| M4.3a | 天空盒 RHI 迁移（cubemap 纹理 GL/VK 双端 + 深度 LEQUAL + push 128B 双 mat4）+ VK 模式天空渲染成功 | ✅ |
 | M4.3b | ImGui Vulkan backend 接入：VkCommandList 原生命令缓冲暴露、overlay 回调机制、VK 模式面板 | ✅ 代码完成 |
 | M4.3c | VK 模式 ImGui 面板可见性（需 Metal capture 深查）；阴影/拾取 Pass 迁移 | 进行中 |
 | **A1** | **Validation Layer + Debug Utils + 对象命名 + RHI_VK_VALIDATION 开关。修复真实缺陷：draw 期间原位更新描述符缺 UPDATE_AFTER_BIND（119 条违规 → 0）** | ✅ |
-| A3 | VkCaps 能力探测 + Pipeline Cache 持久化 + 调试面板展示 | 待做 |
+| **A3** | **VkCaps 能力探测（启动日志能力表）+ Pipeline Cache 持久化 + 调试面板能力表**；顺带修复：pipeline layout 每管线泄漏、退出时对象在命令缓冲中即销毁、单例析构晚于 `glfwTerminate` | ✅ |
 | M5 | 打包：MoltenVK Frameworks 内嵌（消除 DYLD_LIBRARY_PATH）、启动参数选后端 | 待做 |
 
 ## M3 调试历程（关键经验，都是真金白银换的）
@@ -155,6 +154,38 @@ Vulkan 后端从"创建即崩"到"像素回读验证通过"，共定位修复 **
   set layout/pool 加 UPDATE_AFTER_BIND 位 + descriptorIndexing 特性
 - 场景当前验证层输出：0 error（A1 验收通过）
 
+### A3 能力探测与 Pipeline Cache
+
+- **能力表**：`VkCaps::query()`（`src/rhi/vk/VkCaps.*`）在选取物理设备后探测一次，
+  启动时经 `ENGINE_LOG_INFO` 打印（设备/队列族/显存堆/上限/关键特性/路线图相关扩展）。
+  同一份列表经 `IRHIDevice::capabilities()` 暴露给 app 层，调试面板
+  「设备能力」折叠区展示（GL 后端默认空，B2 对齐）。
+- **Pipeline Cache**：创建逻辑设备后加载、退出时导出到
+  `res/shaders_vk/pipeline_cache.bin`（`.gitignore` 已忽略）。
+  加载前校验 `VkPipelineCacheHeaderVersionOne`（vendorID/deviceID/UUID），
+  不匹配则忽略（跨机器/驱动安全）；写盘走 `.tmp` + rename，崩溃不留半截文件。
+  - `RHI_VK_PIPELINE_CACHE=<path>` 自定义位置；`=0` 完全禁用（性能对比用）。
+- **顺带修复的真实缺陷**：
+  1. pipeline layout 原来每创建一条管线就新建一个且仅保留最后一个句柄 →
+     旧 layout 全部泄漏。改为设备级单一共享 layout，析构时销毁。
+  2. `~VulkanDevice()` 未销毁 `_pipelines`（验证层报 leaked objects）→ 补上。
+  3. ImGui 的 buffer/pipeline/描述符集被最后一帧命令缓冲引用，而
+     `ImGui_ImplVulkan_Shutdown()` 在设备 idle 之前执行 → 销毁时验证层报
+     "currently in use"。现在先 `waitIdle()` 再 Shutdown。
+  4. `RenderSystem` 单例在 `glfwTerminate()` **之后**才析构（静态析构顺序），
+     Vulkan 设备析构时驱动/窗口已拆除 → `std::system_error: mutex lock failed`。
+     新增 `RenderSystem::shutdown()`，main 在 `glfwTerminate()` 之前显式调用。
+     **教训：图形设备必须在拥有它的窗口之前销毁，不能依赖单例静态析构。**
+
+验收方法（macOS，MoltenVK）：
+
+```bash
+DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan RHI_SMOKE=1 \
+  RHI_EXIT_AFTER=120 ./build/app/Debug/my_app
+# 第一次：capabilities 表 + "pipeline cache empty" ... "pipeline cache saved: N bytes"
+# 第二次： "pipeline cache loaded: N bytes"
+```
+
 ### M4.3b 已知问题（M4.3c 优先）
 
 - **VK 模式 ImGui 面板不显示**：overlay 每帧调用（716 顶点）、DisplaySize=800×500
@@ -188,6 +219,8 @@ RHI 版本为树合并（`-s ours`），远程功能清单如下，待逐项移�
 - `RHI_PROBE=1`：VK 第 30 帧中心像素回读
 - `RHI_DUMP=1`：VK 整帧导出 PPM（注意 BGRA→RGB 已正确交换）
 - `RHI_SMOKE=1` / `RHI_TEXQUAD=1`：无 UI 环境强制显示验证内容
+- `RHI_EXIT_AFTER=<帧数>`：跑完 N 帧正常退出（走完整析构，冒烟/缓存落盘验证用）
+- `RHI_VK_PIPELINE_CACHE=<path>|0`：Vulkan 管线缓存位置 / 禁用
 
 ### M4.1 后当前限制（M4.2 待办）
 
@@ -197,7 +230,7 @@ RHI 版本为树合并（`-s ours`），远程功能清单如下，待逐项移�
 - 描述符集为 frame-in-flight=1 的简化实现（bindTexture 直接更新，多飞行帧需换池化策略）
 - uniform 仅 push constant（80B：MVP+颜色）；材质/骨骼/光照数据需 UBO+描述符（M4.2）
 - `beginRenderPass` 不支持非默认帧缓冲（离屏渲染/阴影深度图 M4.2）
-- ImGui 无 Vulkan backend（Vulkan 模式无 UI）
+- ImGui Vulkan backend 已接入但面板在 VK 模式不可见（B5/M4.3b 排查中）；能力表可看启动日志
 - Line 的 RHI 路径在 Vulkan 下 no-op（需活跃 render pass，M4.2 随 Pass 迁移解决）
 - 窗口 resize 的 swapchain 重建代码就绪但未实测
 

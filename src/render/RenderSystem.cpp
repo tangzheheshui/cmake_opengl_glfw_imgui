@@ -51,6 +51,20 @@ RenderSystem::~RenderSystem() {
 
 }
 
+void RenderSystem::shutdown() {
+    // 先等 GPU 收尾，再销毁设备（Vulkan：导出 pipeline cache / 释放 swapchain）
+    if (m_rhiDevice) {
+        m_rhiDevice->waitIdle();
+        m_rhiDevice.reset();
+    }
+    // 依赖 GL 上下文/窗口的对象（Pass 的 FBO、字体纹理等）在此释放
+    m_vec_renderpass.clear();
+    m_fontMng.reset();
+    mCurScene.reset();
+    mRenderContent.reset();
+    _window = nullptr;
+}
+
 void RenderSystem::init(const std::string& rootPath) {
     // 后端选择：RHI_BACKEND 环境变量（opengl=默认 / vulkan）
     if (const char* b = std::getenv("RHI_BACKEND")) {

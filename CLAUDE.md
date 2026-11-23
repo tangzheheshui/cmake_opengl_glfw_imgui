@@ -49,6 +49,10 @@ DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan ./build/app/Debug/my_app
 #   RHI_BACKEND = opengl(默认) | vulkan
 #   RHI_SMOKE   = 1 强制显示 RHI 冒烟三角形（无 UI 场景验证用）
 #   RHI_PROBE   = 1 第 30 帧回读屏幕中心像素打印（渲染链路验证）
+#   RHI_EXIT_AFTER = <帧数> 跑完 N 帧正常退出（冒烟/回归，验证析构与缓存落盘）
+#   RHI_VK_VALIDATION = 1 强制开验证层 / 0 强制关（Debug 构建默认开）
+#   RHI_VK_PIPELINE_CACHE = <path> 管线缓存位置 / 0 禁用
+#     （默认 res/shaders_vk/pipeline_cache.bin，已 gitignore）
 ```
 
 ## 目录结构
@@ -124,6 +128,8 @@ device->endFrame();
 
 - **构造函数禁止 GL/Vulkan 调用**：无图形上下文的后端模式下构造即崩
   （纹理惰性创建模式见 TextureMng::getTexture 对 STR_DEPTH_TEXTURE 的处理）
+- **销毁顺序**：main 必须在 `glfwTerminate()` 之前调用 `RenderSystem::shutdown()`；
+  单例静态析构发生在窗口销毁之后，此时析构 Vulkan 设备会崩溃（A3 教训）
 - **GL Pass 边界状态保存/恢复**：Vulkan 语义的 Pass 不允许泄漏状态给周边
   （GLCommandList::beginRenderPass/endRenderPass 实现，历史教训见 docs）
 - **Vulkan 命名**：后端类名 `VulkanDevice`（不得用 `VkDevice`，会遮蔽 Vulkan 原生句柄类型）
@@ -134,7 +140,7 @@ device->endFrame();
 ## 已知限制
 
 - Vulkan 模式仅渲染 RHI 迁移内容（冒烟三角形），GL Pass 未迁移（M4）
-- Vulkan 无 UI（ImGui Vulkan backend 未接入，M4）
+- ImGui Vulkan backend 已接入但 VK 模式面板不可见（B5/M4.3b）；能力表可看启动日志
 - Vulkan 仅 1 个全局平行光 / 无 PBR / 深度附件未接入（M4 管线需要）
 - 纹理资源 96MB 未用 Git LFS
 - RHI 对象级销毁接口未暴露（资源随 device 生命周期回收）

@@ -15,6 +15,7 @@
 
 #include "../IRHIDevice.h"
 #include "VkCommon.h"
+#include "VkCaps.h"
 #include <vector>
 #include <string>
 #include <functional>
@@ -32,6 +33,7 @@ public:
 
     Backend    backend() const override { return Backend::Vulkan; }
     DeviceInfo info() const override;
+    std::vector<DeviceCapability> capabilities() const override;   // A3: 能力表 + 运行时状态
 
     BufferHandle   createBuffer(const BufferDesc& desc) override;
     TextureHandle  createTexture(const TextureDesc& desc) override;
@@ -65,6 +67,7 @@ public:
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
     VkDescriptorSetLayout texSetLayout() const { return _texSetLayout; }
     VkDescriptorPool      texDescriptorPool() const { return _texDescriptorPool; }
+    VkPipelineLayout      pipelineLayout() const { return _pipelineLayout; }
 
     // 供 command list 获取当前帧使用的 framebuffer / 提交前查询
     VkFramebuffer currentFramebuffer() const;
@@ -82,6 +85,9 @@ private:
     void destroySwapchainObjects();
     void createCommandObjects();
     void createSyncObjects();
+    // A3: Pipeline Cache 持久化（创建/加载/退出时保存；为优化项，失败不致命）
+    void createPipelineCache();
+    void savePipelineCache();
     void recreatePipelines();        // swapchain 重建后按描述符重建全部管线
     void createDescriptorObjects();  // 纹理描述符池 + set layout（M4）
     // A1: Validation Layer + Debug Utils
@@ -125,6 +131,16 @@ private:
 
     VkCommandPool   _commandPool   = VK_NULL_HANDLE;
     VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
+
+    // A3: 全部管线共用的 pipeline layout（固定 push constant 布局，创建一次）
+    VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;
+
+    // A3: 物理设备能力（初始化时探测一次）+ Pipeline Cache 持久化状态
+    VkCaps         _caps;
+    VkPipelineCache _pipelineCache = VK_NULL_HANDLE;
+    std::string    _pipelineCachePath;
+    bool           _pipelineCacheFromDisk = false;   // 本次启动是否成功加载了旧缓存
+    size_t         _pipelineCacheLoadedBytes = 0;
 
     // 纹理描述符（M4）+ 绘制级 uniform UBO（M4.2）
     VkDescriptorSetLayout _texSetLayout      = VK_NULL_HANDLE;

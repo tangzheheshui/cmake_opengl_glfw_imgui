@@ -191,6 +191,12 @@ struct DeviceInfo {
     std::string apiVersion;    // 如 "OpenGL 4.1" / "Vulkan 1.2 (MoltenVK)"
 };
 
+// 一条设备能力/状态（后端自述，名字+值的纯文本，便于面板与日志直接输出）
+struct DeviceCapability {
+    std::string name;
+    std::string value;
+};
+
 } // namespace rhi
 
 #endif /* RhiTypes_h */

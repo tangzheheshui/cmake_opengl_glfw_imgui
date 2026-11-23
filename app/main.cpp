@@ -218,10 +218,19 @@ int main()
 
     // 使用rendersysytem的各种接口
     testRenderSystem(proPath, useVulkan);
+
+    // 冒烟/回归：RHI_EXIT_AFTER=<帧数> 后正常关闭窗口（走完整析构，验证缓存落盘等）
+    long exitAfterFrames = -1;
+    if (const char* e = std::getenv("RHI_EXIT_AFTER")) exitAfterFrames = std::atol(e);
+    long frameIndex = 0;
+
     while (!glfwWindowShouldClose(window))
     {
         // input
         processInput(window);
+        if (exitAfterFrames >= 0 && ++frameIndex >= exitAfterFrames) {
+            glfwSetWindowShouldClose(window, true);
+        }
 
         RenderSystem::getInstance().update();
 
@@ -261,6 +270,9 @@ int main()
     }
 
     if (useVulkan) {
+        // ImGui 的资源（buffer/pipeline/描述符集）被最后一帧的命令缓冲引用，
+        // 销毁前必须等 GPU 完成；否则验证层报 "currently in use"
+        if (auto* dev = RenderSystem::getInstance().rhiDevice()) dev->waitIdle();
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -287,6 +299,10 @@ int main()
             }
         }
     }
+
+    // RHI 设备/GL 资源必须在窗口销毁前显式释放（单例静态析构太晚，会崩溃；
+    // Vulkan 后端还依赖此处导出 pipeline cache）
+    RenderSystem::getInstance().shutdown();
 
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------

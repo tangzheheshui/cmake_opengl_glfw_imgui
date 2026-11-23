@@ -143,7 +143,7 @@ void VkCommandList::setViewport(float x, float y, float w, float h) {
 
 void VkCommandList::applyPushConstants() {
     if (_pushDirty && _curPipeline.valid()) {
-        vkCmdPushConstants(_device->commandBuffer(), _pipelineLayout,
+        vkCmdPushConstants(_device->commandBuffer(), _device->pipelineLayout(),
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, kPushTotalSize, _pushData);
         _pushDirty = false;
@@ -151,7 +151,7 @@ void VkCommandList::applyPushConstants() {
     // uniform block 描述符集（binding0=UBO 数据，1..4=纹理），每 draw 绑定
     VkDescriptorSet set = _device->uniformBlockRes(_curUniformBlock).set;
     vkCmdBindDescriptorSets(_device->commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            _pipelineLayout, 0, 1, &set, 0, nullptr);
+                            _device->pipelineLayout(), 0, 1, &set, 0, nullptr);
 }
 
 void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {

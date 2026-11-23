@@ -13,7 +13,6 @@ namespace rhi {
 class VulkanDevice;
 
 class VkCommandList final : public IRHICommandList {
-    friend class VulkanDevice;   // VulkanDevice::createPipeline 需写入 _pipelineLayout
 public:
     explicit VkCommandList(VulkanDevice* device);
 
@@ -40,7 +39,8 @@ private:
 
     VulkanDevice* _device = nullptr;
 
-    VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;   // 所有管线共用（M3 固定 push 布局）
+    // pipeline layout 由 VulkanDevice 持有（所有管线共用，固定 push 布局），
+    // 通过 _device->pipelineLayout() 访问
 
     PipelineHandle _curPipeline;
     BufferHandle   _curVertexBuffer;

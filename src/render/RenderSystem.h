@@ -39,6 +39,9 @@ public:
 	RenderSystem& operator=(const RenderSystem&) = delete;
 
 	void init(const std::string &rootPath);
+	// 必须在 glfwTerminate() 之前显式调用：RHI 设备/GL 资源的析构依赖窗口与
+	// 图形上下文存活（单例静态析构发生在 main 返回、窗口销毁之后）。
+	void shutdown();
 	void update();
     void BeginDraw();
 	void draw();

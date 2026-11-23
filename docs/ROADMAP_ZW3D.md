@@ -6,6 +6,15 @@
 > 平台：Windows / Linux 为主；macOS + MoltenVK 保留为开发便利，不作为产品基线。
 > OpenGL 后端是产品回退路径（RDP/VDI/老显卡），不能砍。
 
+## 当前状态（2026-11-23）
+
+- ✅ **A1** Validation Layer + Debug Utils + 对象命名（验证层 0 error）
+- ✅ **A3** VkCaps 能力探测 + Pipeline Cache 持久化 + 面板/日志能力表
+  （顺带修复：pipeline layout 泄漏、退出时对象在命令缓冲中销毁、
+  单例析构晚于 `glfwTerminate` 的崩溃）
+- ⏭ **下一步**：A2 跨平台构建（CMakePresets / Vulkan SDK 探测 / GL-only 构建），
+  然后进入 **B0 接口冻结**（唯一串行门禁，冻结后打 tag `rhi-v2-contract`）
+
 ## 0. 待确认假设（影响架构，尽早确认）
 
 1. 宿主 UI 框架与窗口句柄：原生 HWND / Qt QWidget / MFC？

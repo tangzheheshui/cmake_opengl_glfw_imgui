@@ -18,6 +18,28 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
         ImGui::Text("后端: %s", info.backendName.c_str());
         ImGui::Text("GPU: %s", info.adapterName.c_str());
         ImGui::Text("API: %s", info.apiVersion.c_str());
+
+        // ---- 设备能力/运行状态（A3；启动时同一份内容已写入日志）----
+        if (ImGui::CollapsingHeader("设备能力")) {
+            const auto caps = device->capabilities();
+            if (caps.empty()) {
+                ImGui::TextDisabled("（后端未提供）");
+            } else {
+                ImGui::BeginChild("caps_child", ImVec2(0, 280), ImGuiChildFlags_Borders);
+                if (ImGui::BeginTable("caps_table", 2,
+                                      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+                    for (const auto& c : caps) {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(c.name.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(c.value.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::EndChild();
+            }
+        }
     } else {
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "RHI 设备未创建");
     }

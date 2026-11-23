@@ -8,6 +8,7 @@
 #include <fstream>
 #include <cstring>
 #include <algorithm>
+#include <filesystem>
 
 namespace rhi {
 
@@ -66,7 +67,11 @@ VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath
     createInstance();
     createSurface();
     pickPhysicalDevice();
+    // A3: 能力探测（启动日志打印能力表，多机验证的第一手资料）
+    _caps = VkCaps::query(_physicalDevice, _surface);
+    _caps.log();
     createLogicalDevice();
+    createPipelineCache();   // A3: 需在逻辑设备之后、创建任何管线之前
     createSwapchainObjects();
     createCommandObjects();
     createSyncObjects();
@@ -102,8 +107,16 @@ VulkanDevice::~VulkanDevice() {
         if (b.memory) vkFreeMemory(_device, b.memory, nullptr);
         // 描述符集随 pool 销毁
     }
+    // destroySwapchainObjects 只回收 swapchain/renderPass，不回收管线
+    for (auto& p : _pipelines) {
+        if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
+    }
+    _pipelines.clear();
+    if (_pipelineLayout)    vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
     if (_texDescriptorPool) vkDestroyDescriptorPool(_device, _texDescriptorPool, nullptr);
     if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
+    savePipelineCache();     // A3: 管线销毁后仍可导出缓存内容；在 destroy device 之前
+    if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
     if (_device)   vkDestroyDevice(_device, nullptr);
     if (_surface)  vkDestroySurfaceKHR(_instance, _surface, nullptr);
     if (_debugMessenger && _destroyDebugMessengerFn) {
@@ -531,6 +544,108 @@ void VulkanDevice::createSyncObjects() {
     setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semImageAvailable), "RHI_ImageAvailable");
     setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semRenderDone), "RHI_RenderDone");
     setObjName(VK_OBJECT_TYPE_FENCE, reinterpret_cast<uint64_t>(_fenceInFlight), "RHI_InFlightFence");
+}
+
+// ============================================================
+// A3: Pipeline Cache 持久化
+// ============================================================
+// 缓存文件头校验：跨驱动/跨设备的缓存可能不兼容。规范要求驱动忽略不兼容数据，
+// 但主动校验可避免验证层告警，也能在日志里说明"为什么没加速"。
+static bool pipelineCacheHeaderMatches(const std::vector<char>& data,
+                                       const VkPhysicalDeviceProperties& props) {
+    if (data.size() < sizeof(VkPipelineCacheHeaderVersionOne)) return false;
+    VkPipelineCacheHeaderVersionOne h{};
+    std::memcpy(&h, data.data(), sizeof(h));
+    return h.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE
+        && h.vendorID == props.vendorID
+        && h.deviceID == props.deviceID
+        && std::memcmp(h.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+}
+
+void VulkanDevice::createPipelineCache() {
+    const char* env = std::getenv("RHI_VK_PIPELINE_CACHE");
+    if (env && std::strcmp(env, "0") == 0) {
+        ENGINE_LOG_INFO("[VK] pipeline cache disabled (RHI_VK_PIPELINE_CACHE=0)");
+        return;
+    }
+    _pipelineCachePath = (env && *env) ? std::string(env)
+                                       : _shaderRootPath + "pipeline_cache.bin";
+
+    std::vector<char> initial;
+    {
+        std::ifstream f(_pipelineCachePath, std::ios::binary | std::ios::ate);
+        if (f.is_open()) {
+            const size_t size = static_cast<size_t>(f.tellg());
+            initial.resize(size);
+            f.seekg(0);
+            f.read(initial.data(), static_cast<std::streamsize>(size));
+            if (!pipelineCacheHeaderMatches(initial, _caps.props)) {
+                ENGINE_LOG_INFO("[VK] pipeline cache ignored (driver/device mismatch): %s",
+                                _pipelineCachePath.c_str());
+                initial.clear();
+            }
+        }
+    }
+
+    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    ci.initialDataSize = initial.size();
+    ci.pInitialData    = initial.empty() ? nullptr : initial.data();
+    VkResult r = vkCreatePipelineCache(_device, &ci, nullptr, &_pipelineCache);
+    if (r != VK_SUCCESS && !initial.empty()) {
+        // 文件损坏或驱动拒绝：丢弃后重试（缓存只是优化，不应阻塞启动）
+        ENGINE_LOG_WARN("[VK] pipeline cache load failed (%d), recreating empty", static_cast<int>(r));
+        initial.clear();
+        ci.initialDataSize = 0;
+        ci.pInitialData    = nullptr;
+        r = vkCreatePipelineCache(_device, &ci, nullptr, &_pipelineCache);
+    }
+    if (r != VK_SUCCESS) {
+        ENGINE_LOG_WARN("[VK] pipeline cache unavailable (%d), pipelines compile uncached", static_cast<int>(r));
+        _pipelineCache = VK_NULL_HANDLE;
+        return;
+    }
+    setObjName(VK_OBJECT_TYPE_PIPELINE_CACHE, reinterpret_cast<uint64_t>(_pipelineCache), "RHI_PipelineCache");
+    _pipelineCacheFromDisk = !initial.empty();
+    _pipelineCacheLoadedBytes = initial.size();
+    ENGINE_LOG_INFO("[VK] pipeline cache %s: %zu bytes (%s)",
+                    _pipelineCacheFromDisk ? "loaded" : "empty",
+                    _pipelineCacheLoadedBytes, _pipelineCachePath.c_str());
+}
+
+void VulkanDevice::savePipelineCache() {
+    if (!_pipelineCache || _pipelineCachePath.empty()) return;
+
+    size_t size = 0;
+    if (vkGetPipelineCacheData(_device, _pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0) {
+        return;   // 本进程没有新建管线（全部命中缓存）时通常为空
+    }
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(_device, _pipelineCache, &size, data.data()) != VK_SUCCESS) return;
+    data.resize(size);
+
+    const std::string tmp = _pipelineCachePath + ".tmp";
+    {
+        std::error_code ec;
+        auto parent = std::filesystem::path(tmp).parent_path();
+        if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f.is_open()) {
+            ENGINE_LOG_WARN("[VK] cannot write pipeline cache: %s", tmp.c_str());
+            return;
+        }
+        f.write(data.data(), static_cast<std::streamsize>(data.size()));
+        if (!f) {
+            ENGINE_LOG_WARN("[VK] pipeline cache write failed: %s", tmp.c_str());
+            return;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, _pipelineCachePath, ec);   // 先写临时文件再改名，避免崩溃留下半截缓存
+    if (ec) {
+        ENGINE_LOG_WARN("[VK] pipeline cache rename failed: %s", ec.message().c_str());
+        return;
+    }
+    ENGINE_LOG_INFO("[VK] pipeline cache saved: %zu bytes -> %s", data.size(), _pipelineCachePath.c_str());
 }
 
 // ============================================================
@@ -1002,7 +1117,11 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     plci.pPushConstantRanges    = &pushRange;
     plci.setLayoutCount         = 1;
     plci.pSetLayouts            = &_texSetLayout;
-    VK_CHECK(vkCreatePipelineLayout(_device, &plci, nullptr, &_commandList->_pipelineLayout));
+    // 固定布局只创建一次，所有管线共用（此前每管线创建一个 layout 且从未销毁 → 泄漏）
+    if (_pipelineLayout == VK_NULL_HANDLE) {
+        VK_CHECK(vkCreatePipelineLayout(_device, &plci, nullptr, &_pipelineLayout));
+        setObjName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<uint64_t>(_pipelineLayout), "RHI_PipelineLayout");
+    }
 
     VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     gpi.stageCount          = static_cast<uint32_t>(stages.size());
@@ -1015,15 +1134,14 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     gpi.pDepthStencilState  = &ds;
     gpi.pColorBlendState    = &cb;
     gpi.pDynamicState       = &dyn;
-    gpi.layout              = _commandList->_pipelineLayout;
+    gpi.layout              = _pipelineLayout;
     gpi.renderPass          = _renderPass;
     gpi.subpass             = 0;
-    VK_CHECK(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &gpi, nullptr, &res.pipeline));
+    VK_CHECK(vkCreateGraphicsPipelines(_device, _pipelineCache, 1, &gpi, nullptr, &res.pipeline));
     {
         char pname[48];
         std::snprintf(pname, sizeof(pname), "RHI_Pipeline_%u", static_cast<uint32_t>(_pipelines.size() + 1));
         setObjName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(res.pipeline), pname);
-        setObjName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<uint64_t>(_commandList->_pipelineLayout), "RHI_PipelineLayout");
     }
 
     for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
@@ -1237,6 +1355,22 @@ DeviceInfo VulkanDevice::info() const {
                   VK_VERSION_PATCH(props.apiVersion));
     di.apiVersion = buf;
     return di;
+}
+
+std::vector<DeviceCapability> VulkanDevice::capabilities() const {
+    auto caps = _caps.toCapabilities();
+    caps.push_back({"验证层", _validationEnabled ? "enabled" : "disabled"});
+    caps.push_back({"debug_utils", _debugUtilsEnabled ? "enabled" : "disabled"});
+    if (_pipelineCache) {
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "%s, 启动时 %zu B",
+                      _pipelineCacheFromDisk ? "loaded" : "new",
+                      _pipelineCacheLoadedBytes);
+        caps.push_back({"pipeline cache", buf});
+    } else {
+        caps.push_back({"pipeline cache", "disabled"});
+    }
+    return caps;
 }
 
 } // namespace rhi
