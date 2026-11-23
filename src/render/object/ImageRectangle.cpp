@@ -8,7 +8,7 @@
 #include "ImageRectangle.h"
 #include "../image.h"
 #include "../shader.h"
-#include "../camera/camera_old.h"
+#include "../camera/camera.h"
 #include "../scene.h"
 #include "../Light.h"
 

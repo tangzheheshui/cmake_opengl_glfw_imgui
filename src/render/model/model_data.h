@@ -8,6 +8,7 @@
 #ifndef model_data_h
 #define model_data_h
 
+#include "log/LogMacros.h"
 #include <glm/detail/type_quat.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "image.h"
@@ -67,7 +68,7 @@ struct NodeAnim {
     glm::mat4 getPosition(float ratio) {
         int index = ratio * positions.size();
         index = (index == positions.size()) ? (index-1) : index;
-        printf("getposition, index = %d, total_size = %zu\n", index, positions.size());
+        ENGINE_LOG_WARN_ONCE("NodeAnim::getPosition index out of range: %d / %zu", index, positions.size());
         return glm::translate(glm::mat4(1.0f), positions[index].position);
     }
     

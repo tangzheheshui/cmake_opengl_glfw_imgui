@@ -27,7 +27,7 @@ public:
     void setBoneMat(std::shared_ptr<std::vector<glm::mat4>> mat) { m_pass->m_matBone = mat; }
 private:        
     unsigned int _texture;
-    std::shared_ptr<RenderPass> m_pass;
+    std::shared_ptr<MeshPass> m_pass;
 }; 
 
 #endif /* mesh_hpp */

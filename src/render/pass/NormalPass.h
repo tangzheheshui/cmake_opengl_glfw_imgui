@@ -1,7 +1,7 @@
 // pass虚基类
 #pragma once 
 
-#include "RenderPass.h"
+#include "IRenderPass.h"
 
 class CNormalPass : public IRenderPass {
 public:

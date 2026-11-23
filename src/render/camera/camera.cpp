@@ -5,7 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/2.
 //
     
-#include "camera_old.h"
+#include "camera.h"
 Camera::Camera()
 : _yaw(0)
 , _pitch(0)

@@ -11,6 +11,8 @@
 #include <glad/glad.h>
 #include <vector>
 #include <glm/glm.hpp>
+#include "RenderSystem.h"
+#include "rhi/IRHIDevice.h"
 #include "../core/math/matrix.h"
 
 inline static uint16_t _staticID = 0;
@@ -18,10 +20,15 @@ inline static uint16_t _staticID = 0;
 class BaseDraw {
 public:
     BaseDraw() {
-        glGenVertexArrays(1, &_VAO);
-        glGenBuffers(1, &_VBO);
-        glGenBuffers(1, &_EBO);
         _ID = _staticID++;
+        // 引擎原则：构造函数禁止在非 GL 后端触碰 GL（Vulkan 模式无 GL 上下文，
+        // glad 函数指针为空，任何 gl* 调用都会跳空地址）
+        auto* device = RenderSystem::getInstance().rhiDevice();
+        if (!device || device->backend() == rhi::Backend::OpenGL) {
+            glGenVertexArrays(1, &_VAO);
+            glGenBuffers(1, &_VBO);
+            glGenBuffers(1, &_EBO);
+        }
     }
     virtual ~BaseDraw() {
         if (_VAO > 0) {

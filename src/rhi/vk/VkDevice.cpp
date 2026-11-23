@@ -1,0 +1,1079 @@
+//
+//  VulkanDevice.cpp
+//
+#include "log/LogMacros.h"
+#include "VkDevice.h"
+#include "VkCommandList.h"
+#include <GLFW/glfw3.h>
+#include <fstream>
+#include <cstring>
+#include <algorithm>
+
+namespace rhi {
+
+static const char* kRequiredDeviceExts[] = {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+};
+
+// ---- 工具：读取 SPIR-V 文件 ----
+static std::vector<char> readSpirvFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) {
+        ENGINE_LOG_ERROR("[VK] cannot open SPIR-V: %s", path.c_str());
+        return {};
+    }
+    size_t size = static_cast<size_t>(f.tellg());
+    std::vector<char> data(size);
+    f.seekg(0);
+    f.read(data.data(), size);
+    return data;
+}
+
+// 深度附件格式：按支持度依次尝试
+static VkFormat findSupportedDepthFormat(VkPhysicalDevice pd) {
+    const VkFormat candidates[] = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+    };
+    for (VkFormat f : candidates) {
+        VkFormatProperties props;
+        vkGetPhysicalDeviceFormatProperties(pd, f, &props);
+        if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            return f;
+        }
+    }
+    return VK_FORMAT_D32_SFLOAT;   // 兜底（现代设备都支持 D32）
+}
+
+static uint32_t findMemoryType(VkPhysicalDevice pd, uint32_t typeBits, VkMemoryPropertyFlags props) {
+    VkPhysicalDeviceMemoryProperties mem;
+    vkGetPhysicalDeviceMemoryProperties(pd, &mem);
+    for (uint32_t i = 0; i < mem.memoryTypeCount; ++i) {
+        if ((typeBits & (1u << i)) && (mem.memoryTypes[i].propertyFlags & props) == props) {
+            return i;
+        }
+    }
+    return UINT32_MAX;
+}
+
+// ============================================================
+// 创建 / 销毁
+// ============================================================
+VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath)
+    : _window(window)
+    , _shaderRootPath(shaderRootPath) {
+    createInstance();
+    createSurface();
+    pickPhysicalDevice();
+    createLogicalDevice();
+    createSwapchainObjects();
+    createCommandObjects();
+    createSyncObjects();
+    _commandList = std::make_unique<VkCommandList>(this);
+    createWhiteFallbackTexture();   // 先于描述符对象：默认 uniform block 需引用白纹理
+    createDescriptorObjects();
+}
+
+VulkanDevice::~VulkanDevice() {
+    if (_device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(_device);
+    }
+    destroySwapchainObjects();
+    if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
+    if (_semRenderDone)     vkDestroySemaphore(_device, _semRenderDone, nullptr);
+    if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
+    if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
+    for (auto& b : _buffers) {
+        if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
+        if (b.memory) vkFreeMemory(_device, b.memory, nullptr);
+    }
+    for (auto& t : _textures) {
+        if (t.sampler) vkDestroySampler(_device, t.sampler, nullptr);
+        if (t.view)    vkDestroyImageView(_device, t.view, nullptr);
+        if (t.image)   vkDestroyImage(_device, t.image, nullptr);
+        if (t.memory)  vkFreeMemory(_device, t.memory, nullptr);
+    }
+    for (auto& b : _uniformBlocks) {
+        if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
+        if (b.memory) vkFreeMemory(_device, b.memory, nullptr);
+        // 描述符集随 pool 销毁
+    }
+    if (_texDescriptorPool) vkDestroyDescriptorPool(_device, _texDescriptorPool, nullptr);
+    if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
+    if (_device)   vkDestroyDevice(_device, nullptr);
+    if (_surface)  vkDestroySurfaceKHR(_instance, _surface, nullptr);
+    if (_instance) vkDestroyInstance(_instance, nullptr);
+}
+
+void VulkanDevice::createInstance() {
+    // 1) GLFW 要求的平台 surface 扩展（macOS: VK_KHR_surface + VK_EXT_metal_surface）
+    std::vector<const char*> exts;
+    {
+        uint32_t n = 0;
+        const char** e = glfwGetRequiredInstanceExtensions(&n);
+        exts.assign(e, e + n);
+        for (uint32_t i = 0; i < n; ++i) {
+            ENGINE_LOG_ERROR("[VK] glfw ext[%u] = %s", i, e[i]);
+        }
+    }
+
+    // 2) 校验并启用 portability 枚举（macOS 必须，MoltenVK 是 portability 驱动）
+    uint32_t extCount = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &extCount, nullptr);
+    std::vector<VkExtensionProperties> avail(extCount);
+    vkEnumerateInstanceExtensionProperties(nullptr, &extCount, avail.data());
+    bool hasPortability = false;
+    for (auto& e : avail) {
+        if (std::strcmp(e.extensionName, "VK_KHR_portability_enumeration") == 0) hasPortability = true;
+    }
+    if (hasPortability) exts.push_back("VK_KHR_portability_enumeration");
+
+    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.pApplicationName = "my_app";
+    app.apiVersion       = VK_API_VERSION_1_0;   // 最低版本请求，规避 loader/MVK 版本协商问题
+
+    VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    ci.pApplicationInfo = &app;
+    ci.enabledExtensionCount   = static_cast<uint32_t>(exts.size());
+    ci.ppEnabledExtensionNames = exts.data();
+    if (hasPortability) {
+        ci.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+    VK_CHECK(vkCreateInstance(&ci, nullptr, &_instance));
+}
+
+void VulkanDevice::createSurface() {
+    VK_CHECK(glfwCreateWindowSurface(_instance, _window, nullptr, &_surface));
+}
+
+void VulkanDevice::pickPhysicalDevice() {
+    uint32_t n = 0;
+    vkEnumeratePhysicalDevices(_instance, &n, nullptr);
+    if (n == 0) {
+        ENGINE_LOG_ERROR("[VK] no physical device");
+        std::abort();
+    }
+    std::vector<VkPhysicalDevice> devs(n);
+    vkEnumeratePhysicalDevices(_instance, &n, devs.data());
+
+    for (auto d : devs) {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(d, &props);
+        // M3：选第一个支持 graphics 队列的设备（MoltenVK 单设备环境够用）
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(d, &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(d, &familyCount, families.data());
+        for (uint32_t i = 0; i < familyCount; ++i) {
+            VkBool32 presentOK = VK_FALSE;
+            vkGetPhysicalDeviceSurfaceSupportKHR(d, i, _surface, &presentOK);
+            if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && presentOK) {
+                _physicalDevice = d;
+                _queueFamily    = i;
+                _adapterName    = props.deviceName;
+                return;
+            }
+        }
+    }
+    ENGINE_LOG_ERROR("[VK] no suitable physical device");
+    std::abort();
+}
+
+void VulkanDevice::createLogicalDevice() {
+    float priority = 1.0f;
+    VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    qci.queueFamilyIndex = _queueFamily;
+    qci.queueCount       = 1;
+    qci.pQueuePriorities  = &priority;
+
+    // 设备扩展：swapchain 必须；portability_subset 存在时规范要求必须启用（MoltenVK）
+    std::vector<const char*> devExts;
+    uint32_t devExtCount = 0;
+    vkEnumerateDeviceExtensionProperties(_physicalDevice, nullptr, &devExtCount, nullptr);
+    std::vector<VkExtensionProperties> avail(devExtCount);
+    vkEnumerateDeviceExtensionProperties(_physicalDevice, nullptr, &devExtCount, avail.data());
+    devExts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    for (auto& e : avail) {
+        if (std::strcmp(e.extensionName, "VK_KHR_portability_subset") == 0) {
+            devExts.push_back("VK_KHR_portability_subset");
+            break;
+        }
+    }
+
+    VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    ci.queueCreateInfoCount    = 1;
+    ci.pQueueCreateInfos       = &qci;
+    ci.enabledExtensionCount   = static_cast<uint32_t>(devExts.size());
+    ci.ppEnabledExtensionNames = devExts.data();
+    VK_CHECK(vkCreateDevice(_physicalDevice, &ci, nullptr, &_device));
+    vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
+}
+
+void VulkanDevice::createSwapchainObjects() {
+    int fbW = 0, fbH = 0;
+    glfwGetFramebufferSize(_window, &fbW, &fbH);
+
+    // surface 能力
+    VkSurfaceCapabilitiesKHR caps;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physicalDevice, _surface, &caps);
+    _swapchainExtent = caps.currentExtent;
+    if (_swapchainExtent.width == UINT32_MAX) {
+        _swapchainExtent.width  = std::clamp(static_cast<uint32_t>(fbW),  caps.minImageExtent.width,  caps.maxImageExtent.width);
+        _swapchainExtent.height = std::clamp(static_cast<uint32_t>(fbH), caps.minImageExtent.height, caps.maxImageExtent.height);
+    }
+
+    // surface 格式：优先 BGRA8_UNORM，其次 RGBA8_UNORM
+    uint32_t fmtCount = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, &fmtCount, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(fmtCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, &fmtCount, formats.data());
+    _swapchainFormat = formats[0].format;
+    for (auto& f : formats) {
+        if (f.format == VK_FORMAT_B8G8R8A8_UNORM || f.format == VK_FORMAT_R8G8B8A8_UNORM) {
+            _swapchainFormat = f.format;
+            break;
+        }
+    }
+
+    uint32_t imageCount = std::max(2u, caps.minImageCount);
+    if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
+
+    VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    sci.surface          = _surface;
+    sci.minImageCount    = imageCount;
+    sci.imageFormat      = _swapchainFormat;
+    sci.imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    sci.imageExtent      = _swapchainExtent;
+    sci.imageArrayLayers = 1;
+    sci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;  // TRANSFER_SRC 供 RHI_PROBE 回读验证
+    sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    sci.preTransform     = caps.currentTransform;
+    sci.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    sci.presentMode      = VK_PRESENT_MODE_FIFO_KHR;   // vsync（M3 固定）
+    sci.clipped          = VK_TRUE;
+    VK_CHECK(vkCreateSwapchainKHR(_device, &sci, nullptr, &_swapchain));
+
+    // image views
+    uint32_t n = 0;
+    vkGetSwapchainImagesKHR(_device, _swapchain, &n, nullptr);
+    _swapchainImages.resize(n);
+    vkGetSwapchainImagesKHR(_device, _swapchain, &n, _swapchainImages.data());
+    _swapchainViews.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image    = _swapchainImages[i];
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = _swapchainFormat;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &_swapchainViews[i]));
+    }
+
+    // render pass：颜色附件 + 深度附件（M4）
+    _depthFormat = findSupportedDepthFormat(_physicalDevice);
+    VkAttachmentDescription attachments[2] = {};
+    VkAttachmentDescription& color = attachments[0];
+    color.format         = _swapchainFormat;
+    color.samples        = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    color.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentDescription& depth = attachments[1];
+    depth.format         = _depthFormat;
+    depth.samples        = VK_SAMPLE_COUNT_1_BIT;
+    depth.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp        = VK_ATTACHMENT_STORE_OP_DONT_CARE;   // 深度不需要保留
+    depth.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+    depth.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount    = 1;
+    subpass.pColorAttachments       = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dep{};
+    dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
+    dep.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep.srcAccessMask = 0;
+    dep.dstSubpass    = 0;
+    dep.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                      | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                      | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                      | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rpci.attachmentCount = 2;
+    rpci.pAttachments    = attachments;
+    rpci.subpassCount    = 1;
+    rpci.pSubpasses      = &subpass;
+    rpci.dependencyCount = 1;
+    rpci.pDependencies   = &dep;
+    VK_CHECK(vkCreateRenderPass(_device, &rpci, nullptr, &_renderPass));
+
+    // 深度图像（单一深度缓冲，frame-in-flight=1 下共享合法）
+    {
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = _depthFormat;
+        ici.extent        = {_swapchainExtent.width, _swapchainExtent.height, 1};
+        ici.mipLevels     = 1;
+        ici.arrayLayers   = 1;
+        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VK_CHECK(vkCreateImage(_device, &ici, nullptr, &_depthImage));
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(_device, _depthImage, &req);
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.allocationSize  = req.size;
+        mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &_depthMemory));
+        VK_CHECK(vkBindImageMemory(_device, _depthImage, _depthMemory, 0));
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image    = _depthImage;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = _depthFormat;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &_depthView));
+    }
+
+    // framebuffers（每张 swapchain image 一个，共享同一深度视图）
+    _framebuffers.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        VkImageView attach[2] = {_swapchainViews[i], _depthView};
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fci.renderPass      = _renderPass;
+        fci.attachmentCount = 2;
+        fci.pAttachments    = attach;
+        fci.width           = _swapchainExtent.width;
+        fci.height          = _swapchainExtent.height;
+        fci.layers          = 1;
+        VK_CHECK(vkCreateFramebuffer(_device, &fci, nullptr, &_framebuffers[i]));
+    }
+    _needsRecreate = false;
+}
+
+void VulkanDevice::destroySwapchainObjects() {
+    for (auto fb : _framebuffers)   if (fb)             vkDestroyFramebuffer(_device, fb, nullptr);
+    for (auto v : _swapchainViews)  if (v)              vkDestroyImageView(_device, v, nullptr);
+    if (_depthView)   vkDestroyImageView(_device, _depthView, nullptr);
+    if (_depthImage)  vkDestroyImage(_device, _depthImage, nullptr);
+    if (_depthMemory) vkFreeMemory(_device, _depthMemory, nullptr);
+    _depthView = VK_NULL_HANDLE; _depthImage = VK_NULL_HANDLE; _depthMemory = VK_NULL_HANDLE;
+    if (_swapchain)  vkDestroySwapchainKHR(_device, _swapchain, nullptr);
+    if (_renderPass) vkDestroyRenderPass(_device, _renderPass, nullptr);
+    _framebuffers.clear();
+    _swapchainViews.clear();
+    _swapchainImages.clear();
+    _swapchain = VK_NULL_HANDLE;
+    _renderPass = VK_NULL_HANDLE;
+}
+
+void VulkanDevice::createCommandObjects() {
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.queueFamilyIndex = _queueFamily;
+    pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    VK_CHECK(vkCreateCommandPool(_device, &pci, nullptr, &_commandPool));
+
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.commandPool        = _commandPool;
+    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VK_CHECK(vkAllocateCommandBuffers(_device, &ai, &_commandBuffer));
+}
+
+void VulkanDevice::createSyncObjects() {
+    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VK_CHECK(vkCreateSemaphore(_device, &sci, nullptr, &_semImageAvailable));
+    VK_CHECK(vkCreateSemaphore(_device, &sci, nullptr, &_semRenderDone));
+
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;   // 首帧可直接等待
+    VK_CHECK(vkCreateFence(_device, &fci, nullptr, &_fenceInFlight));
+}
+
+// ============================================================
+// 帧循环
+// ============================================================
+bool VulkanDevice::beginFrameInternal() {
+    VK_CHECK(vkWaitForFences(_device, 1, &_fenceInFlight, VK_TRUE, UINT64_MAX));
+
+    VkResult r = vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX,
+                                       _semImageAvailable, VK_NULL_HANDLE, &_imageIndex);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR) {
+        _needsRecreate = true;
+        return false;
+    }
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
+        VK_CHECK(r);
+    }
+
+    VK_CHECK(vkResetFences(_device, 1, &_fenceInFlight));
+    VK_CHECK(vkResetCommandBuffer(_commandBuffer, 0));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VK_CHECK(vkBeginCommandBuffer(_commandBuffer, &bi));
+    return true;
+}
+
+void VulkanDevice::recreatePipelines() {
+    for (auto& p : _pipelines) {
+        if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
+    }
+    for (size_t i = 0; i < _pipelineDescs.size(); ++i) {
+        // 借用 createPipeline 的实现重建（句柄 id 保持不变，直接覆盖存储槽位）
+        PipelineHandle tmp = createPipeline(_pipelineDescs[i]);
+        _pipelines[i] = std::move(_pipelines[tmp.id - 1]);
+        _pipelines.pop_back();
+        _pipelineDescs.pop_back();   // createPipeline 又 push 了一份描述符，去掉重复
+    }
+}
+
+void VulkanDevice::deferGpuWork(std::function<void(VkCommandBuffer)> fn) {
+    if (_frameActive) {
+        _deferredGpu.push_back(std::move(fn));   // 帧内：延迟到下一帧开头
+        return;
+    }
+    submitOneTime(std::move(fn));                // 帧外：立即执行
+}
+
+void VulkanDevice::drainDeferredGpuWork() {
+    if (_deferredGpu.empty()) return;
+    // 用独立一次性提交执行（不动主命令缓冲：此时它可能仍处于 pending 状态）
+    for (auto& fn : _deferredGpu) submitOneTime(std::move(fn));
+    _deferredGpu.clear();
+}
+
+void VulkanDevice::beginFrame() {
+    drainDeferredGpuWork();   // 上一帧帧内延迟的纹理上传：现在帧外安全执行
+    if (_needsRecreate) {
+        vkDeviceWaitIdle(_device);
+        destroySwapchainObjects();
+        createSwapchainObjects();
+        recreatePipelines();   // 新 renderPass => 管线必须重建
+    }
+    _frameSkipped = !beginFrameInternal();
+    _frameActive  = !_frameSkipped;
+}
+
+void VulkanDevice::endFrame() {
+    if (!_frameActive) { _frameSkipped = false; return; }
+    _frameActive = false;
+
+    VK_CHECK(vkEndCommandBuffer(_commandBuffer));
+
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.waitSemaphoreCount = 1;
+    si.pWaitSemaphores    = &_semImageAvailable;
+    si.pWaitDstStageMask  = &waitStage;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &_commandBuffer;
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores    = &_semRenderDone;
+    VK_CHECK(vkQueueSubmit(_queue, 1, &si, _fenceInFlight));
+
+    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    pi.waitSemaphoreCount = 1;
+    pi.pWaitSemaphores    = &_semRenderDone;
+    pi.swapchainCount     = 1;
+    pi.pSwapchains        = &_swapchain;
+    pi.pImageIndices      = &_imageIndex;
+    VkResult r = vkQueuePresentKHR(_queue, &pi);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
+        _needsRecreate = true;
+    }
+
+    // ---- RHI_PROBE=1：第 30 帧回读中心像素（M3 验证用，之后可移除）----
+    static int frameCount = 0;
+    static bool probeEnabled = (std::getenv("RHI_PROBE") != nullptr);
+    if (probeEnabled && ++frameCount == 30) {
+        vkQueueWaitIdle(_queue);
+        VkBuffer readback;
+        VkDeviceMemory readbackMem;
+        VkDeviceSize bufSize = _swapchainExtent.width * _swapchainExtent.height * 4;
+        VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size  = bufSize;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &readback));
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(_device, readback, &req);
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.allocationSize  = req.size;
+        mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &readbackMem));
+        VK_CHECK(vkBindBufferMemory(_device, readback, readbackMem, 0));
+
+        VkCommandBuffer cb = _commandBuffer;
+        VK_CHECK(vkResetCommandBuffer(cb, 0));
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        VK_CHECK(vkBeginCommandBuffer(cb, &bi));
+        VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toTransfer.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toTransfer.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransfer.image = _swapchainImages[_imageIndex];
+        toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &toTransfer);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {_swapchainExtent.width, _swapchainExtent.height, 1};
+        vkCmdCopyImageToBuffer(cb, _swapchainImages[_imageIndex],
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &region);
+        VK_CHECK(vkEndCommandBuffer(cb));
+        VkSubmitInfo s2{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        s2.commandBufferCount = 1;
+        s2.pCommandBuffers = &cb;
+        VK_CHECK(vkQueueSubmit(_queue, 1, &s2, VK_NULL_HANDLE));
+        VK_CHECK(vkQueueWaitIdle(_queue));
+
+        void* mapped = nullptr;
+        VK_CHECK(vkMapMemory(_device, readbackMem, 0, bufSize, 0, &mapped));
+        const uint8_t* px = static_cast<const uint8_t*>(mapped);
+        uint32_t cx = _swapchainExtent.width / 2, cy = _swapchainExtent.height * 2 / 5;
+        const size_t off = (static_cast<size_t>(cy) * _swapchainExtent.width + cx) * 4;
+        // swapchain 格式可能是 BGRA：打印原始字节 + 两种解释
+        ENGINE_LOG_INFO("[VKPROBE] center bytes = %d,%d,%d,%d (format=%d)",
+                    px[off], px[off+1], px[off+2], px[off+3], (int)_swapchainFormat);
+        std::fflush(stdout);
+        if (std::getenv("RHI_DUMP")) {   // 正式调试设施：导出整帧 PPM
+            FILE* fp = fopen("/tmp/frame_vk.ppm", "wb");
+            if (fp) {
+                std::fprintf(fp, "P6\n%u %u\n255\n", _swapchainExtent.width, _swapchainExtent.height);
+                for (uint32_t y = 0; y < _swapchainExtent.height; ++y) {
+                    const uint8_t* row = px + static_cast<size_t>(_swapchainExtent.height - 1 - y) * _swapchainExtent.width * 4;
+                    for (uint32_t x = 0; x < _swapchainExtent.width; ++x) {
+                        const uint8_t* px4 = row + static_cast<size_t>(x) * 4;
+                        const uint8_t rgb[3] = { px4[2], px4[1], px4[0] };   // BGRA → RGB 真色
+                        fwrite(rgb, 1, 3, fp);
+                    }
+                }
+                fclose(fp);
+            }
+        }
+        vkUnmapMemory(_device, readbackMem);
+        vkDestroyBuffer(_device, readback, nullptr);
+        vkFreeMemory(_device, readbackMem, nullptr);
+        std::fflush(stdout);
+    }
+}
+
+void VulkanDevice::onResize(int width, int height) {
+    // 尺寸未变则忽略（应用启动时 onWindowSizeChanged 传来的尺寸与创建时一致，
+    // 若此时重建 swapchain，会销毁管线引用的 renderPass 导致绘制崩溃）
+    if (width > 0 && height > 0 &&
+        (static_cast<uint32_t>(width)  != _swapchainExtent.width ||
+         static_cast<uint32_t>(height) != _swapchainExtent.height)) {
+        _needsRecreate = true;
+    }
+}
+
+void VulkanDevice::waitIdle() {
+    if (_device != VK_NULL_HANDLE) vkDeviceWaitIdle(_device);
+}
+
+// ============================================================
+// 资源创建
+// ============================================================
+BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
+    VkBufferRes res;
+    res.size = desc.size;
+
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size  = desc.size;
+    bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+              | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &res.buffer));
+
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(_device, res.buffer, &req);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &res.memory));
+    VK_CHECK(vkBindBufferMemory(_device, res.buffer, res.memory, 0));
+    VK_CHECK(vkMapMemory(_device, res.memory, 0, desc.size, 0, &res.mapped));
+    if (desc.initialData && desc.size > 0) {
+        std::memcpy(res.mapped, desc.initialData, desc.size);
+    }
+
+    _buffers.push_back(res);
+    BufferHandle h; h.id = static_cast<uint32_t>(_buffers.size());
+    return h;
+}
+
+void VulkanDevice::updateBuffer(BufferHandle buffer, const void* data,
+                            uint32_t size, uint32_t offset) {
+    if (!buffer.valid() || !data) return;
+    VkBufferRes& b = _buffers[buffer.id - 1];
+    if (offset + size > b.size) return;   // 越界保护
+    std::memcpy(static_cast<uint8_t*>(b.mapped) + offset, data, size);
+}
+
+TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
+    VkTextureRes t;
+    t.width = desc.width; t.height = desc.height;
+    const uint32_t layerCount = desc.cubemap ? 6u : 1u;
+
+    // ---- image（DEVICE_LOCAL + OPTIMAL）----
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType     = VK_IMAGE_TYPE_2D;
+    ici.format        = VK_FORMAT_R8G8B8A8_UNORM;
+    ici.extent        = {desc.width, desc.height, 1};
+    ici.mipLevels     = 1;
+    ici.arrayLayers   = layerCount;
+    ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+    if (desc.cubemap) ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT
+                      | (desc.initialData ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0);
+    ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VK_CHECK(vkCreateImage(_device, &ici, nullptr, &t.image));
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(_device, t.image, &req);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &t.memory));
+    VK_CHECK(vkBindImageMemory(_device, t.image, t.memory, 0));
+
+    // ---- 数据上传：staging → 拷贝 + 布局转换 ----
+    // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
+    // 开头执行；数据由 lambda 持有（调用方的 initialData 生命周期未知）
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height * 4 * layerCount;
+    if (desc.initialData && bytes > 0) {
+        auto dataCopy = std::make_shared<std::vector<unsigned char>>(
+            static_cast<const unsigned char*>(desc.initialData),
+            static_cast<const unsigned char*>(desc.initialData) + static_cast<size_t>(bytes));
+        deferGpuWork([this, t, dataCopy, w = desc.width, h = desc.height, layerCount](VkCommandBuffer cb) {
+            const VkDeviceSize total = static_cast<VkDeviceSize>(w) * h * 4 * layerCount;
+            VkBuffer staging;
+            VkDeviceMemory stagingMem;
+            VkBufferCreateInfo sbi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            sbi.size  = total;
+            sbi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            sbi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VK_CHECK(vkCreateBuffer(_device, &sbi, nullptr, &staging));
+            VkMemoryRequirements req2;
+            vkGetBufferMemoryRequirements(_device, staging, &req2);
+            VkMemoryAllocateInfo mai2{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            mai2.allocationSize  = req2.size;
+            mai2.memoryTypeIndex = findMemoryType(_physicalDevice, req2.memoryTypeBits,
+                                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            VK_CHECK(vkAllocateMemory(_device, &mai2, nullptr, &stagingMem));
+            VK_CHECK(vkBindBufferMemory(_device, staging, stagingMem, 0));
+            void* mapped;
+            VK_CHECK(vkMapMemory(_device, stagingMem, 0, total, 0, &mapped));
+            std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(total));
+            vkUnmapMemory(_device, stagingMem);
+
+            VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            bar.srcAccessMask = 0;
+            bar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bar.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            bar.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.image = t.image;
+            bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layerCount};
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &bar);
+            std::vector<VkBufferImageCopy> regions(layerCount);
+            for (uint32_t face = 0; face < layerCount; ++face) {
+                regions[face] = {};
+                regions[face].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1};
+                regions[face].imageExtent = {w, h, 1};
+                regions[face].bufferOffset = static_cast<VkDeviceSize>(face) * w * h * 4;
+            }
+            vkCmdCopyBufferToImage(cb, staging, t.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   layerCount, regions.data());
+            bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            bar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &bar);
+
+            vkDestroyBuffer(_device, staging, nullptr);
+            vkFreeMemory(_device, stagingMem, nullptr);
+        });
+    }
+    // ---- view + sampler ----
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image    = t.image;
+    vci.viewType = desc.cubemap ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
+    vci.format   = VK_FORMAT_R8G8B8A8_UNORM;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layerCount};
+    VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &t.view));
+
+    VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sci.magFilter        = VK_FILTER_LINEAR;
+    sci.minFilter        = VK_FILTER_LINEAR;
+    sci.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.anisotropyEnable = VK_FALSE;
+    sci.maxLod           = 1.0f;
+    sci.compareOp        = VK_COMPARE_OP_NEVER;
+    sci.borderColor      = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    VK_CHECK(vkCreateSampler(_device, &sci, nullptr, &t.sampler));
+
+    _textures.push_back(t);
+    TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
+    return h;
+}
+
+PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
+    VkPipelineRes res;
+
+    // ---- 着色器模块：从 shaders_vk/ 读取 <name>.spv ----
+    std::vector<VkPipelineShaderStageCreateInfo> stages;
+    std::vector<VkShaderModule> modules;
+    for (const auto& s : desc.shaders) {
+        const std::string path = _shaderRootPath + s.path + ".spv";
+        std::vector<char> code = readSpirvFile(path);
+        if (code.empty()) {
+            ENGINE_LOG_ERROR("[VK] missing SPIR-V for pipeline");
+            return {};
+        }
+        VkShaderModuleCreateInfo mci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        mci.codeSize = code.size();
+        mci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
+        VkShaderModule mod;
+        VK_CHECK(vkCreateShaderModule(_device, &mci, nullptr, &mod));
+        modules.push_back(mod);
+
+        VkPipelineShaderStageCreateInfo st{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        st.stage  = (s.stage == ShaderStage::Vertex) ? VK_SHADER_STAGE_VERTEX_BIT
+                                                     : VK_SHADER_STAGE_FRAGMENT_BIT;
+        st.module = mod;
+        st.pName  = "main";
+        stages.push_back(st);
+    }
+
+    // ---- 顶点输入 ----
+    // ---- 顶点输入：binding0 = 顶点率，binding1 = 实例率（有实例化属性时）----
+    bool hasInstanced = false;
+    for (const auto& a : desc.vertexLayout.attributes) hasInstanced |= a.instanced;
+    VkVertexInputBindingDescription binds[2] = {};
+    binds[0] = {0, desc.vertexLayout.stride, VK_VERTEX_INPUT_RATE_VERTEX};
+    binds[1] = {1, desc.vertexLayout.instanceStride, VK_VERTEX_INPUT_RATE_INSTANCE};
+    std::vector<VkVertexInputAttributeDescription> attrs;
+    for (const auto& a : desc.vertexLayout.attributes) {
+        VkVertexInputAttributeDescription va{};
+        va.location = a.location;
+        va.binding  = a.instanced ? 1 : 0;
+        va.offset   = a.offset;
+        switch (a.format) {
+            case VertexFormat::Float1: va.format = VK_FORMAT_R32_SFLOAT; break;
+            case VertexFormat::Float2: va.format = VK_FORMAT_R32G32_SFLOAT; break;
+            case VertexFormat::Float3: va.format = VK_FORMAT_R32G32B32_SFLOAT; break;
+            case VertexFormat::Float4: va.format = VK_FORMAT_R32G32B32A32_SFLOAT; break;
+        }
+        attrs.push_back(va);
+    }
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vi.vertexBindingDescriptionCount   = hasInstanced ? 2 : 1;
+    vi.pVertexBindingDescriptions      = binds;
+    vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
+    vi.pVertexAttributeDescriptions    = attrs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    switch (desc.primitive) {
+        case PrimitiveType::Triangles:     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
+        case PrimitiveType::Lines:         ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
+        case PrimitiveType::TriangleStrip: ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
+    }
+
+    // ---- 动态 viewport/scissor ----
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1;
+    vp.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode    = (desc.cull == CullMode::Back) ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    // M4：render pass 已有深度附件，深度状态由管线描述符驱动
+    ds.depthTestEnable  = desc.depth.depthTest  ? VK_TRUE : VK_FALSE;
+    ds.depthWriteEnable = desc.depth.depthWrite ? VK_TRUE : VK_FALSE;
+    ds.depthCompareOp   = desc.depth.depthLessEqual ? VK_COMPARE_OP_LESS_OR_EQUAL
+                                                    : VK_COMPARE_OP_LESS;
+
+    VkPipelineColorBlendAttachmentState att{};
+    att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    if (desc.blend.blendEnable) {
+        att.blendEnable    = VK_TRUE;
+        att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        att.colorBlendOp        = VK_BLEND_OP_ADD;
+        att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    }
+    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 1;
+    cb.pAttachments    = &att;
+
+    VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates    = dynamics;
+
+    // ---- pipeline layout：固定 push constant 布局（与 shaders_vk GLSL 一致）----
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset     = 0;
+    pushRange.size       = kPushTotalSize;
+    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges    = &pushRange;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &_texSetLayout;
+    VK_CHECK(vkCreatePipelineLayout(_device, &plci, nullptr, &_commandList->_pipelineLayout));
+
+    VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    gpi.stageCount          = static_cast<uint32_t>(stages.size());
+    gpi.pStages             = stages.data();
+    gpi.pVertexInputState   = &vi;
+    gpi.pInputAssemblyState = &ia;
+    gpi.pViewportState      = &vp;
+    gpi.pRasterizationState = &rs;
+    gpi.pMultisampleState   = &ms;
+    gpi.pDepthStencilState  = &ds;
+    gpi.pColorBlendState    = &cb;
+    gpi.pDynamicState       = &dyn;
+    gpi.layout              = _commandList->_pipelineLayout;
+    gpi.renderPass          = _renderPass;
+    gpi.subpass             = 0;
+    VK_CHECK(vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &gpi, nullptr, &res.pipeline));
+
+    for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
+
+    _pipelineDescs.push_back(desc);
+    _pipelines.push_back(std::move(res));
+    PipelineHandle h; h.id = static_cast<uint32_t>(_pipelines.size());
+    return h;
+}
+
+// ============================================================
+// 查询 / 其他
+// ============================================================
+VkFramebuffer VulkanDevice::currentFramebuffer() const {
+    if (_imageIndex < _framebuffers.size()) return _framebuffers[_imageIndex];
+    return VK_NULL_HANDLE;
+}
+
+bool VulkanDevice::nativeHandles(NativeHandles& out) const {
+    out.instance       = reinterpret_cast<uint64_t>(_instance);
+    out.physicalDevice = reinterpret_cast<uint64_t>(_physicalDevice);
+    out.device         = reinterpret_cast<uint64_t>(_device);
+    out.queue          = reinterpret_cast<uint64_t>(_queue);
+    out.renderPass     = reinterpret_cast<uint64_t>(_renderPass);
+    out.queueFamily    = _queueFamily;
+    out.minImageCount  = 2;
+    out.imageCount     = static_cast<uint32_t>(_swapchainImages.size());
+    return true;
+}
+
+IRHICommandList* VulkanDevice::commandList() {
+    return _commandList.get();
+}
+
+void VulkanDevice::createDescriptorObjects() {
+    // set layout：binding0 = 绘制级 uniform UBO；bindings 1..4 = 采样器槽 0..3
+    VkDescriptorSetLayoutBinding bindings[5];
+    bindings[0] = {};
+    bindings[0].binding         = 0;
+    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (uint32_t i = 0; i < 4; ++i) {
+        bindings[i + 1] = {};
+        bindings[i + 1].binding         = i + 1;
+        bindings[i + 1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i + 1].descriptorCount = 1;
+        bindings[i + 1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = 5;
+    li.pBindings    = bindings;
+    VK_CHECK(vkCreateDescriptorSetLayout(_device, &li, nullptr, &_texSetLayout));
+
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 128;
+    poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = 32;
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.maxSets       = 32;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes    = poolSizes;
+    VK_CHECK(vkCreateDescriptorPool(_device, &pi, nullptr, &_texDescriptorPool));
+
+    // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用
+    _defaultUniformBlock = createUniformBlock(kDrawUniformsSize);
+}
+
+void VulkanDevice::createWhiteFallbackTexture() {
+    // 白色兜底纹理：未绑定的描述符槽位也指向合法资源（2D + cubemap 各一）。
+    // 注意：仅创建纹理；采样器槽位由 createUniformBlock 创建块时预填
+    //（白纹理必须先于描述符对象创建，见构造顺序）
+    uint8_t white[4] = {255, 255, 255, 255};
+    TextureDesc d;
+    d.width = 1; d.height = 1;
+    d.usage = TEX_SAMPLED;
+    d.initialData = white;
+    _whiteTex = createTexture(d);
+
+    uint8_t cubeWhite[4 * 6] = {255,255,255,255, 255,255,255,255, 255,255,255,255,
+                                255,255,255,255, 255,255,255,255, 255,255,255,255};
+    TextureDesc cd;
+    cd.width = 1; cd.height = 1;
+    cd.usage = TEX_SAMPLED;
+    cd.cubemap = true;
+    cd.initialData = cubeWhite;
+    _whiteCubeTex = createTexture(cd);
+}
+
+void VulkanDevice::submitOneTime(std::function<void(VkCommandBuffer)> record) {
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.commandPool        = _commandPool;
+    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cb;
+    VK_CHECK(vkAllocateCommandBuffers(_device, &ai, &cb));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VK_CHECK(vkBeginCommandBuffer(cb, &bi));
+    record(cb);
+    VK_CHECK(vkEndCommandBuffer(cb));
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &cb;
+    VK_CHECK(vkQueueSubmit(_queue, 1, &si, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(_queue));
+    vkFreeCommandBuffers(_device, _commandPool, 1, &cb);
+}
+
+UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
+    VkUniformBlockRes blk;
+    blk.size = size;
+
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size  = size;
+    bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK(vkCreateBuffer(_device, &bi, nullptr, &blk.buffer));
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(_device, blk.buffer, &req);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = findMemoryType(_physicalDevice, req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &blk.memory));
+    VK_CHECK(vkBindBufferMemory(_device, blk.buffer, blk.memory, 0));
+    VK_CHECK(vkMapMemory(_device, blk.memory, 0, size, 0, &blk.mapped));
+
+    // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool     = _texDescriptorPool;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts        = &_texSetLayout;
+    VK_CHECK(vkAllocateDescriptorSets(_device, &dai, &blk.set));
+
+    VkDescriptorBufferInfo bufInfo{blk.buffer, 0, size};
+    VkWriteDescriptorSet writes[5]{};
+    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[0].dstSet = blk.set;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].descriptorCount = 1;
+    writes[0].pBufferInfo = &bufInfo;
+
+    const VkTextureRes& white = _textures[_whiteTex.id - 1];
+    const VkTextureRes& whiteCube = _textures[_whiteCubeTex.id - 1];
+    VkDescriptorImageInfo imgInfos[4];
+    for (uint32_t i = 0; i < 4; ++i) {
+        const bool isCubeSlot = (i == 3);   // 槽 3 = cubemap（天空盒）
+        const VkTextureRes& fill = isCubeSlot ? whiteCube : white;
+        imgInfos[i] = { fill.sampler, fill.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        writes[i + 1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writes[i + 1].dstSet = blk.set;
+        writes[i + 1].dstBinding = i + 1;
+        writes[i + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i + 1].descriptorCount = 1;
+        writes[i + 1].pImageInfo = &imgInfos[i];
+    }
+    vkUpdateDescriptorSets(_device, 5, writes, 0, nullptr);
+
+    _uniformBlocks.push_back(blk);
+    UniformBlockHandle h; h.id = static_cast<uint32_t>(_uniformBlocks.size());
+    return h;
+}
+
+void VulkanDevice::bindInstanceVertexBuffer(VkCommandBuffer cb, BufferHandle h) const {
+    if (!h.valid() || h.id > _buffers.size()) return;
+    VkBuffer vb = _buffers[h.id - 1].buffer;
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cb, 1, 1, &vb, &offset);   // binding1 = 实例率
+}
+
+uint64_t VulkanDevice::nativeHandle(RhiHandle handle) const {
+    if (handle.id >= 1 && handle.id <= _buffers.size()) {
+        return reinterpret_cast<uint64_t>(_buffers[handle.id - 1].buffer);
+    }
+    return 0;
+}
+
+DeviceInfo VulkanDevice::info() const {
+    DeviceInfo di;
+    di.backend     = Backend::Vulkan;
+    di.backendName = "Vulkan (MoltenVK)";
+    di.adapterName = _adapterName;
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(_physicalDevice, &props);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "Vulkan %u.%u.%u",
+                  VK_VERSION_MAJOR(props.apiVersion),
+                  VK_VERSION_MINOR(props.apiVersion),
+                  VK_VERSION_PATCH(props.apiVersion));
+    di.apiVersion = buf;
+    return di;
+}
+
+} // namespace rhi

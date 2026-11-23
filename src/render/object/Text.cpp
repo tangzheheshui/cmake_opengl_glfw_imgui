@@ -2,7 +2,7 @@
 
 #include "Text.h"
 #include "shader.h"
-#include "camera_old.h"
+#include "camera.h"
 #include "image.h"
 #include "FontManager.h"
 

@@ -2,175 +2,139 @@
 
 ## 项目概述
 
-C++17 OpenGL 3.3 Core Profile 渲染引擎，基于 GLFW + GLAD + Dear ImGui + Assimp + FreeType 构建。支持多 Pass 前向渲染管线，包括阴影映射、天空盒、模型加载/实例化、骨骼动画、字体渲染和实体拾取。
+C++17 跨平台渲染引擎，**双后端（OpenGL 3.3 / Vulkan）**，通过自研 RHI 抽象层统一封装。基于 GLFW + GLAD + Dear ImGui + Assimp + FreeType 构建。目标：通用渲染引擎，可移植到任意产品项目（macOS / Windows / Linux，Vulkan 在 macOS 经 MoltenVK）。
+
+## 分层架构（重要约定）
+
+```
+app 层（可执行 my_app）   main.cpp + DebugPanel —— 唯一允许使用 ImGui 的地方
+engine 层（静态库）        src/ 下的 RHI + 渲染系统，禁止依赖任何 UI 库
+third-party 层            3rdparty/ 各自独立 target
+依赖方向：app → engine → third-party，禁止反向
+```
+
+- **引擎库 `engine`** 不含 UI 代码；app 通过公共接口交互：
+  `RenderSystem::settings()`（读写渲染设置）、`rhiDevice()`（设备句柄）、`preloadTextures()`、`GetFontMng()`
+- **资源加载是 app 层职责**：引擎不假设项目资源布局（纹理预载、字体加载由 app 显式调用）
+- **日志必须走宏**：引擎代码禁止直接 printf/cout，一律 `ENGINE_LOG_INFO/WARN/ERROR/WARN_ONCE`
+  （见 `src/core/log/LogMacros.h`，换日志系统只需改该映射头或编译定义覆盖）
 
 ## 构建
 
 ### 前置要求
-- CMake 3.22+
-- C++17 编译器
-- macOS: Xcode（命令行工具）
-- Windows: Visual Studio 2019+
+- CMake 3.22+、C++17
+- macOS: Xcode 命令行工具
+- Vulkan 后端（可选）：`brew install molten-vk vulkan-loader vulkan-headers glslang`
+  （找不到则自动降级为仅 GL 后端；SPIR-V 由构建期 glslangValidator 编译）
 
 ### 构建命令
 
 ```bash
-# macOS (Xcode)
 cmake -S . -B build -G Xcode
 cmake --build build
-
-# Windows (Visual Studio)
-cmake -S . -B build
-cmake --build build
-
-# 仅命令行构建
-cmake -S . -B build -G "Unix Makefiles"
-cmake --build build
 ```
 
-运行的二进制文件位于 `build/Debug/my_app`（macOS Debug 模式）。
+可执行文件：`build/app/Debug/my_app`（引擎库产物：`build/src/Debug/libengined.a`）
 
-## 架构
+### 运行
 
-### 目录结构
+```bash
+# OpenGL 后端（默认）
+./build/app/Debug/my_app
+
+# Vulkan 后端（开发期需 DYLD 路径让 GLFW 找到 loader；打包时 Frameworks 内嵌解决）
+DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan ./build/app/Debug/my_app
+
+# 环境变量
+#   RHI_BACKEND = opengl(默认) | vulkan
+#   RHI_SMOKE   = 1 强制显示 RHI 冒烟三角形（无 UI 场景验证用）
+#   RHI_PROBE   = 1 第 30 帧回读屏幕中心像素打印（渲染链路验证）
+```
+
+## 目录结构
 
 ```
-src/
+app/                    -- app 层（编译进 my_app）
+  main.cpp              -- 窗口创建（按后端选 GL 上下文 / NO_API）、ImGui 初始化、场景组装
+  DebugPanel.h/cpp      -- ImGui 渲染调试面板（后端信息 / Pass 开关 / RHI 开关）
+src/                    -- 引擎层（engine 静态库）
+  CMakeLists.txt        -- engine 库定义 + Vulkan 检测 + SPIR-V 构建规则
+  rhi/                  -- RHI 抽象层（Vulkan 语义设计，详见 docs/RHI_DESIGN.md）
+    RhiTypes.h            句柄/描述符/UniformValue（bgfx 风格每-draw uniform 块）
+    IRHIDevice.h          设备：资源创建 + beginFrame/endFrame + onResize
+    IRHICommandList.h     命令录制：beginRenderPass → bindPipeline → setUniform → draw
+    RHIFactory.h/cpp      后端工厂
+    gl/                   OpenGL 后端（GLDevice / GLCommandList，"翻译器"实现）
+    vk/                   Vulkan 后端（VulkanDevice / VkCommandList，"直译"实现，M3 ✅）
   core/
-    math/              -- 自定义 Matrix 类、数学工具函数
-    taskQueue.h        -- 多线程任务队列（目前未大量使用）
+    math/                 自定义 Matrix 类
+    log/LogMacros.h       日志宏映射点（换项目时只改这里）
+    taskQueue.h           任务队列（未大量使用）
   render/
-    BaseDraw.h         -- 所有可绘制对象的抽象基类（VAO/VBO/EBO 管理）
-    shader.cpp/h       -- GLSL 着色器编译 + ShaderCache 单例
-    image.cpp/h        -- TextureMng 单例（stb_image 纹理加载）
-    Light.h            -- 全局平行光定义
-    FontManager.cpp/h  -- FreeType 字体位图生成 + OpenGL 纹理缓存
-    RenderSystem.cpp/h -- 顶层编排：Pass 管线、输入事件、场景管理
-    scene.cpp/h        -- 场景容器：相机、天空盒、可绘制对象列表、光源 VP 矩阵
-    camera/
-      camera_old.cpp/h  -- 活跃的 Camera 类（轨道相机，欧拉角控制）
-      CameraController.cpp/h -- 鼠标拖拽/缩放相机控制器
-    model/
-      model.cpp/h      -- Assimp 模型加载、骨骼动画、实例化渲染
-      mesh.cpp/h       -- 网格对象，持有 RenderPass
-      pass.cpp/h       -- RenderPass 基类（网格级绘制策略）
-      PassColor.cpp/h  -- 纯色着色 Pass
-      PassTexture.cpp/h -- 纹理着色 Pass（支持多视口、骨骼蒙皮）
-      model_data.h     -- 数据定义（MeshData, Material, Animation, DrawOption）
-      aabb.cpp/h       -- 包围盒
-    object/
-      Line.cpp/h       -- 3D 线段（坐标轴等）
-      ImageRectangle.cpp/h -- 带纹理的矩形面片（视差/法线贴图）
-      Sky.cpp/h        -- 立方体贴图天空盒
-      Text.cpp/h       -- FreeType 文本渲染
-    pass/
-      RenderPass.cpp/h -- IRenderPass 接口 + RenderContext
-      ShadowPass.cpp/h -- 阴影贴图生成 Pass
-      NormalPass.cpp/h -- 主场景渲染 Pass（Blinn-Phong 光照）
-      SkyPass.cpp/h    -- 天空盒渲染 Pass
-      PickPass.cpp/h   -- 实体拾取 Pass（ID 编码）
-3rdparty/              -- 第三方库（glfw, glad, imgui, assimp, freetype, glm, stb_image）
+    RenderSystem.*        顶层编排（Pass 循环、输入事件、RHI 设备持有）
+    RenderSettings.h      渲染管线级开关（Pass 跳过 / RHI 开关 / vsync）
+    scene.* / camera/     场景容器、轨道相机（camera.h）+ 控制器
+    shader.* / image.*    GLSL 缓存（GL 后端用）、纹理管理（stb）
+    FontManager.* / Light.h
+    model/                Assimp 模型加载、骨骼动画；MeshPass（原 RenderPass，网格级策略）
+    pass/                 帧级 Pass（GL 专属实现）：ShadowPass/NormalPass/SkyPass/PickPass
+    object/               Line / Sky / Text / ImageRectangle 可绘制对象
 res/
-  shaders/             -- GLSL 着色器（无扩展名，按 vert_* / frag_* / *.geom 命名）
-  textures/            -- 纹理资源
-  font/                -- 字体文件（arial.ttf, roboto.ttf）
-  model/               -- 3D 模型（duck.dae）
+  shaders/                GLSL（GL 后端，无扩展名 vert_xxx/frag_xxx）
+  shaders_vk/             GLSL（Vulkan 变体，.vert/.frag → 构建期编译为 .spv）
+  textures/ font/ model/  资源
+docs/RHI_DESIGN.md       RHI 设计文档：接口说明、里程碑、调试经验（必读）
 ```
 
-### 核心类层次
+## 渲染管线
 
-**可绘制对象（均继承 BaseDraw）：**
-```
-BaseDraw
-  ├── Model          （3D 模型，包含 N 个 Mesh，每个 Mesh 持有 RenderPass）
-  ├── Line           （3D 线段）
-  ├── Sky            （天空盒立方体贴图）
-  ├── CText          （字体文字渲染）
-  └── ImageRectangle （纹理矩形面片）
-```
+**OpenGL 路径**：ShadowPass → NormalPass → SkyPass → PickPass（帧级 Pass，GL 代码）+ RHI 冒烟三角形
+**Vulkan 路径**：GL Pass 整体跳过（M4 逐个迁移），仅渲染已迁移到 RHI 的内容（冒烟三角形）
 
-**帧级渲染 Pass（继承 IRenderPass）：**
-```
-IRenderPass
-  ├── CShadowPass    （阴影贴图生成）
-  ├── CNormalPass    （主场景渲染）
-  ├── CSkyPass       （天空盒渲染）
-  └── CPickPass      （实体拾取）
-```
+### RHI 使用模式
 
-**网格级绘制策略（模型内部使用）：**
-```
-RenderPass
-  ├── PassColor      （纯色着色）
-  └── PassTexture    （纹理着色）
+```cpp
+auto* device = RenderSystem::getInstance().rhiDevice();   // 可能为空（后端未启用）
+auto* cmd = device->commandList();
+device->beginFrame();
+cmd->beginRenderPass(desc);        // Vulkan: swapchain framebuffer；GL: FBO 直通
+cmd->bindPipeline(pipe);           // 管线 = 着色器文件名 + 顶点布局 + 状态（创建期烘焙）
+cmd->setUniform("uMatrixMVP", v);  // GL: glUniform；VK: push constant（固定布局）
+cmd->bindVertexBuffer(vb);  cmd->bindIndexBuffer(ib);
+cmd->drawIndexed(n);
+cmd->endRenderPass();
+device->endFrame();
 ```
 
-### 渲染管线
+### 后端差异速查
 
-`RenderSystem::draw()` 按顺序执行：
+| 事项 | GL | Vulkan |
+|------|----|--------|
+| 着色器 | res/shaders/（GLSL 直编） | res/shaders_vk/（GLSL→SPIR-V 构建期） |
+| uniform | glUniform 按名 | push constant 固定布局（MVP@0 mat4 / color@64 vec4） |
+| Pass 边界状态 | 保存/恢复（GLCommandList） | 天然隔离 |
+| 遗留 GL Pass | 全部可用 | 跳过（M4 迁移） |
+| 字体/文字 | FreeType→GL 纹理 | 未迁移（M4） |
 
-1. **ShadowPass** — 从光源视角渲染深度图到 FBO（1024x1024）
-2. **NormalPass** — 主渲染通道，使用 Blinn-Phong 光照模型，支持法线贴图、位移贴图
-3. **SkyPass** — 天空盒渲染（关闭深度写入）
-4. **PickPass** — 颜色编码的物体 ID 渲染，用于鼠标拾取
+## 关键单例
 
-### 数据流
-
-```
-main.cpp
-  └── RenderSystem::getInstance()
-        ├── init(rootPath)    -- 加载纹理、着色器、字体、创建 Pass
-        ├── update()          -- 每帧更新
-        ├── draw()            -- 遍历 Pass → 遍历 Scene 对象 → 调用 draw/drawShadow/drawPick
-        └── 鼠标/窗口事件     -- 分发到 CameraController
-```
-
-### 关键单例
-
-| 类 | 获取方式 | 职责 |
-|----|----------|------|
-| `RenderSystem` | `RenderSystem::getInstance()` | 顶层编排 |
-| `ShaderCache` | `ShaderCache::GetInstance()` | 着色器编译与缓存 |
-| `TextureMng` | `TextureMng::getInstance()` | 纹理加载与缓存 |
-| `Light::GlobalLight()` | 静态方法 | 全局光源参数 |
-| `TaskQueue` | `TaskQueue::instance()` | 异步任务队列 |
-| `Camera::GetCamera()` | 静态方法（deprecated 用法） | 全局相机 |
-
-### 着色器命名约定
-
-着色器文件无扩展名，成对使用：
-- 片元着色器：`frag_<name>`
-- 顶点着色器：`frag_<name>`
-- 几何着色器：`<name>.geom`
-
-示例：`vert_model` + `frag_model` 组成 Model_Texture 着色器程序。
-
-`ShaderType` 枚举（`shader.h`）的每个成员对应一对着色器，在 `ShaderCache::init()` 中注册。
-
-### DrawOption 位掩码
-
-定义在 `model_data.h` 的 `DrawOption` 枚举中：
-```
-NONE        = 0
-DRAW_SHADOW = 1<<0    -- 阴影渲染模式
-LIGHT_OPEN  = 1<<1    -- 启用光照
-MULTI_VIEWPORT = 1<<2 -- 多视口实例化
-DRAW_PICK   = 1<<3    -- 拾取渲染模式
-```
+`RenderSystem::getInstance()` / `ShaderCache::GetInstance()`（GL 专用）/ `TextureMng::getInstance()` / `Light::GlobalLight()` / `TaskQueue::instance()`
 
 ## 重要约定
 
-- **OpenGL 上下文**：所有 OpenGL 调用必须在主线程中进行（单线程渲染）
-- **资源管理**：可绘制对象使用 `std::shared_ptr`，Scene 持有所有权
-- **Pass 顺序**：ShadowPass 必须在 NormalPass 之前执行（FBO 依赖）
-- **BaseDraw 继承**：每个子类的 `draw()`/`drawShadow()`/`drawPick()` 方法需要自行管理着色器绑定和 VAO 绑定
-- **着色器 uniform 名称**：部分遗留拼写（如 `uMaterail` 而非 `uMaterial`），修改时需同步更新 GLSL 文件
+- **构造函数禁止 GL/Vulkan 调用**：无图形上下文的后端模式下构造即崩
+  （纹理惰性创建模式见 TextureMng::getTexture 对 STR_DEPTH_TEXTURE 的处理）
+- **GL Pass 边界状态保存/恢复**：Vulkan 语义的 Pass 不允许泄漏状态给周边
+  （GLCommandList::beginRenderPass/endRenderPass 实现，历史教训见 docs）
+- **Vulkan 命名**：后端类名 `VulkanDevice`（不得用 `VkDevice`，会遮蔽 Vulkan 原生句柄类型）
+- **uniform 名称**：遗留拼写 `uMaterail` 保留，改时需同步 GLSL
+- **几何着色器**：MoltenVK 不支持，`model_multiview.geom` 的替代方案见 docs
+- 部分历史代码注释为 GBK 编码，macOS 下显示乱码（编辑时用 ASCII 锚点匹配）
 
 ## 已知限制
 
-- 仅支持一个全局平行光源（`Light::GlobalLight()`）
-- 前向渲染，无延迟渲染支持
-- 相机控制耦合在 `camera_old.h` 中，包含两个相机类遗留问题
-- 部分代码注释为 GBK 编码，macOS 下显示为乱码
-- 纹理资源 96MB，未使用 Git LFS
-- 暂不支持 PBR 材质管线
+- Vulkan 模式仅渲染 RHI 迁移内容（冒烟三角形），GL Pass 未迁移（M4）
+- Vulkan 无 UI（ImGui Vulkan backend 未接入，M4）
+- Vulkan 仅 1 个全局平行光 / 无 PBR / 深度附件未接入（M4 管线需要）
+- 纹理资源 96MB 未用 Git LFS
+- RHI 对象级销毁接口未暴露（资源随 device 生命周期回收）

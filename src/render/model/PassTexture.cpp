@@ -54,9 +54,9 @@ void PassTexture::setup(const std::vector<Matrix> &matModel, uint32_t flags) {
     glBufferSubData(GL_ARRAY_BUFFER, 0, size1, m_mesh_data->positions.data());
     glBufferSubData(GL_ARRAY_BUFFER, size1, size2, m_mesh_data->normals.data());
     glBufferSubData(GL_ARRAY_BUFFER, size1 + size2, size3, m_mesh_data->coords.data());
-    if (multi_view) {
-        glBufferSubData(GL_ARRAY_BUFFER, size1 + size2 + size3 + size4 + size5, size6, matModel.data());
-    }
+    // 实例矩阵必须始终上传：实例化属性永远从 baseOffset 读取
+    //（原代码仅 MULTI_VIEWPORT 时上传，导致普通模式鸭子读取越界垃圾而不可见）
+    glBufferSubData(GL_ARRAY_BUFFER, size1 + size2 + size3 + size4 + size5, size6, matModel.data());
     
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_mesh_data->indices.size() * sizeof(unsigned int), m_mesh_data->indices.data(), GL_STATIC_DRAW);

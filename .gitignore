@@ -2,3 +2,6 @@
 /.vs/
 .vscode/
 *.DS_Store
+res/shaders_vk/*.spv
+build-asan/
+imgui.ini

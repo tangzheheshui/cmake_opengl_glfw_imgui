@@ -2,10 +2,14 @@
 #include <GLFW/glfw3.h>
 #include "3rdparty/imgui/imgui.h"
 #include "backends/imgui_impl_glfw.h"
+#include "backends/imgui_impl_vulkan.h"
 #include "backends/imgui_impl_opengl3.h"
 #include <iostream>
+#include <cstdlib>
+#include <vulkan/vulkan.h>
+#include <cstring>
 #include <filesystem>
-#include "camera/camera_old.h"
+#include "camera/camera.h"
 #include "RenderSystem.h"
 #include "scene.h"
 #include "object/Line.h"
@@ -16,6 +20,9 @@
 #include "Light.h"
 #include "taskQueue.h"
 #include "FontManager.h"
+#include "app/DebugPanel.h"
+#include "rhi/IRHICommandList.h"
+#include "rhi/IRHIDevice.h"   // UI 层：ImGui 面板只在 app 层使用，不进引擎库
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -23,10 +30,10 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void processInput(GLFWwindow* window);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
-void testRenderSystem(const std::string &rootPath);
+void testRenderSystem(const std::string &rootPath, bool useVulkan);
 // settings
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 500;
+const unsigned int SCR_WIDTH = 1600;
+const unsigned int SCR_HEIGHT = 900;
 
 // camera
 glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f, 3.0f);
@@ -40,14 +47,28 @@ float lastX = 800.0f / 2.0;
 float lastY = 600.0 / 2.0;
 float fov = 45.0f;
 
+static VkDescriptorPool g_imguiDescriptorPool = VK_NULL_HANDLE;
+
 int main()
 {
     // glfw: initialize and configure
     // ------------------------------
     glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    // 后端选择：RHI_BACKEND 环境变量（opengl=默认 / vulkan）
+    bool useVulkan = false;
+    if (const char* b = std::getenv("RHI_BACKEND")) {
+        useVulkan = (std::strcmp(b, "vulkan") == 0 || std::strcmp(b, "VULKAN") == 0);
+    }
+
+    if (useVulkan) {
+        // Vulkan 模式：窗口不创建 GL 上下文，surface 由 RHI 层创建
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    } else {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    }
 
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
@@ -74,21 +95,52 @@ int main()
 
     // glad: load all OpenGL function pointers
     // ---------------------------------------
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    if (!useVulkan && !gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
-    }    
+    }
     
     // ��ʼ�� ImGui
-    IMGUI_CHECKVERSION();
+    // 两模式均有 ImGui UI：GL 用 OpenGL3 backend；Vulkan backend 需 RHI 设备，
+    // 延后到 RenderSystem::init 之后初始化（见下方 useVulkan 分支）
+    if (true) {
+        IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     ImGui::StyleColorsDark();
 
     // ��ʼ�� ImGui ƽ̨/��Ⱦ����
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 130");
+    if (!useVulkan) {
+        ImGui_ImplGlfw_InitForOpenGL(window, true);
+        ImGui_ImplOpenGL3_Init("#version 150");
+    }
+
+    // 中文字体支持：默认 ProggyClean 无 CJK 字形。注意 macOS 的 PingFang.ttc
+    // 是 CFF 轮廓（stb_truetype 不支持），必须用 TrueType 轮廓的中文字体
+    {
+        const char* fontCandidates[] = {
+            "/System/Library/Fonts/STHeiti Medium.ttc",      // 黑体（TrueType 轮廓）
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        };
+        bool fontLoaded = false;
+        for (const char* f : fontCandidates) {
+            if (std::filesystem::exists(f)) {
+                ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(
+                    f, 17.0f, nullptr,
+                    ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
+                if (font) {
+                    std::printf("[UI] CJK font loaded: %s\n", f);
+                    fontLoaded = true;
+                    break;
+                }
+                std::printf("[UI] font bake failed: %s\n", f);
+            }
+        }
+        if (!fontLoaded) std::printf("[UI] WARNING: no CJK font loaded, UI will show garbage\n");
+    }
+    }
 
     // ��ȡ��Ŀ¼
     std::filesystem::path current_path = std::filesystem::current_path();
@@ -100,46 +152,141 @@ int main()
     // ��ʼ����Ⱦ����
     int width, height;
     glfwGetFramebufferSize(window, &width, &height);
+    RenderSystem::getInstance().setWindow(window);   // RHI: must be called before init
     RenderSystem::getInstance().init(proPath);
+    // 资源加载是 app 层职责（引擎不假设项目资源布局）
+    {
+        auto& renderSys = RenderSystem::getInstance();
+        renderSys.preloadTextures((std::filesystem::path(proPath) / "res").string());
+        // 字体字形当前是 GL 纹理实现，仅 GL 模式加载（Vulkan 文字渲染 M4 迁移）
+        if (!useVulkan) {
+            renderSys.GetFontMng()->LoadFont(
+                (std::filesystem::path(proPath) / "res" / "font" / "arial.ttf").string(), 48);
+        }
+    }
     RenderSystem::getInstance().onWindowSizeChanged(width, height);
 
+    // Vulkan 模式：ImGui Vulkan backend（需要 RHI 设备，故在 init 之后初始化）
+    if (useVulkan) {
+        auto* dev = RenderSystem::getInstance().rhiDevice();
+        rhi::IRHIDevice::NativeHandles h;
+        if (!dev || !dev->nativeHandles(h)) {
+            std::cout << "VK: no native handles for ImGui" << std::endl;
+            return -1;
+        }
+        VkDescriptorPoolSize sizes[] = {
+            {VK_DESCRIPTOR_TYPE_SAMPLER, 1000},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000},
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000},
+            {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000},
+        };
+        VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        pi.maxSets = 1000;
+        pi.poolSizeCount = 8;
+        pi.pPoolSizes = sizes;
+        if (vkCreateDescriptorPool((VkDevice)h.device, &pi, nullptr, &g_imguiDescriptorPool) != VK_SUCCESS) {
+            std::cout << "Failed to create ImGui descriptor pool" << std::endl;
+            return -1;
+        }
+        ImGui_ImplGlfw_InitForVulkan(window, true);
+        ImGui_ImplVulkan_InitInfo init{};
+        init.Instance = (VkInstance)h.instance;
+        init.PhysicalDevice = (VkPhysicalDevice)h.physicalDevice;
+        init.Device = (VkDevice)h.device;
+        init.QueueFamily = h.queueFamily;
+        init.Queue = (VkQueue)h.queue;
+        init.DescriptorPool = g_imguiDescriptorPool;
+        init.RenderPass = (VkRenderPass)h.renderPass;
+        init.MinImageCount = h.minImageCount;
+        init.ImageCount = h.imageCount;
+        init.CheckVkResultFn = [](VkResult err) {
+            if (err != VK_SUCCESS) std::printf("[IMGUI-VK] CheckVkResult %d\n", (int)err);
+        };
+        ImGui_ImplVulkan_Init(&init);
+
+        // UI 在 RHI render pass 内渲染（场景之后）
+        RenderSystem::getInstance().setOverlayRenderer([](rhi::IRHICommandList* cmd) {
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+                                            reinterpret_cast<VkCommandBuffer>(cmd->nativeCommandBuffer()));
+        });
+    }
+
     // 使用rendersysytem的各种接口
-    testRenderSystem(proPath);
+    testRenderSystem(proPath, useVulkan);
     while (!glfwWindowShouldClose(window))
     {
         // input
         processInput(window);
 
         RenderSystem::getInstance().update();
-        RenderSystem::getInstance().draw();
 
-        {
-            // �����µ� ImGui ֡
-            ImGui_ImplOpenGL3_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
+        // Vulkan mode: build ImGui frame before draw (RenderDrawData runs inside drawRhiScene's pass)
+        if (useVulkan) {
+            ImGui_ImplGlfw_NewFrame();      // 先设置 DisplaySize（依赖 GLFW 窗口）
+            ImGui_ImplVulkan_NewFrame();
             ImGui::NewFrame();
-
-            // ʾ�� UI
-            ImGui::Begin("Hello, world!");
-            ImGui::Text("This is some useful text.");
-            ImGui::End();
-
-            // ��Ⱦ ImGui
+            {
+                auto& renderSys = RenderSystem::getInstance();
+                DebugPanel::draw(renderSys.settings(), renderSys.rhiDevice());
+            }
             ImGui::Render();
         }
 
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        RenderSystem::getInstance().draw();
+
+        if (!useVulkan) {
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+            {
+                auto& renderSys = RenderSystem::getInstance();
+                DebugPanel::draw(renderSys.settings(), renderSys.rhiDevice());
+            }
+            ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
-        glfwSwapBuffers(window);
+        // Vulkan 模式：present 由 RHI endFrame 完成，且 NO_API 窗口无 GL 上下文可 swap
+        if (!useVulkan) {
+            glfwSwapBuffers(window);
+        }
         glfwPollEvents();
     }
 
-    // ����
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
+    if (useVulkan) {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        if (g_imguiDescriptorPool != VK_NULL_HANDLE) {
+            auto* dev = RenderSystem::getInstance().rhiDevice();
+            rhi::IRHIDevice::NativeHandles h;
+            if (dev && dev->nativeHandles(h)) {
+                vkDestroyDescriptorPool((VkDevice)h.device, g_imguiDescriptorPool, nullptr);
+            }
+        }
+    } else {
+            if (useVulkan) {
+            ImGui_ImplVulkan_Shutdown();
+        } else {
+            ImGui_ImplOpenGL3_Shutdown();
+        }
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        if (useVulkan && g_imguiDescriptorPool != VK_NULL_HANDLE) {
+            auto* dev = RenderSystem::getInstance().rhiDevice();
+            rhi::IRHIDevice::NativeHandles h;
+            if (dev && dev->nativeHandles(h)) {
+                vkDestroyDescriptorPool((VkDevice)h.device, g_imguiDescriptorPool, nullptr);
+            }
+        }
+    }
 
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
@@ -226,7 +373,7 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     }
 }
 
-void testRenderSystem(const std::string &rootPath) {
+void testRenderSystem(const std::string &rootPath, bool useVulkan) {
     auto pScene = RenderSystem::getInstance().GetCurScene();
     if (!pScene)
     {
@@ -255,21 +402,27 @@ void testRenderSystem(const std::string &rootPath) {
     line_z->setColor({0, 0, 1});
     
     auto start = std::chrono::high_resolution_clock::now();
-    // 地面
-    std::shared_ptr<ImageRectangle> objGround = std::make_shared<ImageRectangle>();
+    // 地面（GL 专属：calculate 混合 CPU/GPU 操作，VK 模式跳过；未加入场景）
+    std::shared_ptr<ImageRectangle> objGround = nullptr;
+    if (!useVulkan) {
+        objGround = std::make_shared<ImageRectangle>();
+    }
+    [[maybe_unused]] std::shared_ptr<ImageRectangle> objGroundUnused = objGround;
     float ground_width = 10;
     auto texPath = std::filesystem::path(rootPath) / "res" / "textures";
-    objGround->setImagePath((texPath / "bricks2.jpg").string(),
-        (texPath / "bricks2_normal.jpg").string(),
-        (texPath / "bricks2_disp.jpg").string());
-    
-    objGround->setSetp(5, 5);
-    glm::vec3 p1(-ground_width, 0,  ground_width);
-    glm::vec3 p2(ground_width, 0,  ground_width);
-    glm::vec3 p3(ground_width, 0, -ground_width);
-    glm::vec3 p4(-ground_width, 0, -ground_width);
-    objGround->setPoints(p1, p2, p3, p4);
-    objGround->calculate();
+    if (objGround) {
+        objGround->setImagePath((texPath / "bricks2.jpg").string(),
+            (texPath / "bricks2_normal.jpg").string(),
+            (texPath / "bricks2_disp.jpg").string());
+
+        objGround->setSetp(5, 5);
+        glm::vec3 p1(-ground_width, 0,  ground_width);
+        glm::vec3 p2(ground_width, 0,  ground_width);
+        glm::vec3 p3(ground_width, 0, -ground_width);
+        glm::vec3 p4(-ground_width, 0, -ground_width);
+        objGround->setPoints(p1, p2, p3, p4);
+        objGround->calculate();
+    }
     
     // 鸭子
     std::shared_ptr<Model> objDuck = std::make_shared<Model>();
@@ -310,20 +463,21 @@ void testRenderSystem(const std::string &rootPath) {
     });
     
     // obj
-    //pScene->AddObj(objGround);
     pScene->AddObj(objDuck);
     pScene->AddObj(objLight);
     pScene->AddObj(line_x);
     pScene->AddObj(line_y);
     pScene->AddObj(line_z);
-    
+
     // 天空盒
     pScene->SetSkyBox(objSky);
 
-    // 文字
+    // 文字（GL 专属：字形纹理为 GL 实现，VK 文字渲染 M4.3 迁移）
     auto& renderSys = RenderSystem::getInstance();
-    auto fontMng = renderSys.GetFontMng();
-    std::shared_ptr<CText> objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
-    objText->SetText("test");
-    pScene->AddObj(objText);
+    if (!useVulkan) {
+        auto fontMng = renderSys.GetFontMng();
+        std::shared_ptr<CText> objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
+        objText->SetText("test");
+        pScene->AddObj(objText);
+    }
 }

@@ -5,7 +5,10 @@
 //  Created by liuhaifeng02 on 2024/1/3.
 //
 
+#include "log/LogMacros.h"
 #include "model.h"
+#include "RenderSystem.h"
+#include "rhi/IRHIDevice.h"
 #include "core/taskQueue.h"
 #include <iostream>
 #include <filesystem>
@@ -24,7 +27,7 @@ void Model::LoadFile(const std::string &path) {
     // check for errors
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) // if is Not Zero
     {
-        std::cout << "ERROR::ASSIMP:: " << importer.GetErrorString() << std::endl;
+        ENGINE_LOG_ERROR("ASSIMP: %s", importer.GetErrorString());
         assert(0);
         return;
     }
@@ -77,7 +80,7 @@ void Model::processAnimation(const aiScene* scene) {
             auto channel = pAni->mChannels[j];
             NodeAnim nodeAni;
             nodeAni.name = channel->mNodeName.C_Str();
-            printf("parserAni, nodeName = %s\n", nodeAni.name.c_str());
+            ENGINE_LOG_INFO("parserAni, nodeName = %s", nodeAni.name.c_str());
             // position
             for (int indexPos = 0; indexPos < channel->mNumPositionKeys; indexPos++) {
                 KeyPosition key;
@@ -414,15 +417,20 @@ void Model::update() {
         clock_t det = (clock() - m_clock);
         clock_t cur = det % (5 * CLOCKS_PER_SEC);
         m_anim_ratio = cur / (5.0 * CLOCKS_PER_SEC);
-        printf("update ratio, m_anim_ratio = %f, cur = %zu\n", m_anim_ratio, cur);
+        ENGINE_LOG_INFO("update ratio, m_anim_ratio = %f, cur = %zu", m_anim_ratio, cur);
         updateNode(m_model_data.nodes.front().get(), nullptr);
     }
 }
 
 bool Model::draw(const Matrix &mtx) {
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    
+    // Vulkan 模式：裁剪状态由管线描述符管理，跳过 GL 状态调用
+    auto* device = RenderSystem::getInstance().rhiDevice();
+    bool vkMode = device && device->backend() == rhi::Backend::Vulkan;
+    if (!vkMode) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+    }
+
     uint32_t flags = 0;
     if (getLightOpen()) {
         flags |= DrawOption::LIGHT_OPEN;
@@ -436,7 +444,9 @@ bool Model::draw(const Matrix &mtx) {
         mesh->setBoneMat(m_FinalBoneMatrices);
         mesh->Draw(m_vec_modelMat, mtx, flags, m_nMultiViewport);
     }
-    glDisable(GL_CULL_FACE);
+    if (!vkMode) {
+        glDisable(GL_CULL_FACE);
+    }
     return true;
 }
 

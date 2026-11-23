@@ -8,11 +8,11 @@
 #ifndef PassColor_hpp
 #define PassColor_hpp
 
-#include "pass.h"
+#include "mesh_pass.h"
 
-class PassColor : public RenderPass {
+class PassColor : public MeshPass {
 public:
-    using RenderPass::RenderPass;
+    using MeshPass::MeshPass;
 
 private:
     virtual Shader* getShader(uint32_t flags) override;

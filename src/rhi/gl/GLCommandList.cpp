@@ -1,0 +1,308 @@
+//
+//  GLCommandList.cpp
+//
+#include "GLCommandList.h"
+#include "GLDevice.h"
+#include "log/LogMacros.h"
+#include "shader.h"
+#include "render/DrawUniforms.h"
+#include "math/matrix.h"
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+namespace rhi {
+
+static GLenum mapPrimitive(PrimitiveType p) {
+    switch (p) {
+        case PrimitiveType::Triangles:      return GL_TRIANGLES;
+        case PrimitiveType::Lines:          return GL_LINES;
+        case PrimitiveType::TriangleStrip:  return GL_TRIANGLE_STRIP;
+    }
+    return GL_TRIANGLES;
+}
+
+GLCommandList::GLCommandList(GLDevice* device)
+    : _device(device) {
+}
+
+GLCommandList::~GLCommandList() {
+    for (auto& [key, vao] : _vaoCache) {
+        if (vao) glDeleteVertexArrays(1, &vao);
+    }
+}
+
+void GLCommandList::saveState(GLStateSnapshot& s) {
+    s.depthTest = glIsEnabled(GL_DEPTH_TEST);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &s.depthMask);
+    s.blend     = glIsEnabled(GL_BLEND);
+    s.cullFace  = glIsEnabled(GL_CULL_FACE);
+    glGetIntegerv(GL_CULL_FACE_MODE, &s.cullMode);
+}
+
+void GLCommandList::restoreState(const GLStateSnapshot& s) {
+    if (s.depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    glDepthMask(s.depthMask);
+    if (s.blend)     glEnable(GL_BLEND);     else glDisable(GL_BLEND);
+    if (s.cullFace) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(s.cullMode);
+    } else {
+        glDisable(GL_CULL_FACE);
+    }
+}
+
+void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
+    // 状态快照：保证 Pass 对周边遗留 GL 代码状态中性（见 saveState 注释）
+    saveState(_savedState);
+    _stateSaved = true;
+
+    // 帧缓冲：0 = 屏幕（默认帧缓冲），其它 = 现有 FBO 直通（阴影 Pass）
+    glBindFramebuffer(GL_FRAMEBUFFER, desc.framebufferId);
+
+    if (desc.clearColor) {
+        glClearColor(desc.clearColorValue[0], desc.clearColorValue[1],
+                     desc.clearColorValue[2], desc.clearColorValue[3]);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    if (desc.clearDepth) {
+        glClearDepth(desc.depthClearValue);
+        glClear(GL_DEPTH_BUFFER_BIT);
+    }
+
+    // 视口：desc 未指定时取窗口大小（Retina 下 framebuffer 尺寸 ≠ 窗口尺寸）
+    int w = static_cast<int>(desc.viewportWidth);
+    int h = static_cast<int>(desc.viewportHeight);
+    if (w <= 0 || h <= 0) {
+        glfwGetFramebufferSize(_device->window(), &w, &h);
+    }
+    glViewport(0, 0, w, h);
+}
+
+void GLCommandList::endRenderPass() {
+    if (_stateSaved) {
+        restoreState(_savedState);
+        _stateSaved = false;
+    }
+}
+
+void GLCommandList::bindPipeline(PipelineHandle pipeline) {
+    if (!pipeline.valid()) return;
+    _curPipeline = pipeline;
+
+    const GraphicsPipelineDesc& desc = _device->pipeline(pipeline).desc;
+
+    // 深度状态
+    if (desc.depth.depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    glDepthMask(desc.depth.depthWrite ? GL_TRUE : GL_FALSE);
+    glDepthFunc(desc.depth.depthLessEqual ? GL_LEQUAL : GL_LESS);
+
+    // 裁剪
+    if (desc.cull == CullMode::Back) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+    } else {
+        glDisable(GL_CULL_FACE);
+    }
+
+    // 混合
+    if (desc.blend.blendEnable) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    } else {
+        glDisable(GL_BLEND);
+    }
+}
+
+void GLCommandList::setUniform(const char* name, const UniformValue& value) {
+    _pendingUniforms.emplace_back(name, value);
+}
+
+void GLCommandList::bindVertexBuffer(BufferHandle buffer, uint32_t binding) {
+    if (binding == 0) {
+        _curVertexBuffer = buffer;
+    } else {
+        _curInstanceBuffer = buffer;   // 实例率数据流（obtainVAO 配置实例属性时使用）
+    }
+}
+
+void GLCommandList::bindIndexBuffer(BufferHandle buffer) {
+    _curIndexBuffer = buffer;
+}
+
+void GLCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
+    if (!texture.valid() || slot >= 32) return;
+    // 注意：不能用 nativeHandle（buffer/texture 的 GL id 空间独立，
+    // 旧实现会把纹理句柄误判成缓冲句柄，绑定失败导致采样全黑）
+    const GLTexture& t = _device->texture(texture);
+    const GLenum target = t.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+    glActiveTexture(GL_TEXTURE0 + slot);
+    glBindTexture(target, t.id);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void GLCommandList::setViewport(float x, float y, float w, float h) {
+    glViewport(static_cast<GLint>(x), static_cast<GLint>(y),
+               static_cast<GLsizei>(w), static_cast<GLsizei>(h));
+}
+
+GLuint GLCommandList::obtainVAO() {
+    if (!_curPipeline.valid() || !_curVertexBuffer.valid()) return 0;
+
+    const auto key = std::make_tuple(_curPipeline.id, _curVertexBuffer.id, _curInstanceBuffer.id);
+    auto it = _vaoCache.find(key);
+    if (it != _vaoCache.end()) {
+        return it->second;
+    }
+
+    // 未命中：创建并按管线布局配置
+    const GLPipeline& pipe = _device->pipeline(_curPipeline);
+    const VertexLayoutDesc& layout = pipe.desc.vertexLayout;
+    const GLBuffer& vb = _device->buffer(_curVertexBuffer);
+
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vb.id);
+
+    const GLBuffer* instanceBuf = nullptr;
+    if (_curInstanceBuffer.valid()) {
+        instanceBuf = &_device->buffer(_curInstanceBuffer);
+    }
+    for (const auto& attr : layout.attributes) {
+        glEnableVertexAttribArray(attr.location);
+        GLint size = 1;
+        switch (attr.format) {
+            case VertexFormat::Float1: size = 1; break;
+            case VertexFormat::Float2: size = 2; break;
+            case VertexFormat::Float3: size = 3; break;
+            case VertexFormat::Float4: size = 4; break;
+        }
+        if (attr.instanced) {
+            // 实例化属性从实例流缓冲读取（binding1）
+            if (instanceBuf) {
+                glBindBuffer(GL_ARRAY_BUFFER, instanceBuf->id);
+                glVertexAttribPointer(attr.location, size, GL_FLOAT, GL_FALSE,
+                                      layout.instanceStride,
+                                      reinterpret_cast<const void*>(static_cast<uintptr_t>(attr.offset)));
+                glVertexAttribDivisor(attr.location, 1);
+            }
+        } else {
+            glBindBuffer(GL_ARRAY_BUFFER, vb.id);
+            glVertexAttribPointer(attr.location, size, GL_FLOAT, GL_FALSE,
+                                  layout.stride,
+                                  reinterpret_cast<const void*>(static_cast<uintptr_t>(attr.offset)));
+            glVertexAttribDivisor(attr.location, 0);
+        }
+    }
+    glBindVertexArray(0);
+
+    _vaoCache[key] = vao;
+    return vao;
+}
+
+void GLCommandList::flushUniforms() {
+    if (_pendingUniforms.empty() || !_curPipeline.valid()) {
+        _pendingUniforms.clear();
+        return;
+    }
+    const GLPipeline& pipe = _device->pipeline(_curPipeline);
+    pipe.program->use();   // GL 要求先 use 再设 uniform
+
+    for (auto& [name, u] : _pendingUniforms) {
+        switch (u.type) {
+            case UniformValue::Type::Float:
+                pipe.program->setFloat(name, u.data[0]);
+                break;
+            case UniformValue::Type::Vec3:
+                pipe.program->setFloat3(name, u.data[0], u.data[1], u.data[2]);
+                break;
+            case UniformValue::Type::Vec4:
+                pipe.program->setFloat4(name, u.data[0], u.data[1], u.data[2], u.data[3]);
+                break;
+            case UniformValue::Type::Mat4: {
+                glm::mat4 m = glm::make_mat4(u.data);
+                pipe.program->setMat4(name, Matrix::toMatrix(m));
+                break;
+            }
+            case UniformValue::Type::Int:
+                pipe.program->setInt(name, static_cast<int>(u.data[0]));
+                break;
+        }
+    }
+    _pendingUniforms.clear();
+}
+
+void GLCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, uint32_t size) {
+    (void)block;   // GL 按名直传，block 为哑句柄
+    // 按引擎约定字段名拆解为 glUniform*（布局约定见 src/render/DrawUniforms.h）
+    if (!data || size < sizeof(engine::DrawUniforms) || !_curPipeline.valid()) return;
+    const auto* u = static_cast<const engine::DrawUniforms*>(data);
+    const GLPipeline& pipe = _device->pipeline(_curPipeline);
+    pipe.program->use();
+    pipe.program->setFloat4("uLight.position", u->lightPosition_isOpen.x, u->lightPosition_isOpen.y, u->lightPosition_isOpen.z, u->lightPosition_isOpen.w);
+    pipe.program->setBool("uLight.is_open", u->lightPosition_isOpen.w > 0.5f);
+    pipe.program->setFloat3("uLight.direction", u->lightDirection_cosTheta.x, u->lightDirection_cosTheta.y, u->lightDirection_cosTheta.z);
+    pipe.program->setFloat("uLight.cosTheta", u->lightDirection_cosTheta.w);
+    pipe.program->setFloat3("uLight.ambient", u->lightAmbient.x, u->lightAmbient.y, u->lightAmbient.z);
+    pipe.program->setFloat3("uLight.diffuse", u->lightDiffuse.x, u->lightDiffuse.y, u->lightDiffuse.z);
+    pipe.program->setFloat3("uLight.specular", u->lightSpecular.x, u->lightSpecular.y, u->lightSpecular.z);
+    pipe.program->setFloat3("uCameraPos", u->cameraPos.x, u->cameraPos.y, u->cameraPos.z);
+    pipe.program->setFloat3("uMaterail.ambient", u->materialAmbient.x, u->materialAmbient.y, u->materialAmbient.z);
+    pipe.program->setFloat3("uMaterail.diffuse", u->materialDiffuse.x, u->materialDiffuse.y, u->materialDiffuse.z);
+    pipe.program->setFloat3("uMaterail.specular", u->materialSpecular.x, u->materialSpecular.y, u->materialSpecular.z);
+    pipe.program->setFloat("uMaterail.shininess", u->materialParams.x);
+    pipe.program->setFloat("uMaterail.shininess_strength", u->materialParams.y);
+    pipe.program->setBool("uMaterail.has_normal_tex", u->materialParams.z > 0.5f);
+    pipe.program->setBool("uMaterail.has_specular_tex", u->materialParams.w > 0.5f);
+}
+
+void GLCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
+    if (!_curPipeline.valid() || !_curVertexBuffer.valid()) return;
+    const GLuint vao = obtainVAO();
+    if (!vao) return;
+    const GLPipeline& pipe = _device->pipeline(_curPipeline);
+    pipe.program->use();
+    flushUniforms();
+    glBindVertexArray(vao);
+    glDrawArrays(mapPrimitive(pipe.desc.primitive), firstVertex, vertexCount);
+}
+
+void GLCommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex) {
+    if (!_curPipeline.valid() || !_curVertexBuffer.valid() || !_curIndexBuffer.valid()) return;
+    const GLuint vao = obtainVAO();
+    if (!vao) return;
+    const GLPipeline& pipe = _device->pipeline(_curPipeline);
+    pipe.program->use();
+    flushUniforms();
+    glBindVertexArray(vao);
+    // ELEMENT_ARRAY_BUFFER 是 VAO 状态，缓存命中时也要确保指向当前索引流
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _device->buffer(_curIndexBuffer).id);
+    const GLenum primitive = mapPrimitive(pipe.desc.primitive);
+    const GLenum indexType = GL_UNSIGNED_INT;   // v1 固定 uint32 索引（与现有 MeshData 一致）
+    if (instanceCount > 1) {
+        glDrawElementsInstanced(primitive, indexCount, indexType,
+                                reinterpret_cast<const void*>(static_cast<uintptr_t>(firstIndex) * sizeof(uint32_t)),
+                                instanceCount);
+    } else {
+        glDrawElements(primitive, indexCount, indexType,
+                       reinterpret_cast<const void*>(static_cast<uintptr_t>(firstIndex) * sizeof(uint32_t)));
+    }
+}
+
+void GLCommandList::pushDebugLabel(const char* label) {
+    // 需要 GL_KHR_debug 扩展支持；这里保守处理
+#ifdef GL_KHR_debug
+    glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, label);
+#else
+    (void)label;
+#endif
+}
+
+void GLCommandList::popDebugLabel() {
+#ifdef GL_KHR_debug
+    glPopDebugGroup();
+#endif
+}
+
+} // namespace rhi

@@ -8,15 +8,18 @@
 #ifndef PassTexture_hpp
 #define PassTexture_hpp
 
-#include "pass.h"
+#include "mesh_pass.h"
 
-class PassTexture : public RenderPass {
+class PassTexture : public MeshPass {
 public:
-    using RenderPass::RenderPass;
+    using MeshPass::MeshPass;
     
+protected:
+    bool isTextured() const override { return true; }
+
 private:
-    virtual void setup(const std::vector<Matrix> &matModel, uint32_t flags) override;
-    virtual Shader* getShader(uint32_t flags) override;
+    void setup(const std::vector<Matrix> &matModel, uint32_t flags) override;
+    Shader* getShader(uint32_t flags) override;
 };
 
 #endif /* PassTexture_hpp */

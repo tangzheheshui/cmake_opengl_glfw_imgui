@@ -1,3 +1,4 @@
+#include "log/LogMacros.h"
 #include "FontManager.h"
 #include <iostream>
 #include <stdexcept>
@@ -21,20 +22,20 @@ FontManager::~FontManager() {
 bool FontManager::LoadFont(const std::string& fontPath, unsigned int fontSize) {
     // 加载字体
     if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
-        std::cerr << "ERROR::FREETYPE: Failed to load font: " << fontPath << std::endl;
+        ENGINE_LOG_ERROR("FREETYPE: Failed to load font: %s", fontPath.c_str());
         return false;
     }
 
     // 设置字体大小
     if (FT_Set_Pixel_Sizes(face, 0, fontSize)) {
-        std::cerr << "ERROR::FREETYPE: Failed to set pixel size" << std::endl;
+        ENGINE_LOG_ERROR("FREETYPE: Failed to set pixel size");
         return false;
     }
 
     // 加载常用字符（包括英文和部分符号）
     for (uint32_t c = 32; c < 128; ++c) {
         if (!LoadCharacter(c)) {
-            std::cerr << "ERROR::FREETYPE: Failed to load character: " << c << std::endl;
+            ENGINE_LOG_ERROR("FREETYPE: Failed to load character: %c", c);
             return false;
         }
     }
@@ -50,7 +51,7 @@ const Character* FontManager::GetCharacter(uint32_t unicode) {
 
     // 如果未找到该字符，尝试加载它
     if (!LoadCharacter(unicode)) {
-        std::cerr << "ERROR::FREETYPE: Failed to load character: " << unicode << std::endl;
+        ENGINE_LOG_ERROR("FREETYPE: Failed to load character: %u", unicode);
         return nullptr;
     }
 
@@ -65,7 +66,7 @@ bool FontManager::LoadCharacter(uint32_t unicode) {
 
     // 加载字符的位图
     if (FT_Load_Char(face, unicode, FT_LOAD_RENDER)) {
-        std::cerr << "ERROR::FREETYPE: Failed to load Glyph for Unicode: " << unicode << std::endl;
+        ENGINE_LOG_ERROR("FREETYPE: Failed to load Glyph for Unicode: %u", unicode);
         return false;
     }
 

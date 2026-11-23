@@ -5,6 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/1.
 //
 
+#include "log/LogMacros.h"
 #include "shader.h"
 
 #include <glad/glad.h>
@@ -45,7 +46,7 @@ Shader::Shader(const std::string &vertPath, const std::string &fragPath, const s
     glGetShaderiv(iVertexShader, GL_COMPILE_STATUS, &success);
     if (!success) {
         glGetShaderInfoLog(iVertexShader, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;    
+        ENGINE_LOG_ERROR("SHADER vertex compile failed: %s", infoLog);
         assert(0);
     }
     
@@ -56,7 +57,7 @@ Shader::Shader(const std::string &vertPath, const std::string &fragPath, const s
     glGetShaderiv(iFragment, GL_COMPILE_STATUS, &success);
     if (!success) {
         glGetShaderInfoLog(iFragment, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
+        ENGINE_LOG_ERROR("SHADER vertex compile failed: %s", infoLog);
         assert(0);
     }
     
@@ -79,7 +80,7 @@ Shader::Shader(const std::string &vertPath, const std::string &fragPath, const s
             glGetShaderiv(iGepom, GL_COMPILE_STATUS, &success);
             if (!success) {
                 glGetShaderInfoLog(iGepom, 512, nullptr, infoLog);
-                std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
+                ENGINE_LOG_ERROR("SHADER vertex compile failed: %s", infoLog);
                 assert(0);
             }
             glAttachShader(_ID, iGepom);
@@ -93,7 +94,7 @@ Shader::Shader(const std::string &vertPath, const std::string &fragPath, const s
     glGetProgramiv(_ID, GL_LINK_STATUS, &success);
     if (!success) {
         glGetProgramInfoLog(_ID, 512, nullptr, infoLog);
-        std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
+        ENGINE_LOG_ERROR("SHADER program link failed: %s", infoLog);
         assert(0);
     }
     

@@ -11,6 +11,9 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include "../BaseDraw.h"
+#include "rhi/RhiTypes.h"
+
+namespace rhi { class IRHIDevice; }
 
 class Line : public BaseDraw {
 public:
@@ -21,11 +24,19 @@ public:
     virtual bool draw(const Matrix &mtx) override;
 private:
     void calculate();
+    // ---- M2: RHI 迁移路径（与原 GL 路径并存，调试面板开关切换）----
+    bool drawRHI(const Matrix &mtx);
+    void ensureRHIResources(rhi::IRHIDevice* device);
 private:
     std::vector<glm::vec3> m_points;
     std::vector<unsigned int> m_indices;
     glm::vec3 m_color;
     float m_fWidth = 1;
+
+    rhi::PipelineHandle m_rhiPipeline;
+    rhi::BufferHandle m_rhiVB;
+    rhi::BufferHandle m_rhiIB;
+    bool m_rhiDirty = true;   // 数据变化未上传标记
 };
 
 #endif /* Line_hpp */

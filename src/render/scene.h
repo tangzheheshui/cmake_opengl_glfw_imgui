@@ -26,7 +26,6 @@ class Scene {
 public:
     static Matrix GetLightVPMatrix();
     Scene();
-    void setRootPath(const std::string &path) { m_root_path = path; }
     void init();
     std::shared_ptr<Camera> GetActiveCamera() { return mCameraActive; }
     std::shared_ptr<CCameraController> GetActiveCameraController() { return mCameraController; }
@@ -36,9 +35,6 @@ public:
 
     std::vector<std::shared_ptr<BaseDraw>> GetObjs() { return m_vec_drawobj; }
     void AddObj(std::shared_ptr<BaseDraw> obj);
-private:
-    std::shared_ptr<Line> getTestLine();
-    std::vector<std::shared_ptr<ImageRectangle>> createGlass();
 private:
     // camera
     std::shared_ptr<Camera> mCameraActive;
@@ -50,8 +46,6 @@ private:
     std::vector<std::shared_ptr<BaseDraw>> m_vec_drawobj_blend;
     // 光源矩阵
     inline static Matrix _lightVPMatrix;
-    // 路径
-    std::string m_root_path;
 };
 
 #endif /* scene_hpp */

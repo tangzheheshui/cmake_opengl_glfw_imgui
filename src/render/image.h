@@ -36,6 +36,8 @@ public:
     void setRootPath(const std::string &path) { m_root_path = path; }
     void loadTexture(const std::string &filename);
     unsigned int getTexture(const std::string &filename);
+    // 取已预载纹理的原始数据（不擦除，供 RHI 后端创建自己的纹理对象）
+    ImageBuffer getTextureData(const std::string &filename, int &width, int &height, int &channels);
     unsigned int getCubeTexture(std::array<std::string, 6> faces);
 private:
     TextureMng();

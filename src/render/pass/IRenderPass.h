@@ -1,4 +1,4 @@
-// RenderPass
+// IRenderPass
 
 #pragma once 
 

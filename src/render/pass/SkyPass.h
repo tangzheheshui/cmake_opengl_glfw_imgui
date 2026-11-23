@@ -1,7 +1,7 @@
-// RenderPass
+// IRenderPass
 #pragma once 
 
-#include "RenderPass.h"
+#include "IRenderPass.h"
 
 class CSkyPass : public IRenderPass {
 public:

@@ -6,7 +6,7 @@
 //
     
 #include "CameraController.h"
-#include "camera_old.h"
+#include "camera.h"
 #include <iostream>
 
 void CCameraController::onMouseScale(double scale) {

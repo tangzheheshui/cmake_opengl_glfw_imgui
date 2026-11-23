@@ -5,6 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/1.
 //
 
+#include "log/LogMacros.h"
 #include "image.h"
 
 #include <iostream>
@@ -22,7 +23,8 @@
 const GLuint SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
 
 TextureMng::TextureMng() {
-    createShadowTexture();
+    // 注意：不在构造函数里创建 GL 资源——引擎需支持无 GL 上下文的后端（Vulkan），
+    // 阴影深度纹理改为惰性创建（getTexture 首次查询时）
 }
 
 void TextureMng::loadTexture(const std::string &filename) {
@@ -48,11 +50,28 @@ void TextureMng::loadTexture(const std::string &filename) {
     {
         std::lock_guard<std::mutex> gurad(m_mutex);
         m_map_tex_data[filename] = tex;
-        printf("add filename = %s\n", filename.c_str());
+        ENGINE_LOG_INFO("add filename = %s", filename.c_str());
     }
 }
 
+ImageBuffer TextureMng::getTextureData(const std::string &filename, int &width, int &height, int &channels) {
+    std::lock_guard guard(m_mutex);
+    auto iter = m_map_tex_data.find(filename);
+    if (iter == m_map_tex_data.end()) {
+        width = height = channels = 0;
+        return nullptr;
+    }
+    width = iter->second.width;
+    height = iter->second.height;
+    channels = iter->second.format;
+    return iter->second.data;
+}
+
 unsigned int TextureMng::getTexture(const std::string &filename) {
+    // 阴影深度纹理惰性创建（首次使用时才触碰 GL）
+    if (filename == STR_DEPTH_TEXTURE && m_map_textures.find(STR_DEPTH_TEXTURE) == m_map_textures.end()) {
+        createShadowTexture();
+    }
     std::lock_guard guard(m_mutex);
     auto iter = m_map_textures.find(filename);
     if (iter != m_map_textures.end()) {
@@ -63,8 +82,9 @@ unsigned int TextureMng::getTexture(const std::string &filename) {
     if (iter1 != m_map_tex_data.end()) {
         auto tex = genTexture(iter1->second);
         
-        // 清掉临时内存
-        m_map_tex_data.erase(iter1);
+        // M4.2b：不再擦除原始数据——RHI 路径需要用它创建后端纹理对象
+        //（原实现用完即删，导致 GL 路径先取数后 RHI 路径拿到空数据）。
+        // 内存代价：预载纹理数据常驻（约数十 MB）；淘汰策略 M6 再做。
         return tex;
     }
     return -1;
@@ -146,7 +166,7 @@ unsigned int TextureMng::getCubeTexture(std::array<std::string, 6> faces) {
         else
         {
             assert(0);
-            std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
+            ENGINE_LOG_ERROR("Cubemap texture failed to load at path: %s", faces[i].c_str());
             stbi_image_free(data);
             glDeleteTextures(1, &textureID);
             return -1;
