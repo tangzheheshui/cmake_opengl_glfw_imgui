@@ -14,41 +14,58 @@ VkCommandList::VkCommandList(VulkanDevice* device)
 
 void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     // M3：仅支持默认帧缓冲（swapchain）；desc.framebufferId 的 FBO 直通是 GL 专属能力，
-    // Vulkan 侧等价物（TextureHandle framebuffer）在 M4 引入
+    // Vulkan 侧等价物（RenderTargetHandle）在 B4 引入
     if (desc.framebufferId != 0) {
         static bool warned = false;
         if (!warned) {
-            ENGINE_LOG_WARN_ONCE("[VK] non-default framebuffer not supported yet (M4)");
+            ENGINE_LOG_WARN_ONCE("[VK] non-default framebuffer not supported yet (B4)");
             warned = true;
         }
         return;
     }
 
-    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    bi.renderPass        = _device->renderPass();
-    bi.framebuffer       = _device->currentFramebuffer();
-    bi.renderArea.offset = {0, 0};
-    bi.renderArea.extent = _device->swapchainExtent();
+    // B1：Dynamic Rendering —— vkCmdBeginRendering 取代 VkRenderPass/framebuffer。
+    // loadOp 按 desc 决定（CLEAR/LOAD），store 恒 STORE（颜色）/DONT_CARE（深度）。
+    // 附件布局转换由 device 布局跟踪屏障完成（recordBeginPassBarriers）。
+    const VkExtent2D extent = _device->swapchainExtent();
 
-    VkClearValue clears[2];
-    clears[0].color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
-                         desc.clearColorValue[2], desc.clearColorValue[3] }};
+    VkRenderingAttachmentInfo colorAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    colorAtt.imageView   = _device->currentColorView();
+    colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAtt.loadOp      = desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAtt.clearValue.color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
+                                   desc.clearColorValue[2], desc.clearColorValue[3] }};
+
+    VkRenderingAttachmentInfo depthAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depthAtt.imageView   = _device->depthImageView();
+    depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAtt.loadOp      = desc.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     // B3b Reversed-Z：VK 后端深度语义反转（1=近平面 / 0=远平面），清屏值固定 0（最远）。
     // GL 路径的 desc.depthClearValue=1 约定在此后端内转换，调用方无需感知。
-    clears[1].depthStencil = {0.0f, 0};
-    bi.clearValueCount = 2;   // 颜色 + 深度（M4 深度附件）
-    bi.pClearValues    = clears;
+    depthAtt.clearValue.depthStencil = {0.0f, 0};
 
-    vkCmdBeginRenderPass(_device->commandBuffer(), &bi, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea.offset = {0, 0};
+    ri.renderArea.extent = extent;
+    ri.layerCount        = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments    = &colorAtt;
+    ri.pDepthAttachment     = &depthAtt;
+
+    _device->recordBeginPassBarriers(_device->commandBuffer(), desc.clearColor, desc.clearDepth);
+    _device->beginRenderingFn()(_device->commandBuffer(), &ri);
     _inRenderPass = true;
 
     // 动态 viewport/scissor（desc 未指定时用 swapchain 尺寸）
-    uint32_t w = desc.viewportWidth  ? desc.viewportWidth  : bi.renderArea.extent.width;
-    uint32_t h = desc.viewportHeight ? desc.viewportHeight : bi.renderArea.extent.height;
+    uint32_t w = desc.viewportWidth  ? desc.viewportWidth  : extent.width;
+    uint32_t h = desc.viewportHeight ? desc.viewportHeight : extent.height;
     // B3a：负高度 viewport——网格按 GL 约定（NDC y 向上）提交，Vulkan NDC y 向下，
     // 负高度视口把投屏上下翻转，3D 内容不再相对 UI 倒置（origin.y=高、height=-高）。
     // 负高度需要 maintenance1（Vulkan 1.1 起为核心）；镜像同时翻转屏幕绕序，
     // 管线侧配套 frontFace=CLOCKWISE（见 VulkanDevice::createPipeline）。
+    // ImGui 自设正高度 viewport + 自带投影（动态状态逐命令生效），互不影响。
     setViewport(0, static_cast<float>(h), static_cast<float>(w), -static_cast<float>(h));
     VkRect2D scissor{{0, 0}, {w, h}};
     vkCmdSetScissor(_device->commandBuffer(), 0, 1, &scissor);
@@ -56,7 +73,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
 
 void VkCommandList::endRenderPass() {
     if (!_inRenderPass) return;
-    vkCmdEndRenderPass(_device->commandBuffer());
+    _device->endRenderingFn()(_device->commandBuffer());
     _inRenderPass = false;
 }
 

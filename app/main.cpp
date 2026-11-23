@@ -223,6 +223,10 @@ int main()
             return -1;
         }
         ImGui_ImplGlfw_InitForVulkan(window, true);
+        // B1：引擎走 dynamic rendering（无 renderpass），ImGui 用同模式接入。
+        // pColorAttachmentFormats 指向的变量必须比 Init 存活 → static
+        static VkFormat s_imguiColorFormat = VK_FORMAT_UNDEFINED;
+        s_imguiColorFormat = (VkFormat)h.colorFormat;
         ImGui_ImplVulkan_InitInfo init{};
         init.Instance = (VkInstance)h.instance;
         init.PhysicalDevice = (VkPhysicalDevice)h.physicalDevice;
@@ -230,9 +234,14 @@ int main()
         init.QueueFamily = h.queueFamily;
         init.Queue = (VkQueue)h.queue;
         init.DescriptorPool = g_imguiDescriptorPool;
-        init.RenderPass = (VkRenderPass)h.renderPass;
         init.MinImageCount = h.minImageCount;
         init.ImageCount = h.imageCount;
+        init.UseDynamicRendering = true;
+        init.PipelineRenderingCreateInfo = {};
+        init.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        init.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+        init.PipelineRenderingCreateInfo.pColorAttachmentFormats = &s_imguiColorFormat;
+        init.PipelineRenderingCreateInfo.depthAttachmentFormat = (VkFormat)h.depthFormat;
         init.CheckVkResultFn = [](VkResult err) {
             if (err != VK_SUCCESS) std::printf("[IMGUI-VK] CheckVkResult %d\n", (int)err);
         };
@@ -252,6 +261,10 @@ int main()
     // 冒烟/回归：RHI_EXIT_AFTER=<帧数> 后正常关闭窗口（走完整析构，验证缓存落盘等）
     long exitAfterFrames = -1;
     if (const char* e = std::getenv("RHI_EXIT_AFTER")) exitAfterFrames = std::atol(e);
+    // B1 验证：RHI_RESIZE_AT=<帧数> 在指定帧改变窗口尺寸（验证 swapchain 重建
+    // 不再重建 PSO；dynamic rendering 后管线与 framebuffer 解耦）
+    long resizeAtFrame = -1;
+    if (const char* e = std::getenv("RHI_RESIZE_AT")) resizeAtFrame = std::atol(e);
     long frameIndex = 0;
 
     while (!glfwWindowShouldClose(window))
@@ -260,6 +273,12 @@ int main()
         processInput(window);
         if (exitAfterFrames >= 0 && ++frameIndex >= exitAfterFrames) {
             glfwSetWindowShouldClose(window, true);
+        }
+
+        if (resizeAtFrame > 0 && frameIndex == resizeAtFrame) {
+            std::printf("[UI] resize test: window -> 1100x700 at frame %ld\n", frameIndex);
+            std::fflush(stdout);
+            glfwSetWindowSize(window, 1100, 700);
         }
 
         RenderSystem::getInstance().update();

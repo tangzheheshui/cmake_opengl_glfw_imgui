@@ -82,10 +82,14 @@ public:
         uint64_t physicalDevice = 0;   // VkPhysicalDevice
         uint64_t device         = 0;   // VkDevice
         uint64_t queue          = 0;   // VkQueue
-        uint64_t renderPass     = 0;   // VkRenderPass（默认帧缓冲 pass）
+        uint64_t renderPass     = 0;   // B1 后恒为 0（dynamic rendering；ImGui 用 UseDynamicRendering）
         uint32_t queueFamily    = 0;
         uint32_t minImageCount  = 2;
         uint32_t imageCount     = 2;
+        // B1 追加（契约"只加不改"）：默认渲染目标附件格式（VkFormat 原始值），
+        // 供宿主侧构建 PipelineRenderingCreateInfo / 兼容附件
+        uint32_t colorFormat    = 0;   // swapchain 图像格式（VkFormat）
+        uint32_t depthFormat    = 0;   // 深度附件格式（VkFormat）
     };
     virtual bool nativeHandles(NativeHandles& out) const { (void)out; return false; }
 
