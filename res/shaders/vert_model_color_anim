@@ -10,17 +10,19 @@ const int MAX_BONE_INFLUENCE = 4;
 uniform mat4 uMatrixM;
 uniform mat4 uViewProj;
 uniform mat4 uFinalBonesMatrices[MAX_BONES];
+uniform vec4 uClipPlane;   // D7：xyz 法线，w 距离；与 vert_model_color 保持接口一致
 
 out vec3 pFragPos;
 out vec3 pNormal;
+out float vClipDistance;
 
 void main()
 {
     vec4 totalPosition = vec4(1.0f);
-    
+
     for(int i = 0 ; i < MAX_BONE_INFLUENCE ; i++) {
         int boneIndex = aBoneIds[i];
-        if(boneIndex == -1) 
+        if(boneIndex == -1)
             continue;
         if(boneIndex >= MAX_BONES) {
             //totalPosition = vec4(aPos,1.0f);
@@ -31,5 +33,6 @@ void main()
    }
     pFragPos = (uMatrixM * totalPosition).xyz;
     pNormal = (uMatrixM * vec4(aNormal, 1.0)).xyz;
+    vClipDistance = dot(vec4(pFragPos, 1.0), uClipPlane);
     gl_Position = uViewProj * uMatrixM * totalPosition;
 }
