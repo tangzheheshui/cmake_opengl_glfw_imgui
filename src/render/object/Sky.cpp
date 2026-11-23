@@ -183,6 +183,10 @@ void Sky::ensureRHIResources(rhi::IRHIDevice* device) {
     td.usage = rhi::TEX_SAMPLED;
     td.cubemap = true;
     td.initialData = packed.data();
+    // B3：天空盒远景明显 — 开 mipmap（GPU blit 生成链）+ 各向异性过滤，
+    // 消除远处地平线闪烁；cubemap 地址模式由后端强制 ClampToEdge
+    td.generateMips = true;
+    td.sampler.maxAnisotropy = 8.0f;
     m_rhiCubeTex = device->createTexture(td);
     m_rhiBuilt = true;
 }

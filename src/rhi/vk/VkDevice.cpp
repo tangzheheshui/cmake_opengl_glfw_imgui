@@ -58,6 +58,40 @@ static uint32_t findMemoryType(VkPhysicalDevice pd, uint32_t typeBits, VkMemoryP
     return UINT32_MAX;
 }
 
+// ---- B3：RHI Format → VkFormat（契约枚举冻结，见 RhiTypes.h）----
+static VkFormat vkFormatOf(rhi::Format f) {
+    switch (f) {
+        case rhi::Format::RGBA8_UNorm: return VK_FORMAT_R8G8B8A8_UNORM;
+        case rhi::Format::RGBA8_SRGB:  return VK_FORMAT_R8G8B8A8_SRGB;
+        case rhi::Format::BGRA8_UNorm: return VK_FORMAT_B8G8R8A8_UNORM;
+        case rhi::Format::BGRA8_SRGB:  return VK_FORMAT_B8G8R8A8_SRGB;
+        case rhi::Format::R8_UNorm:    return VK_FORMAT_R8_UNORM;
+        case rhi::Format::R16F:        return VK_FORMAT_R16_SFLOAT;
+        case rhi::Format::RGBA16F:     return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case rhi::Format::RGBA32F:     return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case rhi::Format::Depth32F:    return VK_FORMAT_D32_SFLOAT;
+        case rhi::Format::D24S8:       return VK_FORMAT_D24_UNORM_S8_UINT;
+        case rhi::Format::R32_UInt:    return VK_FORMAT_R32_UINT;
+    }
+    return VK_FORMAT_R8G8B8A8_UNORM;
+}
+
+// 完整 mip 链级数（TextureDesc::mipLevels == 0 的语义）
+static uint32_t fullMipChainLevels(uint32_t w, uint32_t h) {
+    uint32_t m = std::max(w, h);
+    uint32_t levels = 1;
+    while (m > 1) { m >>= 1; ++levels; }
+    return levels;
+}
+
+// blit 能力（mipmap 生成依赖；可选特性，运行时探测，不支持则回退单级）
+static bool formatBlitSupported(VkPhysicalDevice pd, VkFormat f) {
+    VkFormatProperties p;
+    vkGetPhysicalDeviceFormatProperties(pd, f, &p);
+    return (p.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) != 0
+        && (p.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) != 0;
+}
+
 // ============================================================
 // 创建 / 销毁
 // ============================================================
@@ -333,11 +367,17 @@ void VulkanDevice::createLogicalDevice() {
     vk12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     vk12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 
+    // B3：启用 samplerAnisotropy（各向异性过滤，纹理采样描述符 SamplerDesc 使用；
+    // 物理设备不支持时保持关闭，createSampler 会跳过 anisotropyEnable）
+    VkPhysicalDeviceFeatures enabledFeatures{};
+    enabledFeatures.samplerAnisotropy = _caps.features.samplerAnisotropy;
+
     VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     ci.queueCreateInfoCount    = 1;
     ci.pQueueCreateInfos       = &qci;
     ci.enabledExtensionCount   = static_cast<uint32_t>(devExts.size());
     ci.ppEnabledExtensionNames = devExts.data();
+    ci.pEnabledFeatures        = &enabledFeatures;
     ci.pNext                   = &vk12;
     VK_CHECK(vkCreateDevice(_physicalDevice, &ci, nullptr, &_device));
     vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
@@ -988,19 +1028,38 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     VkTextureRes t;
     t.width = desc.width; t.height = desc.height;
     const uint32_t layerCount = desc.cubemap ? 6u : 1u;
+    const VkFormat vkFmt = vkFormatOf(desc.format);
+    const uint32_t bpp = formatBytesPerPixel(desc.format);
+    if (bpp == 0) {
+        ENGINE_LOG_ERROR("[VK] unsupported format bpp (%d)", static_cast<int>(desc.format));
+        return {};
+    }
+    // mip 级数：显式指定 > 0 用之；否则只有 generateMips 时分配完整链
+    uint32_t mipLevels = desc.mipLevels > 0 ? desc.mipLevels : 1;
+    bool generateMips = desc.generateMips && desc.initialData;
+    if (desc.mipLevels == 0 && desc.generateMips) {
+        mipLevels = fullMipChainLevels(desc.width, desc.height);
+    }
+    if (generateMips && mipLevels > 1 && !formatBlitSupported(_physicalDevice, vkFmt)) {
+        ENGINE_LOG_WARN_ONCE("[VK] blit unsupported for format %d, mipmap generation disabled",
+                             static_cast<int>(vkFmt));
+        generateMips = false;
+        mipLevels = desc.mipLevels > 0 ? desc.mipLevels : 1;
+    }
 
     // ---- image（DEVICE_LOCAL + OPTIMAL）----
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType     = VK_IMAGE_TYPE_2D;
-    ici.format        = VK_FORMAT_R8G8B8A8_UNORM;
+    ici.format        = vkFmt;
     ici.extent        = {desc.width, desc.height, 1};
-    ici.mipLevels     = 1;
+    ici.mipLevels     = mipLevels;
     ici.arrayLayers   = layerCount;
     ici.samples       = VK_SAMPLE_COUNT_1_BIT;
     if (desc.cubemap) ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
     ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT
-                      | (desc.initialData ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0);
+                      | (desc.initialData ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0)
+                      | (generateMips ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
     ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VK_CHECK(vkCreateImage(_device, &ici, nullptr, &t.image));
@@ -1014,10 +1073,10 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     VK_CHECK(vkAllocateMemory(_device, &mai, nullptr, &t.memory));
     VK_CHECK(vkBindImageMemory(_device, t.image, t.memory, 0));
 
-    // ---- 数据上传：staging → 拷贝 + 布局转换 ----
+    // ---- 数据上传：staging → 拷贝 + （可选）mipmap blit + 布局转换 ----
     // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
     // 开头执行；数据由 lambda 持有（调用方的 initialData 生命周期未知）
-    const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height * 4 * layerCount;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height * bpp * layerCount;
     if (desc.initialData && bytes > 0) {
         auto dataCopy = std::make_shared<std::vector<unsigned char>>(
             static_cast<const unsigned char*>(desc.initialData),
@@ -1044,7 +1103,8 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(bytes));
         vkUnmapMemory(_device, stagingMem);
 
-        deferGpuWork([this, t, staging, stagingMem, w = desc.width, h = desc.height, layerCount](VkCommandBuffer cb) {
+        deferGpuWork([this, t, staging, stagingMem, w = desc.width, h = desc.height,
+                      bpp, layerCount, mipLevels, generateMips](VkCommandBuffer cb) {
 
             VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             bar.srcAccessMask = 0;
@@ -1063,18 +1123,66 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
                 regions[face] = {};
                 regions[face].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, face, 1};
                 regions[face].imageExtent = {w, h, 1};
-                regions[face].bufferOffset = static_cast<VkDeviceSize>(face) * w * h * 4;
+                regions[face].bufferOffset = static_cast<VkDeviceSize>(face) * w * h * (bpp);
             }
             vkCmdCopyBufferToImage(cb, staging, t.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    layerCount, regions.data());
-            bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            bar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                                 0, nullptr, 0, nullptr, 1, &bar);
+
+            if (generateMips && mipLevels > 1) {
+                // B3：逐级 blit 生成 mip 链（每层独立；第 i-1 级 DST→SRC 后作源，
+                // 双线性缩半写入第 i 级）。不支持的格式已在创建期回退单级。
+                for (uint32_t layer = 0; layer < layerCount; ++layer) {
+                    for (uint32_t i = 1; i < mipLevels; ++i) {
+                        VkImageMemoryBarrier srcBar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                        srcBar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                        srcBar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                        srcBar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                        srcBar.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        srcBar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        srcBar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        srcBar.image = t.image;
+                        srcBar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 1, layer, 1};
+                        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                             0, nullptr, 0, nullptr, 1, &srcBar);
+
+                        VkImageBlit blit{};
+                        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, layer, 1};
+                        blit.srcOffsets[1] = { static_cast<int32_t>(w >> (i - 1)),
+                                               static_cast<int32_t>(h >> (i - 1)), 1 };
+                        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, layer, 1};
+                        blit.dstOffsets[1]  = { static_cast<int32_t>(std::max(1u, w >> i)),
+                                                static_cast<int32_t>(std::max(1u, h >> i)), 1 };
+                        vkCmdBlitImage(cb, t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       1, &blit, VK_FILTER_LINEAR);
+                    }
+                }
+                // 全链 → SHADER_READ：末级在 DST，其余在 SRC，分两段转换
+                bar.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                bar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels - 1, 0, layerCount};
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                                     0, nullptr, 0, nullptr, 1, &bar);
+                bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                bar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mipLevels - 1, 1, 0, layerCount};
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                                     0, nullptr, 0, nullptr, 1, &bar);
+            } else {
+                bar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                bar.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                                     0, nullptr, 0, nullptr, 1, &bar);
+            }
         }, [this, staging, stagingMem]() {
             vkDestroyBuffer(_device, staging, nullptr);
             vkFreeMemory(_device, stagingMem, nullptr);
@@ -1084,19 +1192,45 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vci.image    = t.image;
     vci.viewType = desc.cubemap ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
-    vci.format   = VK_FORMAT_R8G8B8A8_UNORM;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layerCount};
+    vci.format   = vkFmt;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, layerCount};
     VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &t.view));
 
+    // B3：采样参数由 TextureDesc::sampler 驱动（契约 SamplerDesc）
+    const SamplerDesc& sd = desc.sampler;
+    auto filterOf = [](FilterMode m) {
+        return m == FilterMode::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+    };
+    auto wrapOf = [](WrapMode m) {
+        switch (m) {
+            case WrapMode::Repeat:      return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            case WrapMode::ClampToEdge: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case WrapMode::Mirror:      return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+        }
+        return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    };
     VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    sci.magFilter        = VK_FILTER_LINEAR;
-    sci.minFilter        = VK_FILTER_LINEAR;
-    sci.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sci.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sci.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.magFilter        = filterOf(sd.magFilter);
+    sci.minFilter        = filterOf(sd.minFilter);
+    sci.mipmapMode       = sd.mipFilter == FilterMode::Nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                                               : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    // cubemap：Vulkan 要求地址模式为 CLAMP_TO_EDGE/BORDER/MIRRORED_CLAMP
+    // （REPEAT 采样 cube 属违规），与 GL 天空盒路径的 CLAMP_TO_EDGE 对齐
+    sci.addressModeU     = desc.cubemap ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : wrapOf(sd.wrapU);
+    sci.addressModeV     = desc.cubemap ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : wrapOf(sd.wrapV);
+    sci.addressModeW     = desc.cubemap ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : wrapOf(sd.wrapW);
+    sci.mipLodBias       = 0.0f;
     sci.anisotropyEnable = VK_FALSE;
-    sci.maxLod           = 1.0f;
-    sci.compareOp        = VK_COMPARE_OP_NEVER;
+    sci.maxAnisotropy    = 1.0f;
+    if (sd.maxAnisotropy > 1.0f && _caps.features.samplerAnisotropy == VK_TRUE) {
+        sci.anisotropyEnable = VK_TRUE;
+        sci.maxAnisotropy    = std::min(sd.maxAnisotropy, _caps.props.limits.maxSamplerAnisotropy);
+    }
+    sci.compareEnable    = sd.compareEnable ? VK_TRUE : VK_FALSE;
+    // 深度比较采样（阴影 PCF 预留）：Reversed-Z 时代取 GREATER
+    sci.compareOp        = VK_COMPARE_OP_GREATER;
+    sci.minLod           = sd.minLod;
+    sci.maxLod           = sd.maxLod;
     sci.borderColor      = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
     VK_CHECK(vkCreateSampler(_device, &sci, nullptr, &t.sampler));
 
