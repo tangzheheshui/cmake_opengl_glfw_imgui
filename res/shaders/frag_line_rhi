@@ -1,0 +1,10 @@
+#version 330 core
+// D1 宽线（RHI 展开路径）片元着色器：与 frag_color 语义一致（线色直出）
+out vec4 FragColor;
+
+uniform vec3 uColor;
+
+void main()
+{
+    FragColor = vec4(uColor, 1.0);
+}
