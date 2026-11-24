@@ -5,6 +5,7 @@
 //  Created by liuhaifeng02 on 2024/1/25.
 //
 //  M2: 增加 RHI 绘制路径（与原 GL 路径并存，调试面板 "Line 走 RHI" 开关切换）
+#include "log/LogMacros.h"
 //  对比原 GL 路径的两个差异：
 //  1. 数据只在变化时上传（原路径 calculate() 每帧 glBufferData 重传）
 //  2. 渲染状态由 Pipeline 描述符声明（LINES / 深度测试开 / 无裁剪）
@@ -118,7 +119,7 @@ void Line::rebuildRhiExpandData() {
                 ExpandVertex v;
                 v.posA = A;
                 v.posB = B;
-                v.meta = glm::vec4(static_cast<float>(end), sides[s], m_fWidth, 0.0f);
+                v.meta = glm::vec4(static_cast<float>(end), sides[s], m_fWidth, 1.0f);   // D1 收尾：圆头端点
                 v.screen = screenScale;
                 m_rhiVerts.push_back(v);
             }
@@ -213,7 +214,7 @@ void Line::ensureRHIResources(rhi::IRHIDevice* device) {
         desc.primitive = rhi::PrimitiveType::Triangles;
         desc.cull      = rhi::CullMode::None;
         desc.depth     = { true, true };
-        desc.blend     = { false };
+        desc.blend     = { true };   // D1 收尾：边缘 AA 的 alpha 渐变需要混合
         m_rhiPipeline = device->createPipeline(desc);
     }
 }

@@ -586,8 +586,11 @@ void VulkanDevice::createLogicalDevice() {
 
     // B3：启用 samplerAnisotropy（各向异性过滤，纹理采样描述符 SamplerDesc 使用；
     // 物理设备不支持时保持关闭，createSampler 会跳过 anisotropyEnable）
+    // D5：fillModeNonSolid（线框显示模式的 VK_POLYGON_MODE_LINE；MoltenVK 经
+    // MTLTriangleFillModeLines 支持）
     VkPhysicalDeviceFeatures enabledFeatures{};
     enabledFeatures.samplerAnisotropy = _caps.features.samplerAnisotropy;
+    enabledFeatures.fillModeNonSolid  = _caps.features.fillModeNonSolid;
 
     VkDeviceCreateInfo ci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     ci.queueCreateInfoCount    = 1;
@@ -1905,12 +1908,23 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     vp.scissorCount  = 1;
 
     VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    // D5：线框显示模式（GraphicsPipelineDesc::raster.polygonMode，B0 只加不改）
+    rs.polygonMode = (desc.raster.polygonMode == PolygonMode::Line)
+                         ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
+    if (desc.raster.polygonMode == PolygonMode::Line && !_caps.features.fillModeNonSolid) {
+        ENGINE_LOG_WARN_ONCE("[VK] fillModeNonSolid unsupported; wireframe falls back to fill");
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+    }
     rs.cullMode    = (desc.cull == CullMode::Back) ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     // B3a：负高度 viewport 把 NDC y 镜像到屏幕，绕序相对 GL 约定翻转；
     // GL 网格（CCW 正面）在此后端声明 CLOCKWISE 才能正确剔除背面
     rs.frontFace   = VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth   = 1.0f;
+    // D5：边线深度偏移（着色+边线模式防止线框与表面 z-fighting）
+    rs.depthBiasEnable         = (desc.raster.depthBiasConstantFactor != 0.0f
+                                  || desc.raster.depthBiasSlopeFactor != 0.0f) ? VK_TRUE : VK_FALSE;
+    rs.depthBiasConstantFactor = desc.raster.depthBiasConstantFactor;
+    rs.depthBiasSlopeFactor    = desc.raster.depthBiasSlopeFactor;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;

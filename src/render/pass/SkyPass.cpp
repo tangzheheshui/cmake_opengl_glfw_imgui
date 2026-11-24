@@ -27,7 +27,7 @@ void CSkyPass::draw(Scene* pScene) {
     const auto camPos = pScene->GetActiveCamera()->getPossition();
     auto mpMatrix = pScene->GetActiveCamera()->GetVPMatrix();
     for (auto& obj : pScene->getSortedDrawList(camPos)) {
-        if (obj->getAlpha() >= 0.999f && !obj->isOverlayDraw()) continue;
+        if (!Scene::isTransparentDraw(obj) && !obj->isOverlayDraw()) continue;
         obj->draw(mpMatrix);
     }
 }

@@ -42,6 +42,13 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     line_x->setColor({1, 0, 0});
     line_y->setColor({0, 1, 0});
     line_z->setColor({0, 0, 1});
+    // D1 收尾验证开关：RHI_LINE_WIDTH=<px> 加宽坐标轴线（观察 AA 边缘与圆头）
+    if (const char* w = std::getenv("RHI_LINE_WIDTH")) {
+        const float lw = static_cast<float>(std::atof(w));
+        line_x->setWidth(lw);
+        line_y->setWidth(lw);
+        line_z->setWidth(lw);
+    }
 
     const auto start = std::chrono::high_resolution_clock::now();
     // 地面（GL 专属：calculate 混合 CPU/GPU 操作，VK 模式跳过）
@@ -126,6 +133,19 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     {
         if (std::getenv("RHI_TEXT_RHI")) {   // GL 调试开关：强制文字走 RHI 路径
             RenderSystem::getInstance().settings().textUseRHI = true;
+        }
+        if (const char* m = std::getenv("RHI_DISPLAY_MODE")) {   // D5 验证开关：0/1/2
+            RenderSystem::getInstance().settings().displayMode = std::atoi(m);
+        }
+        if (std::getenv("RHI_XRAY")) {   // X-ray 验证开关
+            auto& st = RenderSystem::getInstance().settings();
+            st.xrayEnabled = true;
+            if (const char* o = std::getenv("RHI_XRAY_OPACITY")) {
+                st.xrayOpacity = static_cast<float>(std::atof(o));
+            }
+        }
+        if (std::getenv("RHI_HOVER_OFF")) {   // 悬停拾取关闭（压测/对比用）
+            RenderSystem::getInstance().settings().hoverEnabled = false;
         }
         auto fontMng = RenderSystem::getInstance().GetFontMng();
         auto objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));

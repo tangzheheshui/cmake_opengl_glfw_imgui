@@ -23,7 +23,8 @@ layout(set = 0, binding = 3) uniform sampler2D texture_normal0;
 layout(push_constant) uniform PC {
     mat4 uViewProj;
     vec4 uClipPlane;
-    vec4 uHighlight;   // rgb 颜色 + a 强度
+    vec4 uHighlight;   // offset 80：rgb 颜色 + a 强度
+    vec4 uHover;       // offset 96：悬停提示色
 } pc;
 
 layout(location = 0) in VS_OUT
@@ -80,6 +81,7 @@ void main()
 
     // D8：选中高亮混合（uHighlight.a = 0 时无效果）
     result = mix(result, pc.uHighlight.rgb, pc.uHighlight.a);
+    result = mix(result, pc.uHover.rgb, pc.uHover.a);   // 悬停提示（选中优先级更高）
 
     FragColor = vec4(result, fd.misc.x);   // D3：材质不透明度
 }

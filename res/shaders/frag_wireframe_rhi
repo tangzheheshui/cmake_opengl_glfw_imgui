@@ -1,0 +1,12 @@
+#version 330 core
+// D5: 线框片元（纯色直出 + 剖切）
+uniform vec4 uColor;   // 线框颜色（线性空间）
+
+in float vClipDistance;
+out vec4 FragColor;
+
+void main()
+{
+    if (vClipDistance < 0.0) discard;   // D7：剖切
+    FragColor = vec4(uColor.rgb, uColor.a);
+}

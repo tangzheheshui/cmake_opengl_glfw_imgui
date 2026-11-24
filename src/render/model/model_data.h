@@ -125,6 +125,7 @@ enum DrawOption : char {
     MULTI_VIEWPORT = (1<<2),
     DRAW_PICK = (1<<3),
     DRAW_HIGHLIGHT = (1<<4),   // D8：本对象被选中（frag 侧 uHighlight 混合）
+    DRAW_HOVER     = (1<<5),   // 悬停提示（uHover 混合；选中优先级更高）
 };
 
 #endif /* model_data_h */

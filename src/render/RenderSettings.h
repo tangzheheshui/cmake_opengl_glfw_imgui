@@ -28,11 +28,22 @@ struct RenderSettings {
     float clipPlaneNormal[3] = {1.0f, 0.0f, 0.0f};
     float clipPlaneDistance  = 0.0f;
 
+    // ---- CAD 显示模式（D5）：0=着色 1=线框 2=着色+边线 ----
+    int displayMode = 0;
+
+    // ---- X-ray / 幻影模式：全部模型半透明透视（复用 D3 透明管线）----
+    bool  xrayEnabled = false;
+    float xrayOpacity = 0.35f;
+
     // ---- CAD 选中高亮（D8）----
     // selectedId = 拾取命中的对象 ID（BaseDraw::GetID，0 = 无选中）；
     // 高亮颜色固定淡蓝，强度面板可调（0 = 关）
     uint16_t selectedId        = 0;
     float    highlightStrength = 0.40f;
+    // 悬停高亮（D8 扩展）：鼠标悬停对象淡提示色；hoverEnabled=false 关闭拾取开销
+    bool     hoverEnabled      = true;
+    uint16_t hoverId           = 0;
+    float    hoverStrength     = 0.18f;
 
     // ---- 全局 ----
     bool vsync          = true;

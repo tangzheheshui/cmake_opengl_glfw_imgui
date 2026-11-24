@@ -38,6 +38,8 @@ public:
     // D3：透明排序绘制列表——不透明对象按加入顺序在前，透明对象（alpha < 1）
     // 按到相机距离降序（远 → 近）在后。两端绘制路径共用，保证 GL/VK 画序一致。
     std::vector<std::shared_ptr<BaseDraw>> getSortedDrawList(const glm::vec3& camPos) const;
+    // D3/X-ray：透明分相谓词（X-ray 开启时模型整体视为透明），各绘制路径共用
+    static bool isTransparentDraw(const std::shared_ptr<BaseDraw>& obj);
 private:
     // camera
     std::shared_ptr<Camera> mCameraActive;

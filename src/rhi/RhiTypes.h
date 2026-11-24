@@ -203,7 +203,7 @@ struct BlendState {
     bool blendEnable = false;   // true 时后端固定使用 srcAlpha/oneMinusSrcAlpha
 };
 
-// ---- V3-1：附件布局 / 索引格式 / 光栅状态（管线烘焙字段，带默认值）----
+// ---- 光栅状态 / 附件布局 / 索引格式（管线烘焙字段，带默认值）----
 struct AttachmentLayout {
     Format   colorFormat = Format::BGRA8_SRGB;   // 颜色附件（MRT 前单色）；默认 = 交换链 sRGB
     Format   depthFormat = Format::Depth32F;
@@ -212,9 +212,15 @@ struct AttachmentLayout {
 
 enum class IndexFormat : int { UINT16, UINT32 };
 
+enum class PolygonMode : int { Fill, Line };   // Line = 线框（需 fillModeNonSolid）
+
 struct RasterState {
-    bool frontFaceCCW = false;   // false = CW（Vulkan 约定；GL 网格 CCW 正面）
-    // polygonMode / lineWidth / depthBias 留待 D1（宽线）/ 阴影 系列
+    bool frontFaceCCW = false;                   // false = CW（Vulkan 约定；GL 网格 CCW 正面）
+    PolygonMode polygonMode = PolygonMode::Fill; // D5：线框（需 fillModeNonSolid）
+    // D5：着色+边线模式的边线深度偏移（防止线框与表面 z-fighting）
+    float depthBiasConstantFactor = 0.0f;
+    float depthBiasSlopeFactor    = 0.0f;
+    // lineWidth 留待 D1（宽线）
 };
 
 struct GraphicsPipelineDesc {
@@ -224,7 +230,7 @@ struct GraphicsPipelineDesc {
     CullMode cull           = CullMode::Back;
     DepthState depth;
     BlendState blend;
-    // V3-1：附件格式 / 索引格式 / 光栅状态（带默认值；后端接入见 V3-2）
+    // 附件格式 / 索引格式 / 光栅状态（带默认值）
     AttachmentLayout attachment;
     IndexFormat indexFormat = IndexFormat::UINT32;
     RasterState raster;

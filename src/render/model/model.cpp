@@ -467,12 +467,22 @@ bool Model::draw(const Matrix &mtx) {
         auto& rs = RenderSystem::getInstance();
         if (rs.settings().selectedId == GetID() && rs.settings().highlightStrength > 0.0f) {
             flags |= DrawOption::DRAW_HIGHLIGHT;
+        } else if (rs.settings().hoverEnabled && rs.settings().hoverId == GetID()
+                   && rs.settings().hoverStrength > 0.0f) {
+            flags |= DrawOption::DRAW_HOVER;   // 悬停提示（未选中时才显示）
         }
     }
 
     // D3：透明对象（alpha < 1）——GL 遗留路径开 blend + 关深度写（画完恢复；
     // RHI 路径由 blend 管线变体管理，VK 模式无 GL 状态）
-    const float opacity = getAlpha();
+    // X-ray：全部模型按设定不透明度走透明管线（幻影透视）
+    float opacity = getAlpha();
+    {
+        auto& rs = RenderSystem::getInstance();
+        if (rs.settings().xrayEnabled) {
+            opacity = std::min(opacity, rs.settings().xrayOpacity);
+        }
+    }
     const bool blend = !vkMode && opacity < 0.999f;
     if (blend) {
         glEnable(GL_BLEND);
