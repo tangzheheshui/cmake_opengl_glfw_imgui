@@ -1,0 +1,66 @@
+#version 330 core
+out vec4 FragColor;
+
+in vec3 pFragPos;
+in vec3 pNormal;
+in float vClipDistance;   // D7：剖切平面
+
+struct Materail {
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+    float shininess;
+    float shininess_strength;
+};
+
+struct Light {
+    bool is_open;
+    vec3 position;
+    vec3 direction;
+    float cosTheta;
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+};
+
+uniform Materail uMaterail;
+uniform Light uLight;
+uniform vec3 uCameraPos;
+uniform vec4 uHighlight;   // D8：选中高亮 rgb 颜色 + a 强度（0 = 关）
+uniform vec4 uHover;       // 悬停高亮（更弱的提示色，不覆盖选中）
+uniform float uOpacity;    // D3：不透明度（1 = 不透明；<1 走 blend 管线）
+
+void main()
+{
+    if (vClipDistance < 0.0) discard;   // D7：剖切
+    vec3 result;
+    if (uLight.is_open) {
+        vec3 normal = normalize(pNormal);
+        vec3 dirLight = normalize(uLight.position.xyz - pFragPos);
+        float cos = dot(-dirLight, normalize(uLight.direction));
+            
+        // ambient
+        result += uLight.ambient * uMaterail.ambient;
+    
+        if (cos > uLight.cosTheta) {
+            // diffuse
+            float diff = max(dot(dirLight, normal), 0.0);
+            result += uLight.diffuse * uMaterail.diffuse * diff;
+            
+            // specular
+            vec3 viewDir = normalize(uCameraPos - pFragPos);
+            vec3 halfwayDir = normalize(dirLight + viewDir);   
+            float spec = pow(max(dot(normal, halfwayDir), 0.0), uMaterail.shininess);
+            vec3 specular = uLight.specular * (spec * uMaterail.specular);
+            result += specular;
+        }
+    } else {
+        result = uMaterail.diffuse;
+    }
+    
+    // D8：选中高亮混合（uHighlight.a = 0 时无效果）
+    result = mix(result, uHighlight.rgb, uHighlight.a);
+    result = mix(result, uHover.rgb, uHover.a);   // 悬停提示（选中优先级更高）
+
+    FragColor = vec4(result, uOpacity);   // D3：材质不透明度
+}

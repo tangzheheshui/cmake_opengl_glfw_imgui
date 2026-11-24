@@ -1,0 +1,17 @@
+#version 330 core
+// D4: SDF 文字 片元着色器：R8 距离场采样 + 屏幕空间抗锯齿。
+// 0.5 = 字形边缘；fwidth 自适应平滑宽度，任意缩放保持清晰。
+uniform sampler2D uAtlas;
+uniform vec4 uColor;   // rgb 颜色（线性空间）+ a 全局透明度
+
+in vec2 vTexCoord;
+out vec4 FragColor;
+
+void main()
+{
+    float d = texture(uAtlas, vTexCoord).r;
+    float w = fwidth(d);
+    float a = smoothstep(0.5 - w, 0.5 + w, d);
+    if (a <= 0.003) discard;
+    FragColor = vec4(uColor.rgb, a * uColor.a);
+}

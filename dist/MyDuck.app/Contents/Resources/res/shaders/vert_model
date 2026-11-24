@@ -1,0 +1,27 @@
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoord;
+layout (location = 3) in mat4 aInstanceMatrix;
+
+uniform mat4 uViewProj;
+uniform vec4 uClipPlane;   // D7：xyz 法线，w 距离；保留 dot(n,p)+d >= 0 一侧
+
+out VS_OUT
+{
+    vec3 pFragPos;
+    vec3 pNormal;
+    vec2 pTexCoord;
+    mat3 pMatNormal;
+} vs_out;
+out float vClipDistance;
+
+void main()
+{
+    vs_out.pFragPos = (aInstanceMatrix * vec4(aPos, 1.0)).xyz;
+    vClipDistance = dot(vec4(vs_out.pFragPos, 1.0), uClipPlane);
+    vs_out.pMatNormal = mat3(transpose(inverse(aInstanceMatrix)));
+    vs_out.pNormal = vs_out.pMatNormal * aNormal;
+    vs_out.pTexCoord = aTexCoord;
+    gl_Position = uViewProj * aInstanceMatrix * vec4(aPos, 1.0);
+}

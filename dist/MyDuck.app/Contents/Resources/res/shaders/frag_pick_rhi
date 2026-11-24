@@ -1,0 +1,11 @@
+#version 330 core
+// RHI 拾取 片元着色器（D2，GL 变体）
+// ID 渲染直出：uPickColor 由 CPU 侧从对象 ID 编码（r = id&0xFF / g = id>>8）
+uniform vec4 uPickColor;
+
+out vec4 FragColor;
+
+void main()
+{
+    FragColor = uPickColor;
+}
