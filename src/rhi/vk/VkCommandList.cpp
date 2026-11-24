@@ -108,16 +108,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         return;
     }
 
-    // M3：仅支持默认帧缓冲（swapchain）；desc.framebufferId 的 FBO 直通是 GL 专属能力，
-    // Vulkan 侧等价物（RenderTargetHandle）已由上面的 B4 分支处理
-    if (desc.framebufferId != 0) {
-        static bool warned = false;
-        if (!warned) {
-            ENGINE_LOG_WARN_ONCE("[VK] non-default framebuffer not supported yet (B4)");
-            warned = true;
-        }
-        return;
-    }
+    // 没有离屏目标 = 默认帧缓冲（swapchain）。离屏目标由上面的分支处理。
     _curRenderTarget = RenderTargetHandle{};
 
     // B1：Dynamic Rendering —— vkCmdBeginRendering 取代 VkRenderPass/framebuffer。

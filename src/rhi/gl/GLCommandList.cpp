@@ -80,8 +80,9 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
         const GLRenderTarget& rt = _device->renderTarget(desc.renderTarget);
         glBindFramebuffer(GL_FRAMEBUFFER, rt.alive ? rt.fbo : 0);
     } else {
-        // 帧缓冲：0 = 屏幕（默认帧缓冲），其它 = 现有 FBO 直通（阴影 Pass）
-        glBindFramebuffer(GL_FRAMEBUFFER, desc.framebufferId);
+        // 没有离屏目标 = 默认帧缓冲（屏幕）。v1 的 GL FBO 名直通已删除：
+        // 阴影等 GL Pass 改走 RenderTargetHandle，契约层不再出现后端对象名。
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
     if (desc.clearColor) {

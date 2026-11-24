@@ -289,8 +289,6 @@ struct RenderPassDesc {
     // Vulkan：B1 起映射为 dynamic rendering 的 attachment；GL：B2 绑定对应 FBO。
     RenderTargetHandle renderTarget;
 
-    // v1 遗留：GL FBO 对象名直通（0 = 默认帧缓冲）。B2 迁移完成后移除。
-    uint32_t framebufferId = 0;
     bool     clearColor = true;
     float    clearColorValue[4] = {0.2f, 0.3f, 0.3f, 1.0f};
     bool     clearDepth = true;
