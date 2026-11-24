@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>架构设计 · 一个 CAD 模型查看器，两套后端，一次进行中的迁移</title>
+<style>
+:root{
+  --bg:#0b0e13; --panel:#12161d; --panel2:#161c25;
+  --line:#202733; --line2:#2b3441;
+  --tx:#c9d1db; --tx2:#8b95a3; --tx3:#5e6876;
+  --app:#8ecae6; --render:#3ddc97; --rhi:#f0b429; --core:#4cc2ff; --vk:#a98bff; --warn:#ff8f6b;
+  --mono:"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  --sans:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:15.5px;line-height:1.8}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(900px 520px at 8% -10%,rgba(76,194,255,.07),transparent 62%),
+             radial-gradient(700px 420px at 96% 0%,rgba(61,220,151,.05),transparent 62%)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 26px 110px;position:relative;z-index:1}
+
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:rgba(11,14,19,.86);border-bottom:1px solid var(--line)}
+.nav-in{max-width:1080px;margin:0 auto;padding:11px 26px;display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.nav-brand{font-family:var(--mono);font-size:12.5px;color:var(--tx2);margin-right:auto}
+.nav-brand b{color:var(--render)}
+nav a{font-size:12.5px;color:var(--tx2);text-decoration:none;padding:4px 9px;border-radius:6px;border:1px solid transparent;transition:.16s;white-space:nowrap}
+nav a:hover{color:var(--tx);background:var(--panel);border-color:var(--line2)}
+
+header{padding:52px 0 30px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3);margin-bottom:14px}
+h1{font-size:31px;line-height:1.38;font-weight:650;letter-spacing:-.5px}
+h1 span{color:var(--render)}
+.sub{margin-top:16px;font-size:16px;color:var(--tx2);max-width:800px}
+.meta{margin-top:22px;display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;color:var(--tx3)}
+.meta b{color:var(--tx2);font-weight:500}
+
+main{padding-top:6px}
+section{padding:44px 0;border-bottom:1px solid var(--line)}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+.sec-num{font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:5px;border:1px solid var(--line2);color:var(--tx2);flex:none}
+.sec-title{font-size:22.5px;font-weight:600;letter-spacing:-.2px}
+.lead{color:var(--tx2);margin:8px 0 20px;max-width:840px}
+p{margin:0 0 14px}
+b{color:#e6ecf4}
+code{font-family:var(--mono);font-size:.9em;background:#0e131a;border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cfe3f2;white-space:nowrap}
+
+/* pass 卡 */
+.ps{margin:16px 0}
+.pi{display:grid;grid-template-columns:38px 156px 1fr;gap:14px;align-items:start;padding:13px 0;border-bottom:1px dashed var(--line)}
+.pi:last-child{border-bottom:none}
+.pi .pn{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--c);padding-top:1px}
+.pi .pt{font-family:var(--mono);font-size:13px;color:#e6ecf4;padding-top:2px}
+.pi .pd{font-size:13.8px;color:var(--tx2);line-height:1.72}
+.p1{--c:var(--core)} .p2{--c:var(--render)} .p3{--c:var(--app)} .p4{--c:var(--rhi)}
+@media(max-width:780px){.pi{grid-template-columns:34px 1fr}.pi .pd{grid-column:1 / -1}}
+
+/* 链条 */
+.chain{margin:16px 0}
+.cg{display:grid;grid-template-columns:30px 1fr;gap:12px;padding:9px 0}
+.cg .cn{font-family:var(--mono);font-size:11.5px;color:var(--tx3);text-align:center;padding-top:4px}
+.cg .cb{font-size:14px;line-height:1.7}
+.cg .cb code{font-size:12.5px}
+.cg .lay{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:1px 6px;border-radius:4px;
+  border:1px solid var(--line2);color:var(--tx3);margin-right:7px;white-space:nowrap}
+
+/* 表 */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{text-align:left;font-weight:600;font-size:11.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--tx3);padding:8px 11px;border-bottom:1px solid var(--line2)}
+td{padding:10px 11px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--tx);line-height:1.66}
+tr:last-child td{border-bottom:none}
+td.mono{font-family:var(--mono);font-size:12.5px;color:var(--tx2);white-space:nowrap}
+td.nw{white-space:nowrap}
+.ok{color:var(--render);font-weight:600}
+.no{color:var(--warn);font-weight:600}
+.wait{color:var(--rhi);font-weight:600}
+.gray{color:var(--tx3)}
+
+/* 提示 */
+.note,.warn{border-radius:9px;padding:13px 16px;margin:16px 0;font-size:14px;line-height:1.75}
+.note{background:rgba(240,180,41,.06);border:1px solid rgba(240,180,41,.24);border-left:3px solid var(--rhi)}
+.warn{background:rgba(255,143,107,.06);border:1px solid rgba(255,143,107,.22);border-left:3px solid var(--warn)}
+.box{background:rgba(169,139,255,.06);border:1px solid rgba(169,139,255,.22);border-left:3px solid var(--vk)}
+.nl{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx3);display:block;margin-bottom:5px}
+
+pre{background:#0a0e14;border:1px solid var(--line);border-radius:9px;padding:14px 16px;overflow-x:auto;
+  font-family:var(--mono);font-size:12.8px;line-height:1.85;color:#b9c7d6;margin:14px 0}
+pre .c{color:#4d5c6e}
+pre .k{color:#a98bff}
+pre .f{color:#3ddc97}
+
+/* 目录树 */
+.tree{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:16px 0;
+  font-family:var(--mono);font-size:12.6px;line-height:1.95;color:var(--tx);overflow-x:auto}
+.tree .d{color:var(--render)}
+.tree .m{color:var(--tx3);font-size:12px}
+.tree .k{color:var(--app)}
+
+footer{padding:36px 0 0;color:var(--tx3);font-size:13px;font-family:var(--mono);line-height:1.9}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-in">
+    <div class="nav-brand">cmake_opengl_glfw_imgui · <b>架构</b></div>
+    <a href="#s0">它是什么</a>
+    <a href="#s1">模块清单</a>
+    <a href="#s2">启动</a>
+    <a href="#s3">一帧</a>
+    <a href="#s4">契约层</a>
+    <a href="#s5">Vulkan 内部</a>
+    <a href="#s6">迁移方式</a>
+    <a href="#s7">点选</a>
+    <a href="#s8">模型</a>
+    <a href="#s9">两端差异</a>
+    <a href="#s10">验证</a>
+    <a href="#s11">边界</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">架构设计 · 依据当前代码</div>
+  <h1>一个 CAD 模型查看器，两套后端，<span>一次进行中的迁移</span></h1>
+  <div class="sub">这份不讲抽象的「分层原则」，讲这个仓库里具体有什么：哪几个 Pass、每个开关叫什么、Vulkan 后端拆成了哪九个模块、描述符怎么排、点选为什么要等两帧、哪些东西 Vulkan 上还没有。看完应该能在脑子里跑出一帧。</div>
+  <div class="meta">
+    <span><b>帧级 Pass</b> 4</span>
+    <span><b>VK 模块</b> 9</span>
+    <span><b>GL 模块</b> 3</span>
+    <span><b>迁移开关</b> 3</span>
+    <span><b>引用</b> 文件 + 符号，不写行号</span>
+  </div>
+</header>
+
+<main>
+
+<section id="s0">
+  <div class="sec-head"><span class="sec-num">00</span><span class="sec-title">先说清它是什么</span></div>
+
+  <p class="lead">不是通用引擎，是一个用来看模型的 CAD 风格演示：加载 <code>duck.dae</code>，架一个相机，带阴影、天空、剖切、线框、X-ray、鼠标点选高亮，还要在 OpenGL 和 Vulkan 上跑出同样的画面。整套代码的存在理由，就是<b>把这套内容从 GL 搬到 Vulkan，且搬的过程中不能把画面弄坏</b>。</p>
+
+  <p>所以判断这个架构好不好，标准不是「像不像商业引擎」，而是三条：<b>迁一个特性会不会牵动全局、搬错了能不能当场发现、两端的画面能不能对上。</b> 下面每一节都会落到其中一条上。</p>
+
+  <table>
+    <tr><th>能力</th><th>OpenGL</th><th>Vulkan</th><th>证据（可自己去查）</th></tr>
+    <tr><td class="nw">模型</td><td>legacy + RHI 两条路径</td><td class="ok">强制 RHI</td><td><code>RenderSettings::modelUseRHI</code>；<code>mesh_pass</code> 里 <code>useRHI = VK 或 开关</code></td></tr>
+    <tr><td class="nw">线条</td><td>legacy + RHI</td><td class="ok">RHI</td><td><code>lineUseRHI</code>，注释写明「已过逐像素等价性对比」</td></tr>
+    <tr><td class="nw">文字</td><td>legacy 字形 + SDF 图集</td><td class="ok">SDF 图集</td><td><code>textUseRHI</code>；<code>main.cpp</code> 里 <code>legacyGlGlyphs = !useVulkan</code></td></tr>
+    <tr><td class="nw">阴影</td><td class="ok">有</td><td class="no">没有</td><td><code>res/shaders_vk</code> 里<b>没有</b> shadow 着色器；<code>renderScenePasses</code> 里 VK 直接跳过 <code>CShadowPass</code></td></tr>
+    <tr><td class="nw">天空</td><td class="ok">有</td><td class="ok">有</td><td><code>shaders_vk</code> 有 <code>vert_sky</code> / <code>frag_sky</code>（且槽 3 约定给 cubemap）</td></tr>
+    <tr><td class="nw">点选</td><td class="ok">有</td><td class="ok">有</td><td><code>shaders_vk</code> 有 <code>pick_rhi</code>；两阶段状态机在 <code>RenderSystem</code> 的 <code>PickRequest</code></td></tr>
+    <tr><td class="nw">线框 D5</td><td class="ok">有</td><td class="ok">有</td><td><code>wireframe_rhi</code> 着色器 + <code>fillModeNonSolid</code> 特性（MoltenVK 需 portability）</td></tr>
+    <tr><td class="nw">剖切 D7</td><td class="ok">有</td><td class="ok">有</td><td><code>clipPlaneEnabled</code> / <code>clipPlaneNormal[3]</code> / <code>clipPlaneDistance</code></td></tr>
+    <tr><td class="nw">X-ray D3</td><td class="ok">有</td><td class="ok">有</td><td><code>xrayEnabled</code> + <code>xrayOpacity</code>（复用透明管线）</td></tr>
+    <tr><td class="nw">多视口</td><td class="ok">有</td><td class="gray">待确认</td><td>GL 侧有 <code>model_multiview.geom</code>（几何着色器复制）；<code>shaders_vk</code> 里<b>没有</b>对应文件</td></tr>
+  </table>
+
+  <div class="note">
+    <span class="nl">这张表本身就是架构摘要</span>
+    每一行的「GL 有 / VK 没有」都是文件层面能验证的事实。也正因为如此：<b>要判断「阴影到底迁没迁」，看 <code>res/shaders_vk</code> 有没有 shadow 着色器，比看进度文档可信。</b> 之前两份文档在这一点上互相矛盾，原因就是它们都没去数着色器文件。
+  </div>
+</section>
+
+<section id="s1">
+  <div class="sec-head"><span class="sec-num">01</span><span class="sec-title">模块清单：目录即架构</span></div>
+  <p class="lead">四个源码层不是按文件类型分的，是按「谁能看见谁」分的。下面这张表是这个仓库全部的骨架，没有省略。</p>
+
+  <div class="tree">
+<span class="d">app/</span>                        <span class="m">宿主层：唯一知道窗口、ImGui、原生句柄的地方</span>
+├─ <span class="k">main.cpp</span>                 <span class="m">启动九步 + 主循环 + 环境变量映射</span>
+├─ <span class="k">GlfwHost</span>                 <span class="m">窗口 / GL 上下文 / createDevice / ImGui 初始化与关闭</span>
+├─ <span class="k">SceneDemo</span>                <span class="m">摆场景：模型、多视口、相机、演示内容</span>
+└─ <span class="k">DebugPanel</span>               <span class="m">读写 RenderSettings 的 ImGui 面板</span>
+
+<span class="d">src/render/</span>                 <span class="m">编排层：知道「画什么」，不知道「怎么画」</span>
+├─ <span class="k">RenderSystem</span>             <span class="m">一帧编排者（单例门面）：init / renderFrame / shutdown / 拾取 / 验证设施</span>
+├─ <span class="k">pass/</span>                    <span class="m">Shadow / Normal / Sky / Pick（+ IRenderPass 基类）</span>
+├─ <span class="k">model/</span>                   <span class="m">model / mesh / mesh_pass / aabb / model_data / PassColor / PassTexture / Utf8IOSystem</span>
+├─ <span class="k">object/</span>                  <span class="m">Line / Sky / Text / ImageRectangle</span>
+├─ <span class="k">camera/</span>                  <span class="m">camera / CameraController</span>
+├─ <span class="k">scene / FontManager / shader / image / BaseDraw / DrawUniforms / Light</span>
+└─ <span class="k">RenderSettings.h</span>         <span class="m">全部开关都在这里（UI 读、渲染消费）</span>
+
+<span class="d">src/rhi/</span>                    <span class="m">契约 + 两个实现：全仓库唯一出现 vk* / gl* 的地方</span>
+├─ <span class="k">IRHIDevice / IRHICommandList</span>  <span class="m">两个需要多态的接口</span>
+├─ <span class="k">RhiTypes.h</span>               <span class="m">6 个句柄 + 8 个 Desc + Backend / DeviceInfo</span>
+├─ <span class="k">RHIFactory</span>               <span class="m">唯一设备创建入口</span>
+├─ <span class="k">Result.h / FormatInfo</span>     <span class="m">错误返回值 / 格式与字节数映射</span>
+├─ <span class="k">vk/</span>                     <span class="m">9 个模块（见第 05 节）</span>
+├─ <span class="k">gl/</span>                     <span class="m">GLDevice / GLCommandList / GLProgram</span>
+└─ <span class="k">detail/</span>                  <span class="m">HandleTable / DeletionQueue / FrameUniformRing</span>
+
+<span class="d">src/core/</span>                    <span class="m">底座：log / math / fs / color / debug / taskQueue</span>
+
+<span class="d">3rdparty/</span>  <span class="d">res/</span>  <span class="d">tools/</span>        <span class="m">glfw glad glm imgui assimp freetype stb / shaders shaders_vk model texture font / check_layers rhi_gate</span>
+  </div>
+
+  <p>依赖方向单向：<code>app → render → rhi → core</code>。<code>src/render</code> 里一旦出现 <code>#include "app/GlfwHost.h"</code>，构建直接失败——<code>tools/check_layers.cmake</code> 扫全仓库 <code>#include</code>，命中就 <code>SEND_ERROR</code>。</p>
+
+  <p>它同时检查四件事：<code>src/rhi</code> 不许 include render/app/GLFW/imgui；<code>src/core</code> 不许 include rhi/render/app；<code>src/render</code> 不许 include app/imgui/GLFW；<code>engine</code> 目标不许链接 glfw/imgui。<b>最后一条最重要</b>：链接一旦带上，include 检查就形同虚设。</p>
+
+  <div class="note">
+    <span class="nl">例外清单的设计值得照抄</span>
+    现在只有一条合法例外：<code>rhi/gl/GLCommandList.cpp</code>（DrawUniforms 的 ABI 残留，注明「随 V3-2 绑定层重做」）。规则可破，但要写进脚本、要注明清理归宿。<b>这一步把「临时妥协」和「永久债务」区分开了。</b>
+  </div>
+</section>
+
+<section id="s2">
+  <div class="sec-head"><span class="sec-num">02</span><span class="sec-title">启动：main 里的九步</span></div>
+  <p class="lead"><code>app/main.cpp</code> 是唯一一条从头到尾的线。它只有一百来行，但每一步的顺序都有原因。</p>
+
+  <div class="chain">
+    <div class="cg"><div class="cn">01</div><div class="cb"><span class="lay">调试</span>看 <code>RHI_DEBUG_LOG</code>：有则把 stdout 设成无缓冲，并装 <code>installCrashBacktrace</code>。<span class="gray">先装，后面崩了才有栈。</span></div></div>
+    <div class="cg"><div class="cn">02</div><div class="cb"><span class="lay">选择</span>读 <code>RHI_BACKEND</code>，只认 <code>vulkan</code>，其他一律当 OpenGL。<span class="gray">引擎自己不读环境变量，这是宿主的活。</span></div></div>
+    <div class="cg"><div class="cn">03</div><div class="cb"><span class="lay">兜底</span>若本二进制没编 Vulkan（<code>ENGINE_HAS_VULKAN=0</code>），打印提示并退回 GL。<span class="gray">只有这一种回退，运行期失败不回退。</span></div></div>
+    <div class="cg"><div class="cn">04</div><div class="cb"><span class="lay">窗口</span><code>host.createWindow(1600, 900, useVulkan)</code>：建窗 + GL 上下文（GL 后端下 RHI 不建上下文，要求调用时已 current）。</div></div>
+    <div class="cg"><div class="cn">05</div><div class="cb"><span class="lay">设备</span><code>host.createDevice</code> → <code>RHIFactory::createDevice</code>：填 <code>DeviceDesc</code>（窗口、swapBuffers、后端）。失败返回空指针 + <code>err</code>，不抛异常。</div></div>
+    <div class="cg"><div class="cn">06</div><div class="cb"><span class="lay">引擎</span><code>RenderSystem::init(InitDesc)</code>：只给 device 指针、资源根、<b>帧缓冲尺寸 + 窗口尺寸两套</b>（拾取坐标换算要用）、然后 <code>onWindowSizeChanged</code>。</div></div>
+    <div class="cg"><div class="cn">07</div><div class="cb"><span class="lay">资源</span><code>preloadTextures</code>；<code>LoadFont</code>（<code>legacyGlGlyphs = !useVulkan</code>）；把 <code>RHI_SMOKE</code> / <code>RHI_TEXQUAD</code> / <code>RHI_CLIP</code> 映射进 <code>settings()</code>。</div></div>
+    <div class="cg"><div class="cn">08</div><div class="cb"><span class="lay">UI</span><code>host.initImGui(useVulkan)</code>。<b>必须在设备之后</b>：Vulkan backend 要 instance / physicalDevice / device / queue 都已存在。</div></div>
+    <div class="cg"><div class="cn">09</div><div class="cb"><span class="lay">场景</span><code>SceneDemo::buildScene</code>，然后主循环：<code>update</code> → <code>newFrameImGui</code> → <code>ImGui::NewFrame</code> → <code>DebugPanel::draw</code> → <code>renderFrame</code> → <code>glfwPollEvents</code>。</div></div>
+  </div>
+
+  <p>关闭是反过来再收一遍，而且是契约：<code>shutdownImGui</code> → <code>RenderSystem::shutdown</code> → <code>host.takeDevice().reset()</code> → <code>glfwTerminate</code>。那个 <code>takeDevice()</code> 就是为了让「设备归谁销毁」在代码里看得见。<code>RenderSystem</code> 的注释写得很直白：单例静态析构发生在 main 返回之后，那时再释放依赖图形上下文的资源会崩。</p>
+
+  <p>主循环里还有三个「回归测试」的钩子，都挂在环境变量上：<code>RHI_EXIT_AFTER</code>（跑 N 帧退出，供 CI）、<code>RHI_RESIZE_AT</code>（指定帧改窗口尺寸，测交换链重建）、以及 <code>useVulkan</code> 这个 bool 从头传到底——<b>它是唯一允许在 app 层出现的后端知识</b>。</p>
+</section>
+
+<section id="s3">
+  <div class="sec-head"><span class="sec-num">03</span><span class="sec-title">一帧：四个 Pass，一条主命令列表</span></div>
+
+  <p class="lead"><code>RenderSystem::init</code> 里 <code>m_vec_renderpass</code> 按顺序塞了四个 Pass，<code>renderScenePasses()</code> 顺序遍历。没有 Render Graph，没有自动依赖分析——就是这四个，按这个顺序。</p>
+
+  <div class="ps">
+    <div class="pi p1"><div class="pn">01</div><div class="pt">CShadowPass</div><div class="pd">从光源视角把场景画进深度图，供主 Pass 用。开关 <code>drawShadowPass</code>。<b>VK 端跳过</b>：<code>renderScenePasses</code> 里对 VK 直接 continue，<code>dynamic_pointer_cast</code> 到 <code>CShadowPass</code> 才拦。<span class="gray">用 cast 而不是加一个 Pass 类型的枚举，是为了不动基类。</span></div></div>
+    <div class="pi p2"><div class="pn">02</div><div class="pt">CNormalPass</div><div class="pd">主 Pass。模型、线条、文字在这里画；剖切、线框、X-ray、选中/悬停高亮都在这层生效。它是最重的一个。</div></div>
+    <div class="pi p3"><div class="pn">03</div><div class="pt">CSkyPass</div><div class="pd">天空盒。开关 <code>drawSkyPass</code>。两端都有；注意 cubemap 固定走纹理槽 3。</div></div>
+    <div class="pi p4"><div class="pn">04</div><div class="pt">CPickPass</div><div class="pd">只在<b>请求拾取的那一帧</b>把场景画成 ID 图到离屏目标。关掉 <code>drawPickPass</code> 后点选就失效，注释里直接写了这句。</div></div>
+  </div>
+
+<pre><span class="c">// 示意：形状对，签名以代码为准</span>
+<span class="k">if</span> (!dev-&gt;<span class="f">beginFrame</span>()) <span class="k">return</span>;       <span class="c">// 最小化 / 交换链重建 → 整帧跳过</span>
+<span class="k">for</span> (pass : m_vec_renderpass) {      <span class="c">// 四个，按顺序</span>
+    cl = dev-&gt;<span class="f">createCommandList</span>();   <span class="c">// 附加列表</span>
+    pass-&gt;draw(scene);                  <span class="c">// GL 立即执行；VK 录进 cl</span>
+}
+<span class="f">overlayFn</span>(cl);                         <span class="c">// ImGui 合成到主列表</span>
+dev-&gt;<span class="f">endFrame</span>();                        <span class="c">// 提交（附加列表按创建顺序 → 主列表）</span>
+dev-&gt;<span class="f">present</span>();                         <span class="c">// 呈现</span></pre>
+
+  <p>两个后端共用这一段，<code>renderFrame</code> 里几乎没有后端分支（注释原话：「GL/VK 主循环零后端分支（ImGui backend 初始化除外）」）。真正分叉的只有两处，都在细节层：</p>
+
+  <div class="note">
+    <span class="nl">overlay 的插入点，两端真的不一样</span>
+    <b>VK：在 render pass 内、场景之后</b>（ImGui 用 dynamic rendering，附件格式由 <code>NativeHandles::colorFormat/depthFormat</code> 告诉它）。<br>
+    <b>GL：在默认帧缓冲、<code>GL_FRAMEBUFFER_SRGB</code> 关闭之后</b>（否则颜色差一截）。<br><br>
+    这条差异没法靠抽象抹平，只能写进契约——<code>setOverlayRenderer</code> 的注释里就是这么写的。
+  </div>
+</section>
+
+<section id="s4">
+  <div class="sec-head"><span class="sec-num">04</span><span class="sec-title">契约层：两个接口，六个句柄，八个 Desc</span></div>
+
+  <p class="lead">这一层的设计目标只有一个：<b>让 <code>src/render</code> 里一行后端代码都不出现。</b> <code>IRHIDevice</code> 的全部方法按用途分七组，看这张表就知道契约的边界画在哪。</p>
+
+  <table>
+    <tr><th>组</th><th>方法</th><th>说明</th></tr>
+    <tr><td class="nw">身份与能力</td><td><code>backend / info / capabilities</code></td><td><code>DeviceCapabilities</code> 是结构化能力表，调试面板、启动日志、上层路径选择共用；GL 端未实现时返回空表（0/false = 未知）</td></tr>
+    <tr><td class="nw">资源创建</td><td><code>createBuffer / createTexture / createPipeline / createUniformBlock / createSampler / createRenderTarget</code></td><td>前三个纯虚（必须有），后三个有默认实现（默认「不支持」）</td></tr>
+    <tr><td class="nw">资源销毁</td><td><code>destroyBuffer / destroyTexture / destroyPipeline / destroyUniformBlock / destroySampler / destroyRenderTarget</code></td><td>都走延迟回收，不是当场 delete</td></tr>
+    <tr><td class="nw">有效性</td><td><code>alive(BufferHandle) / alive(TextureHandle) / …</code></td><td>默认只查 <code>id != 0</code>；后端覆写后增加「id 在范围 + 槽存活 + gen 一致」三条件</td></tr>
+    <tr><td class="nw">数据更新</td><td><code>updateBuffer</code></td><td>GL 是 <code>glBufferSubData</code>；VK 是 staging 拷贝或 HOST_VISIBLE 直写</td></tr>
+    <tr><td class="nw">帧循环</td><td><code>beginFrame / endFrame / present / onResize / framebufferSize / waitIdle</code></td><td><code>beginFrame</code> 返回 bool；<code>present</code> 独立；RHI 永不回查窗口系统（尺寸靠 <code>framebufferSize()</code>）</td></tr>
+    <tr><td class="nw">命令列表</td><td><code>commandList() / createCommandList() / destroyCommandList()</code></td><td>提交顺序固定「附加列表（按创建顺序）→ 主列表」，主列表负责 UI 收尾</td></tr>
+    <tr><td class="nw">逃生舱</td><td><code>nativeHandles(NativeHandles&) / nativeBuffer / nativeTexture / nativeSampler / nativePipeline</code></td><td>按类型拆开，避免 <code>nativeHandle(RhiHandle)</code> 的跨类型歧义；正式路径不许依赖</td></tr>
+  </table>
+
+  <div class="note">
+    <span class="nl">「默认实现 = 不支持」这个选择很关键</span>
+    <code>createSampler</code>、<code>createRenderTarget</code>、<code>readbackTexture</code> 都有默认实现：返回空句柄 / <code>false</code>。<br><br>
+    好处是<b>能力可以一个一个接</b>：GL 端还没做 B4 的时候，VK 端已经能建 RT 了，两边仍然能编译、能跑，只是 GL 拿到空句柄。这叫「只加不改」——契约每次扩展都不动已有后端。<br>
+    代价是<b>失败是静默的</b>：谁忘了检查返回值，会拿到一个空句柄继续往下走，然后黑屏。所以凡是调用这类方法的地方都必须判空，这也是为什么 <code>alive()</code> 要单独存在。
+  </div>
+
+  <p>句柄只有 <code>{id, gen}</code> 两个字段，派生六个强类型：<code>BufferHandle / TextureHandle / UniformBlockHandle / PipelineHandle / SamplerHandle / RenderTargetHandle</code>。它们是纯数据结构，<b>没有方法</b>——有方法的对象会被上层「顺手」调用，抽象立刻漏。有行为的只有 <code>IRHIDevice</code> 和 <code>IRHICommandList</code> 两个。</p>
+
+  <div class="warn">
+    <span class="nl">发现一处注释与实现不一致（不是 bug，是会误导人）</span>
+    <code>IRHIDevice.h</code> 的注释写着「<b>句柄 id 不复用</b>：销毁后槽位保留为失效」，但 <code>HandleTable</code> 已经有 <code>_freeSlots</code>，<code>alloc</code> 优先复用刚释放的槽，同时 <code>gen</code> 自增。<br><br>
+    实现是对的（复用 + 代际校验是标准做法），<b>注释是旧的</b>。但这类不一致最坑接手的人：他会按注释去假设 id 单调递增，然后写出 <code>id = size + 1</code> 这种依赖。
+  </div>
+</section>
+
+<section id="s5">
+  <div class="sec-head"><span class="sec-num">05</span><span class="sec-title">Vulkan 后端是怎么组织的：九个模块</span></div>
+
+  <p class="lead"><code>VkDevice.cpp</code> 有 96 KB，但真正「编排」的部分只占一部分——其余被拆成了下面九个模块。这个拆法本身就是架构。</p>
+
+  <table>
+    <tr><th>模块</th><th>管什么</th><th>拆出去的理由</th></tr>
+    <tr><td class="mono">VkDevice</td><td>init 顺序、帧循环、资源创建、submit / present、能力查询入口</td><td>它只做「编排」，具体机制在下面八个里</td></tr>
+    <tr><td class="mono">VkCaps</td><td>版本、扩展、队列族、limits 探测</td><td>能力探测和初始化策略分开，便于面板展示和日志</td></tr>
+    <tr><td class="mono">VkSwapchain</td><td>交换链、图像、视图、renderDone 信号量（<b>按图像下标</b>）</td><td>重建逻辑与生命周期独立，避免和帧循环搅在一起</td></tr>
+    <tr><td class="mono">VkFrames</td><td>帧级同步：in-flight fence + imageAvailable，默认 2 槽位</td><td>「帧在飞」这件事只在一个小文件里说得清</td></tr>
+    <tr><td class="mono">VkDescriptors</td><td>两个 setLayout、全局 pipelineLayout、纹理描述符池、帧 uniform 环</td><td>描述符是最容易写错的部分，单独隔离</td></tr>
+    <tr><td class="mono">VkPipelines</td><td>管线创建 / 缓存</td><td>管线状态组合多，缓存策略独立演进</td></tr>
+    <tr><td class="mono">VkShaderReflect</td><td>读 SPIR-V 反射信息（binding、push constant 等）</td><td>参数对齐靠反射算，而不是靠人记</td></tr>
+    <tr><td class="mono">VkMemoryAllocator</td><td>显存分配（按内存类型与对齐分块）</td><td>不自己管内存，就得天天对着 VkDeviceMemory 猜</td></tr>
+    <tr><td class="mono">VkCommandList</td><td>录制：dynamic rendering、绑定、draw、set 判重</td><td>每条列表按槽位持有自己的命令缓冲（V3-6 起）</td></tr>
+  </table>
+
+  <p><b>描述符是怎么排的</b>，这是整个 VK 后端最需要理解的一张图：</p>
+
+  <table>
+    <tr><th>位置</th><th>内容</th><th>什么时候写</th></tr>
+    <tr><td class="mono">set0</td><td>帧 uniform 环：一次绘制数据一段，靠<b>动态偏移</b>取</td><td>每帧 <code>beginFrame</code> 归零；每次绘制 <code>allocDrawUniforms</code> 追加一段，返回偏移；环满会扩容</td></tr>
+    <tr><td class="mono">set1 .. N</td><td>每张纹理一个 set（写一次，之后只绑不更新）</td><td>纹理创建时写 sampler + view；池不够就扩容</td></tr>
+    <tr><td class="mono">兜底</td><td>白纹理 / 白 cubemap</td><td>未绑定的槽、上传还没完成的纹理都绑它，<b>槽 3 约定给 cubemap</b></td></tr>
+    <tr><td class="mono">共用</td><td>一个全局 pipelineLayout（所有管线共用）</td><td>init 时建；这就是为什么改槽位数会牵动管线</td></tr>
+    <tr><td class="mono">push constant</td><td>128 字节</td><td>小参数直传，不占描述符</td></tr>
+  </table>
+
+  <div class="note">
+    <span class="nl">三个「槽位数」别搞混，它们不一样</span>
+    <code>kMaxTexSlots = 8</code> 是常量上限；<code>VkDescriptors::_texSlotCount</code> 是按设备上限裁过之后的<b>实际可用值</b>（注释里那句「桌面卡通常 32、Intel / MoltenVK 可能 8，按上限裁，不够时只减少槽位，不崩」）；<code>frameSlotCount = 2</code> 是帧在飞数量（两套 uniform 环 + 两套描述符集）。<br><br>
+    GL 端有对应的耦合：<b>纹理槽数不能超过 GL 纹理单元数量</b>，所以这个值改动要同时看两边。
+  </div>
+
+  <p><b>同步只有两处，但都很关键。</b> 帧级：<code>VkFrames</code> 两个槽位，每槽一个 fence + 一个 imageAvailable；第 N 帧等第 N-2 帧的 fence 完成，所以 GPU 在跑时 CPU 已经在录下一帧。首帧的 fence 预置成已信号，否则第一帧就会卡在等待上。图像级：renderDone 信号量<b>按交换链图像下标</b>分配，不是按帧——这是躲 VUID 00067 的标准做法。资源级：<code>DeletionQueue::kLagFrames = 2</code>，且 flush 必须在 fence 之后、帧号自增之前。</p>
+
+  <div class="box">
+    <span class="nl">「驱动 API」那一层，我们有代码吗？</span>
+    <b>几乎没有。</b> 这一层属于 SDK，不属于我们——我们做的是<b>按正确顺序调用它</b>，不是实现它。硬要说「我们写的」，只有三样：<br><br>
+    <b>① 函数指针表。</b> instance / device 级 <code>vkGet*ProcAddr</code> 取地址。因为像 <code>vkCmdBeginRenderingKHR</code> 这种扩展函数，header 里只有声明，不取地址就是空指针——代码里因此存了 <code>PFN_vkCmdBeginRenderingKHR</code>，用之前还检查是否解析成功，失败就报错。<br>
+    <b>② 着色器编译。</b> GLSL → SPIR-V 在构建期由 <code>glslangValidator</code> 完成，缺了直接 configure 失败。<br>
+    <b>③ 同步与生命周期策略。</b> 什么时候等 fence、什么时候 reset、删一个资源要等几帧——这属于「调度」，是真正的设计工作。<br><br>
+    结论：<b>越往下，代码越少、责任越大。</b> L5 近似零行，L6（同步）反而是最费脑子的那一层。
+  </div>
+</section>
+
+<section id="s6">
+  <div class="sec-head"><span class="sec-num">06</span><span class="sec-title">迁移的真实形态：不是两套代码，是一排开关</span></div>
+
+  <p class="lead">这是这个项目最值得说的架构特征。它没有「GL 分支 / VK 分支」，而是<b>每个绘制对象自己决定走哪条路径</b>，由 <code>RenderSettings</code> 里几个 bool 控制。</p>
+
+  <table>
+    <tr><th>开关</th><th>管什么</th><th>状态</th></tr>
+    <tr><td class="mono">lineUseRHI</td><td>线条走 RHI 还是 legacy GL</td><td class="ok">M2，注释写明已过逐像素等价对比</td></tr>
+    <tr><td class="mono">modelUseRHI</td><td>模型走 RHI 还是 legacy GL</td><td class="ok">M4.2，GL 下可切换做 A/B</td></tr>
+    <tr><td class="mono">textUseRHI</td><td>文字走 SDF 图集还是 legacy 字形</td><td class="ok">D4，两端都已走 SDF</td></tr>
+  </table>
+
+  <p>落到代码里是同一个句式，在 <code>mesh_pass</code>、<code>Line</code>、<code>Text</code> 里反复出现：</p>
+
+<pre><span class="c">// 形状一致：VK 上无路可退，必须是 RHI；GL 上由开关决定</span>
+bool useRHI = device &amp;&amp; (device-&gt;<span class="f">backend</span>() == rhi::Backend::Vulkan
+                          || settings.<span class="f">modelUseRHI</span>);
+<span class="k">if</span> (useRHI) {  <span class="c">// RHI：句柄 + 命令列表</span> }
+<span class="k">else</span>        {  <span class="c">// legacy：直接调 GL</span> }</pre>
+
+  <p>好处很具体：<b>可以同帧比对。</b> <code>selfTestAB</code>（M4.2 验证设施）就干这个——同一帧两条路径各画一次，逐像素比。这比「截图看一眼差不多」强一个量级，也比「迁完再说」安全一个量级。它把「两套路径并存」从风险变成了可测量。</p>
+
+  <div class="warn">
+    <span class="nl">代价必须说清</span>
+    每个绘制对象两条路径，代码量翻倍，而且<b>过期开关会变成谎话</b>：一条没人跑的 legacy 路径就是死代码，但布尔值看起来还很正经，后来的人会以为它还在用。<br><br>
+    纪律只有一条：<b>迁完就删开关和 legacy 路径</b>，别留着当安全绳。按这个标准，<code>textUseRHI</code> 已经两头同向了，可以埋；<code>modelUseRHI</code> 在 GL 上还有对比价值，先留。
+  </div>
+</section>
+
+<section id="s7">
+  <div class="sec-head"><span class="sec-num">07</span><span class="sec-title">鼠标点一下，背后发生了什么</span></div>
+
+  <p class="lead">这是全仓库最完整的一条链路，跨了 app、render、rhi、驱动四层。它的形状是被物理事实逼出来的：<b>屏幕上的像素在 GPU 上，CPU 不能当场问「这里是什么」。</b></p>
+
+  <div class="chain">
+    <div class="cg"><div class="cn">N</div><div class="cb"><span class="lay">app</span>左键抬起 → <code>RenderSystem::onMouseLeftUp</code> → <code>requestPick(x, y)</code>。<span class="gray">只记坐标，不做事。</span></div></div>
+    <div class="cg"><div class="cn">N</div><div class="cb"><span class="lay">render</span><code>m_pickReq.pending = true</code>；坐标从窗口坐标换算到帧缓冲像素。窗口尺寸与帧缓冲尺寸不同时这一步不能省，<b>这就是 <code>InitDesc</code> 要传两套尺寸的原因</b>。</div></div>
+    <div class="cg"><div class="cn">N</div><div class="cb"><span class="lay">render</span><code>CPickPass</code> 把场景画进 <code>m_pickRT</code>，每个物体涂成自己的 ID 颜色。<span class="gray">看着是画面，实际是数据。</span></div></div>
+    <div class="cg"><div class="cn">N+1</div><div class="cb"><span class="lay">rhi</span>回读那 1 个像素。<b>必须等下一帧</b>：这一帧的提交还没完成，现在读会读到上一帧内容。</div></div>
+    <div class="cg"><div class="cn">N+1</div><div class="cb"><span class="lay">render</span>解码 ID → 写 <code>settings.selectedId</code>（0 = 没选中，<code>BaseDraw::GetID</code>）。</div></div>
+    <div class="cg"><div class="cn">N+2</div><div class="cb"><span class="lay">render</span>主 Pass 里那个物体被淡蓝高亮，强度 <code>highlightStrength</code>；悬停走 <code>hoverId</code> + <code>hoverStrength</code>。</div></div>
+  </div>
+
+  <p>悬停是同一套再加两层节流：位移阈值（<code>m_hoverLastX/Y</code>）和冷却帧数（<code>m_hoverCooldown</code>）。不节流的话，鼠标每动一像素就要画整张 ID 图——注释里也写了「避免每次 mousemove 都渲染整幅 ID 图」。</p>
+
+  <div class="note">
+    <span class="nl">这条链路说明两件事</span>
+    一、<b>回读是架构级成本</b>：任何「点一下看结果」的功能，天然带一到两帧延迟，UI 不能同步等。<br>
+    二、这只是「ID 图拾取」，不是 GPU 查询。以后要做大规模拾取，这条撑不住，得先用 <code>aabb</code> 在 CPU 上做射线求交预筛——包围盒已经在 <code>mesh</code> 里存着，只是现在没接这条路。
+  </div>
+</section>
+
+<section id="s8">
+  <div class="sec-head"><span class="sec-num">08</span><span class="sec-title">一个模型是怎么进到显存的</span></div>
+  <p class="lead">从 <code>res/model/duck.dae</code> 到屏幕上的一只鸭子，中间四个文件分工明确。</p>
+
+  <table>
+    <tr><th>文件</th><th>管什么</th><th>为什么单独存在</th></tr>
+    <tr><td class="mono">model.cpp</td><td>Assimp 读文件 → 节点树 / 网格 / 材质 / 动画</td><td>格式转换与场景图，跟 GPU 无关</td></tr>
+    <tr><td class="mono">model_data.h</td><td>中间数据（顶点、索引、材质参数）</td><td>把「Assimp 的结构」和「引擎的结构」隔开</td></tr>
+    <tr><td class="mono">mesh.cpp</td><td>网格 + <code>aabb</code> 包围盒</td><td>包围盒给 <code>frustumCull</code> 用（模型级保守剔除，像素不变，只省 draw）</td></tr>
+    <tr><td class="mono">mesh_pass.cpp</td><td>把网格真正画出去，两条路径</td><td>它就是 <code>modelUseRHI</code> 分支所在地</td></tr>
+  </table>
+
+  <p>材质走 <code>PassColor</code> / <code>PassTexture</code>（两个正交的绘制变体），贴图走 <code>image.cpp</code>（stb_image）→ RHI <code>createTexture</code>。<code>PassColor</code> 和 <code>PassTexture</code> 分开，是为了让「纯色 / 贴图」不必在 shader 里做分支——<b>着色器变体比运行期分支便宜。</b></p>
+
+  <p><code>Utf8IOSystem</code> 很不起眼但很关键：Windows 上路径是 GBK，Assimp 要 UTF-8。<b>「中文目录下的模型读不进来」，九成是这里，而不是加载代码。</b></p>
+
+  <div class="warn">
+    <span class="nl">一处迁移期典型写法，收尾时要清</span>
+    <code>model.cpp</code> 里有一处判断是「<code>backend != Vulkan</code> 才做某段后处理」。这类「先假定是 GL、再补 VK 特例」的写法不会报错，但会让两端行为悄悄不同。收尾时应该反过来写成「默认正确 + 例外显式」，否则半年后没人知道哪条是基准。
+  </div>
+</section>
+
+<section id="s9">
+  <div class="sec-head"><span class="sec-num">09</span><span class="sec-title">两个后端，真实差在这六处</span></div>
+  <p class="lead">除这六条，其他都应该由契约吸收掉。差在这六条之外，就说明抽象没写到位。</p>
+
+  <div class="chain">
+    <div class="cg"><div class="cn">1</div><div class="cb"><b>overlay 插入点。</b> VK 在 render pass 内、场景之后；GL 在默认帧缓冲、关掉 <code>GL_FRAMEBUFFER_SRGB</code> 之后。<span class="gray">ImGui 的 GL backend 会改全局状态。</span></div></div>
+    <div class="cg"><div class="cn">2</div><div class="cb"><b>回读行序。</b> <code>RenderSystem</code> 里有一行 <code>row = VK ? (127 - cy) : cy</code>。Vulkan 图像原点在上方，回读是倒的。<span class="gray">PPM 导出、拾取、A/B 对比都会撞上。</span></div></div>
+    <div class="cg"><div class="cn">3</div><div class="cb"><b>视口 y 轴。</b> 同样的翻转还出现在视口与拾取坐标，所以这类换算集中写、不要散落——散落就是逐个漏。</div></div>
+    <div class="cg"><div class="cn">4</div><div class="cb"><b>状态是否全局。</b> GL 有 <code>GLStateSnapshot</code>（深度、深度写、混合、剔除、FBO、视口、裁剪、多边形模式、线偏移），进 Pass 存、出 Pass 还原；VK 没有全局状态。</div></div>
+    <div class="cg"><div class="cn">5</div><div class="cb"><b>绑定时机。</b> GL <code>bindTexture</code> 立刻生效；VK 只记「set1 的第 slot 个是哪张图」，到 draw 才 <code>vkCmdBindDescriptorSets</code>，连续相同就跳过。</div></div>
+    <div class="cg"><div class="cn">6</div><div class="cb"><b>命令何时执行。</b> GL 的 <code>createCommandList()</code> 返回主列表本身，调用即刻生效；VK 录完才在 <code>endFrame</code> 提交。</div></div>
+  </div>
+
+  <p>第 6 条是唯一一条<b>会悄悄出错</b>的：GL 上如果你录的顺序和提交顺序不一致，画面错乱但不报错。这条已经在契约里写清了——<code>IRHIDevice.h</code> 里「硬约束一：录制顺序必须等于提交顺序」和「硬约束二：多线程并行录制只对 Vulkan 成立」，<code>docs/4-RHI接口契约.md</code> 也有对应的一节。这部分是补齐了的，不用再动。</p>
+
+  <p>另外顺带一条不算差异、但常被误认为差异的：<b>Vulkan 的深度范围是 0..1，GL 是 -1..1</b>；<b>Vulkan 的 y 朝下，GL 朝上</b>。投影矩阵要按后端选，这不是 bug，是两套裁剪空间定义。</p>
+</section>
+
+<section id="s10">
+  <div class="sec-head"><span class="sec-num">10</span><span class="sec-title">验证设施，也是架构的一部分</span></div>
+
+  <p class="lead">这个仓库有个不常见的优点：<b>它把「怎么证明自己对」写进了运行时代码</b>，不是只写在文档里。全部挂在环境变量上，不影响正常跑。</p>
+
+  <table>
+    <tr><th>开关 / 设施</th><th>验证什么</th><th>性质</th></tr>
+    <tr><td class="mono">RHI_SMOKE</td><td>最小三角形：RHI 链路通不通</td><td class="ok">永久</td></tr>
+    <tr><td class="mono">RHI_TEXQUAD</td><td>贴图四边形：纹理 + 描述符链路</td><td class="ok">永久</td></tr>
+    <tr><td class="mono">RHI_RT_TEST</td><td>离屏 RT + 回读中心/角落像素，两阶段状态机</td><td class="ok">永久（B4）</td></tr>
+    <tr><td class="mono">RHI_PICK_TEST</td><td>启动后自动在屏幕中心拾取一次</td><td class="ok">永久（D2）</td></tr>
+    <tr><td class="mono">RHI_CHURN</td><td>N 轮建/删纹理，压延迟销毁队列</td><td class="ok">永久（V3-0）</td></tr>
+    <tr><td class="mono">RHI_VK_VALIDATION</td><td>验证层开关（1 强制开 / 0 强制关，Debug 默认开）</td><td class="ok">永久（A1）</td></tr>
+    <tr><td class="mono">RHI_PROBE</td><td>第 30 帧回读屏幕中心</td><td class="wait">注释自述「M3 验证用，之后可移除」</td></tr>
+    <tr><td class="mono">RHI_DUMP</td><td>导出整帧 PPM</td><td class="ok">注释写明「正式调试设施」</td></tr>
+    <tr><td class="mono">selfTestAB</td><td>同帧两条路径各画一次，逐像素比</td><td class="ok">M4.2，迁移期最有价值的一个</td></tr>
+    <tr><td class="mono">RHI_VIEWPORTS</td><td>多视口划分</td><td class="ok">门禁里跑 4 视口</td></tr>
+    <tr><td class="mono">RHI_RESIZE_AT</td><td>指定帧改窗口尺寸，测交换链重建</td><td class="ok">永久</td></tr>
+  </table>
+
+  <p>门禁脚本 <code>tools/rhi_gate.sh</code> 把它们串成 9 次运行 + 一次分层检查：GL 四跑、VK 五跑。<b>VK 侧标准比 GL 严一档——验证层出现 error 即失败，WARN 不拦。</b> 这个不对称是有意的：VK 的错误最容易被「画面看着还行」掩盖。</p>
+
+  <p>脚本里还有一处真踩过的坑：macOS 上必须把 <code>DYLD_LIBRARY_PATH</code> 显式传给 <code>env</code>，因为部分环境（沙箱 / 硬化运行时）会在 exec 时剥掉继承变量，MoltenVK 找不到 ICD，<code>vkCreateInstance</code> 直接返回 -6。<b>这种坑不可能靠读文档预见，只能写进脚本。</b></p>
+</section>
+
+<section id="s11">
+  <div class="sec-head"><span class="sec-num">11</span><span class="sec-title">现在的真实边界，和下一步</span></div>
+  <p class="lead">按当前代码，不按计划。前几轮列过的六条里，四条已经关掉了。</p>
+
+  <table>
+    <tr><th>事</th><th>现状</th><th>说明</th></tr>
+    <tr><td class="nw">命令列表泄漏</td><td class="ok">已修</td><td><code>destroyCommandList</code> 已进接口：VK 覆写（主列表由设备持有，传主列表会告警忽略），GL 空实现；文档写明「附加列表必须显式配对销毁，不许每帧隐式累积」</td></tr>
+    <tr><td class="nw"><code>framebufferId</code></td><td class="ok">已删</td><td>契约层不再有 GL 概念直通</td></tr>
+    <tr><td class="nw">纹理槽太少</td><td class="ok">已修</td><td><code>kMaxTexSlots</code> 已是 8，实际可用数按设备上限裁</td></tr>
+    <tr><td class="nw">句柄 id 不回收</td><td class="ok">已修</td><td><code>HandleTable</code> 有 <code>_freeSlots</code>，先出后进 + 代际自增（注释待更新，见第 04 节）</td></tr>
+    <tr><td class="nw">录制顺序契约</td><td class="ok">已写</td><td><code>IRHIDevice.h</code> 两条硬约束 + <code>docs/4-RHI接口契约.md</code> 对应章节</td></tr>
+    <tr><td class="nw">VK 上的阴影</td><td class="no">没有</td><td>不是「待迁」，是「还没写」：<code>shaders_vk</code> 无 shadow 着色器，<code>CShadowPass</code> 在 VK 下被跳过</td></tr>
+    <tr><td class="nw">MRT</td><td class="wait">没有</td><td><code>AttachmentLayout</code> 是单数。做延迟渲染那天必须改成数组 + count，会牵动所有建管线的地方</td></tr>
+    <tr><td class="nw">VK 多视口</td><td class="gray">未查清</td><td>GL 靠 <code>model_multiview.geom</code>；<code>shaders_vk</code> 没有对应着色器。要么没做，要么用了别的路子——需要你确认</td></tr>
+    <tr><td class="nw">GL 真并行录制</td><td class="no">不可能</td><td>永久约束，已写进硬约束二</td></tr>
+    <tr><td class="nw">legacy 路径</td><td class="wait">该收摊</td><td>开关与旧 GL 路径还并存，见第 06 节的纪律</td></tr>
+  </table>
+
+  <p>下一步最该做的不是继续加特性，而是<b>收摊</b>：把已经两头同向的 <code>textUseRHI</code> 埋掉，把没人跑的 legacy 路径逐条删。迁移项目最常见的失败不是迁不动，是<b>迁完一直不收摊，两套路径永远都在</b>，最后谁也不敢删。</p>
+
+  <div class="warn">
+    <span class="nl">一个和代码无关、但必须先定的事</span>
+    代码注释和 <code>check_layers.cmake</code> 引用 <code>docs/ARCHITECTURE_INTERFACES.md</code>（§2.1 / §3.1 / §4.5），还引用了 <code>C1a C1b C5 A1 B1 D4 D5 D7 M3 V3-0 L0 L1</code> 这批条款编号，<b>但仓库里没有这个文件</b>。<br><br>
+    也就是说：最权威的那份架构文档现在不存在，规则只活在注释和这个 HTML 里。要么把这份改名为它，要么在文末附条款索引——建议后者，文件名保持 <code>1-架构设计</code>，把每个编号的意思固定下来。
+  </div>
+
+  <p>三件「到那天一定逼你改结构」的事，现在不用做，但心里要有数：<b>bindless</b>（句柄从「一个资源一个 id」变成「一段 id」）、<b>自动同步的 Render Graph</b>（四个 Pass 的顺序和屏障从手写变成编译出来）、<b>多线程录制</b>（VK 可以，GL 不可能，这条永久留在契约上）。</p>
+</section>
+
+</main>
+
+<footer>
+  依据当前仓库代码 · 引用只到文件 + 符号名，不写行号（行号会漂移）<br>
+  配套：<code>0-RHI图解.html</code> 讲「一帧怎么穿过六层」，这份讲「这个项目具体有什么」
+</footer>
+
+</div>
+</body>
+</html>
