@@ -173,8 +173,11 @@ void VkCommandList::setUniform(const char* name, const UniformValue& value) {
             if (u.isMat4) {
                 std::memcpy(dst, value.data, 16 * sizeof(float));
                 // Reversed-Z 修正只作用于投影类矩阵（uProjMat 天空盒/uMatrixMVP/
-                // uViewProj）；纯视图矩阵（uViewMat）不做——名字含 "Proj" 判别
-                if (std::strstr(name, "Proj") != nullptr) {
+                // uViewProj）；纯视图矩阵（uViewMat）不做。判别 = 名字含 "Proj"
+                // 或 "MVP"——与旧回退映射一致（B6 反射表曾漏掉后者，宽线是
+                // 唯一用 uMatrixMVP 且开深度测试的管线，z 域错乱被裁剪/遮挡）
+                if (std::strstr(name, "Proj") != nullptr
+                    || std::strstr(name, "MVP") != nullptr) {
                     applyReversedZCorrection(dst);
                 }
             } else if (value.type == UniformValue::Type::Vec3) {

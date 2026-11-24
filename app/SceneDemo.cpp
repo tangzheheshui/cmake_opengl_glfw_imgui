@@ -42,6 +42,13 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     line_x->setColor({1, 0, 0});
     line_y->setColor({0, 1, 0});
     line_z->setColor({0, 0, 1});
+    // D1 收尾验证开关：RHI_LINE_WIDTH=<px> 加宽坐标轴线（观察 AA 边缘与圆头）
+    if (const char* w = std::getenv("RHI_LINE_WIDTH")) {
+        const float lw = static_cast<float>(std::atof(w));
+        line_x->setWidth(lw);
+        line_y->setWidth(lw);
+        line_z->setWidth(lw);
+    }
 
     const auto start = std::chrono::high_resolution_clock::now();
     // 地面（GL 专属：calculate 混合 CPU/GPU 操作，VK 模式跳过）
