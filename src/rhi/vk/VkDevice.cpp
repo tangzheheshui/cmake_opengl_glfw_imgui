@@ -186,6 +186,7 @@ VulkanDevice::~VulkanDevice() {
     _delQueue.flushAll();
     destroySwapchainObjects();
     _frames.shutdown();
+    if (_mlWorker.joinable()) _mlWorker.join();
     if (_mlBuf) {
         vkDestroyBuffer(_device, _mlBuf, nullptr);
         _memAlloc.free(_mlMem);
@@ -714,9 +715,7 @@ bool VulkanDevice::beginFrame() {
 
         // V3-2：帧内 uniform 环归零。上一帧命令已执行完（fence 已等待），
         // 现在整块复用是安全的；offset 0 留给"没调 setDrawUniforms 的绘制"。
-        // 先归零本槽位的 uniform 环（命令列表 beginFrameSlot 里要读默认偏移），
-        // 再让所有命令列表开始录制本帧
-        _descs.beginFrame(_frames.index());
+        // 命令列表各自归零本槽位的 uniform 环并开始录制
         if (_commandList) _commandList->beginFrameSlot(_frames.index());
         for (auto& l : _extraLists) l->beginFrameSlot(_frames.index());
         multListSelfTest();
@@ -732,6 +731,9 @@ void VulkanDevice::endFrame() {
 
     // B1：dynamic rendering 无 renderpass finalLayout，present 前手动转回 PRESENT_SRC。
     // 仅在本帧真正渲染过（布局已被转到 COLOR_ATTACHMENT）时需要；空帧已是 PRESENT。
+    // V3-14：并发录制的工作线程必须在结束命令缓冲/提交之前 join
+    if (_mlWorker.joinable()) _mlWorker.join();
+
     // V3-6：提交顺序 = 用过的附加列表（按创建顺序）→ 主列表。
     // 主列表最后执行，负责最终呈现屏障（UI 叠加也录在它上面）。
     std::vector<VkCommandBuffer> cbs;
@@ -1656,6 +1658,8 @@ void VulkanDevice::multListSelfTest() {
 
     if (!_mlTest) {
         _mlTest = true;
+        const char* v = std::getenv("RHI_VK_MULTILIST");
+        _mlMode = (v && std::atoi(v) >= 2) ? 2 : 1;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size        = sizeof(uint32_t);
         bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -1670,12 +1674,23 @@ void VulkanDevice::multListSelfTest() {
         _mlList = static_cast<VkCommandList*>(createCommandList());
         // 新列表加入 _extraLists 时本帧的 beginFrameSlot 循环已经跑过，这里补一次
         if (_mlList) _mlList->beginFrameSlot(_frames.index());
-        ENGINE_LOG_INFO("[VK][multilist] self-test enabled (secondary list + ordering check)");
+        ENGINE_LOG_INFO("[VK][multilist] self-test enabled (mode=%d: %s)",
+                        _mlMode, _mlMode == 2 ? "worker thread" : "main thread");
     }
 
     if (_mlList) {
-        vkCmdFillBuffer(_mlList->commandBuffer(), _mlBuf, 0, sizeof(uint32_t), 0xAAAAAAAAu);
-        _mlList->markUsed();
+        if (_mlMode == 2) {
+            // 真并发：工作线程往附加列表里录命令，主线程同时录场景。
+            // 两条列表各持自己的 uniform 环与命令缓冲，只有共享设备的只读表。
+            _mlWorker = std::thread([this] {
+                vkCmdFillBuffer(_mlList->commandBuffer(), _mlBuf, 0,
+                                sizeof(uint32_t), 0xAAAAAAAAu);
+                _mlList->markUsed();
+            });
+        } else {
+            vkCmdFillBuffer(_mlList->commandBuffer(), _mlBuf, 0, sizeof(uint32_t), 0xAAAAAAAAu);
+            _mlList->markUsed();
+        }
     }
 
     // 读第 20 帧的值：此时前几帧的提交早已完成（帧在飞 2 + 延迟销毁滞后）
@@ -1820,7 +1835,7 @@ void VulkanDevice::createDescriptorObjects() {
     if (texSlots > kMaxTexSlots) texSlots = kMaxTexSlots;
     ENGINE_LOG_INFO("[VK] texture slots = %u (maxBoundDescriptorSets=%u)",
                     texSlots, boundSets);
-    if (!_descs.init(_device, minAlign, &_memAlloc, VkFrames::kDefaultSlots, texSlots, nameFn)) {
+    if (!_descs.init(_device, minAlign, &_memAlloc, texSlots, nameFn)) {
         ENGINE_LOG_ERROR("[VK] descriptor objects init failed");
     }
     // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用。

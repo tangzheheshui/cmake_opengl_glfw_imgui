@@ -5,30 +5,42 @@
 #include "VkCommandList.h"
 #include "VkDevice.h"
 #include "../FormatInfo.h"
+#include <thread>
 
 namespace rhi {
 
 VkCommandList::VkCommandList(VulkanDevice* device, bool primary)
     : _device(device)
-    , _primary(primary)
-    , _uniformOffset(device->defaultUniformOffset()) {
+    , _primary(primary) {
 }
 
 VkCommandList::~VkCommandList() {
-    if (_cmdBuffers.empty()) return;
-    VkCommandPool pool = _device->commandPool();
-    if (pool != VK_NULL_HANDLE) {
-        vkFreeCommandBuffers(_device->vkDeviceHandle(), pool,
-                             static_cast<uint32_t>(_cmdBuffers.size()), _cmdBuffers.data());
+    for (auto& r : _rings) r.shutdown();
+    _rings.clear();
+    // 命令缓冲随命令池一起销毁（池是这条列表私有的）
+    if (_pool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(_device->vkDeviceHandle(), _pool, nullptr);
+        _pool = VK_NULL_HANDLE;
     }
     _cmdBuffers.clear();
 }
 
 bool VkCommandList::initCommandBuffers(uint32_t slots) {
     if (slots < 1) slots = 1;
+
+    // 每条列表一个私有命令池（多线程录制要求：同一个池不能跨线程并发录制）
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.queueFamilyIndex = _device->queueFamily();
+    pci.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    if (vkCreateCommandPool(_device->vkDeviceHandle(), &pci, nullptr, &_pool) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] command list pool create failed");
+        _pool = VK_NULL_HANDLE;
+        return false;
+    }
+
     _cmdBuffers.resize(slots, VK_NULL_HANDLE);
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    ai.commandPool        = _device->commandPool();
+    ai.commandPool        = _pool;
     ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = slots;
     if (vkAllocateCommandBuffers(_device->vkDeviceHandle(), &ai, _cmdBuffers.data()) != VK_SUCCESS) {
@@ -36,7 +48,35 @@ bool VkCommandList::initCommandBuffers(uint32_t slots) {
         _cmdBuffers.clear();
         return false;
     }
+
+    // V3-14：每槽位一条 uniform 环 + 一个指向它的 set0
+    _rings.resize(slots);
+    _frameSets.assign(slots, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < slots; ++i) {
+        if (!_rings[i].init(_device->vkDeviceHandle(), _device->memAllocator(),
+                            1024u * 1024u, _device->minUboAlignment())) {
+            ENGINE_LOG_ERROR("[VK] command list uniform ring init failed (slot %u)", i);
+            return false;
+        }
+        if (!_device->createFrameSet(_rings[i].buffer(), i, _frameSets[i])) {
+            ENGINE_LOG_ERROR("[VK] command list frame set init failed (slot %u)", i);
+            return false;
+        }
+    }
     return true;
+}
+
+// 调试期检查：一条命令列表同时只能被一个线程录制（多线程录制 = 每线程一条列表）
+void VkCommandList::claimThread() {
+#ifndef NDEBUG
+    const std::thread::id me = std::this_thread::get_id();
+    if (!_ownerSet) {
+        _ownerThread = me;
+        _ownerSet = true;
+    } else if (_ownerThread != me) {
+        ENGINE_LOG_ERROR("[VK] command list used from two threads (list is single-threaded)");
+    }
+#endif
 }
 
 // V3-12：本 Pass 实际附件格式（beginRenderPass 时算一次，bindPipeline 比对）
@@ -61,7 +101,13 @@ void VkCommandList::beginFrameSlot(uint32_t slot) {
     }
     // 绑定状态按帧归零：新命令缓冲里旧绑定不再有效
     for (uint32_t i = 0; i < kMaxTexSlots; ++i) _texSlots[i] = TextureHandle{};
-    _uniformOffset = _device->defaultUniformOffset();
+    _ownerSet = false;
+    // 帧内 uniform 环归零，offset 0 预留零块（没调 setDrawUniforms 的绘制用它）
+    detail::FrameUniformRing& ring = _rings[slot];
+    ring.reset();
+    static const uint8_t kZeros[kDrawUniformsSize] = {};
+    const uint32_t zeroOff = ring.alloc(kZeros, kDrawUniformsSize);
+    _uniformOffset = (zeroOff == UINT32_MAX) ? 0 : zeroOff;
     for (auto& s : _lastSets) s = VK_NULL_HANDLE;
     _lastOffset  = UINT32_MAX;
     _pushDirty   = false;
@@ -318,6 +364,7 @@ void VkCommandList::bindIndexBuffer(BufferHandle buffer) {
 }
 
 void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
+    claimThread();
     // V3-2：只记录槽位。纹理在创建期已写好自己的描述符集（sampler + view 不变），
     // draw 时直接绑 set1..4 —— 这里不再 vkUpdateDescriptorSets。
     if (!texture.valid() || slot >= _device->texSlotCount()) return;
@@ -326,12 +373,29 @@ void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
 
 void VkCommandList::setDrawUniforms(UniformBlockHandle /*block*/, const void* data, uint32_t size) {
     _used = true;
+    claimThread();
     // V3-2：数据追加进帧内 uniform 环（256B 对齐），draw 时作为 set0 的动态偏移。
     // block 句柄不再承载 GPU 数据（GL 后端本来就是哑句柄）。
     if (!data || size == 0) return;
-    const uint32_t off = _device->allocDrawUniforms(data, size);
+
+    // 尾部清零：块尾可能残留上一块的数据，着色器读到的必须是确定值
+    static thread_local uint8_t block[kDrawUniformsSize];
+    const uint32_t n = size < kDrawUniformsSize ? size : kDrawUniformsSize;
+    std::memcpy(block, data, n);
+    if (n < kDrawUniformsSize) std::memset(block + n, 0, kDrawUniformsSize - n);
+
+    detail::FrameUniformRing& ring = _rings[_slot];
+    uint32_t off = ring.alloc(block, kDrawUniformsSize);
+    if (off == UINT32_MAX) {
+        // 环满：扩容并重写本槽位的 set0（buffer 换了）
+        if (!ring.grow(ring.capacity() * 2) ||
+            !_device->createFrameSet(ring.buffer(), _slot, _frameSets[_slot])) {
+            ENGINE_LOG_ERROR("[VK] draw uniform ring grow failed; draw uses stale block");
+            return;
+        }
+        off = ring.alloc(block, kDrawUniformsSize);
+    }
     if (off != UINT32_MAX) _uniformOffset = off;
-    else ENGINE_LOG_WARN_ONCE("[VK] draw uniform ring exhausted; draw uses stale block");
 }
 
 void VkCommandList::setViewport(float x, float y, float w, float h) {
@@ -362,9 +426,10 @@ void VkCommandList::applyPushConstants() {
 // 纹理槽没绑时用白纹理兜底（避免描述符未定义）。
 // 相邻绘制常共用同一组纹理 + 同一块 uniform，缓存命中就跳过绑定命令。
 void VkCommandList::bindDescriptorState() {
+    claimThread();
     const uint32_t texSlots = _device->texSlotCount();
     VkDescriptorSet sets[1 + kMaxTexSlots];
-    sets[0] = _device->frameUniformSet();
+    sets[0] = _frameSets[_slot];
     for (uint32_t i = 0; i < texSlots; ++i) {
         const VkDescriptorSet texSet =
             _device->textureSet(_texSlots[i].valid() ? _texSlots[i] : TextureHandle{});
@@ -387,6 +452,7 @@ void VkCommandList::bindDescriptorState() {
 
 void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
     if (!_inRenderPass || !_curPipeline.valid() || _formatMismatch) return;
+    claimThread();
     _used = true;
     applyPushConstants();
     bindDescriptorState();
@@ -396,6 +462,7 @@ void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
 void VkCommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex) {
     if (!_inRenderPass || !_curPipeline.valid() || !_curIndexBuffer.valid()) return;
     if (_formatMismatch) return;
+    claimThread();
     _used = true;
     applyPushConstants();
     bindDescriptorState();

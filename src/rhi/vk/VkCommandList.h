@@ -6,7 +6,9 @@
 #define VkCommandList_h
 
 #include "../IRHICommandList.h"
+#include "../detail/FrameUniformRing.h"
 #include "VkCommon.h"
+#include <thread>
 
 namespace rhi {
 
@@ -64,9 +66,21 @@ private:
     // 通过 _device->pipelineLayout() 访问
 
     bool _primary = true;
+    // V3-14：每条列表自己的命令池。Vulkan 规定同一个命令池不能跨线程并发录制，
+    // 多线程录制的前提就是"一线程一列表一命令池"。
+    VkCommandPool _pool = VK_NULL_HANDLE;
     std::vector<VkCommandBuffer> _cmdBuffers;   // 下标 = 帧槽位
+    // V3-14：每条列表自己按帧槽位持有一条 uniform 环 + 对应的 set0。
+    // 这是多线程录制的前提——两条列表各写各的环，不抢游标。
+    std::vector<detail::FrameUniformRing> _rings;
+    std::vector<VkDescriptorSet> _frameSets;
     uint32_t _slot = 0;
     bool     _used = false;
+
+    // 调试期线程归属检查：一条列表同时只能被一个线程录制
+    std::thread::id _ownerThread;
+    bool            _ownerSet = false;
+    void claimThread();
 
     PipelineHandle _curPipeline;
     BufferHandle   _curVertexBuffer;

@@ -26,6 +26,7 @@
 #include <string>
 #include <functional>
 #include <memory>
+#include <thread>
 
 namespace rhi {
 
@@ -85,8 +86,9 @@ public:
     IRHICommandList* createCommandList() override;
     // V3-9：结束附加列表生命周期（延迟到 GPU 用完再释放）
     void destroyCommandList(IRHICommandList* list) override;
-    // 命令池（命令列表按槽位分配命令缓冲用）
+    // 设备级命令池（一次性提交用；命令列表各自持有私有池）
     VkCommandPool commandPool() const { return _commandPool; }
+    uint32_t      queueFamily() const { return _queueFamily; }
     uint64_t nativeBuffer(BufferHandle h)   const override;
     uint64_t nativeTexture(TextureHandle h) const override;
     uint64_t nativePipeline(PipelineHandle h) const override;
@@ -113,13 +115,11 @@ public:
     VkPipelineLayout   pipelineLayout() const { return _descs.pipelineLayout(); }
     uint32_t           texSlotCount() const { return _descs.texSlotCount(); }
 
-    // ---- V3-2 绑定层：命令列表用的内部接口（实现在 VkDescriptors）----
-    VkDescriptorSet frameUniformSet() const { return _descs.frameSet(_frames.index()); }
-    uint32_t        defaultUniformOffset() const {
-        return _descs.defaultUniformOffset(_frames.index());
-    }
-    uint32_t        allocDrawUniforms(const void* data, uint32_t size) {
-        return _descs.allocDrawUniforms(_frames.index(), data, size);
+    // ---- V3-14：命令列表按帧槽位自持 uniform 环，设备只提供创建期资源 ----
+    VkMemoryAllocator* memAllocator() { return &_memAlloc; }
+    uint32_t           minUboAlignment() const { return _descs.minAlign(); }
+    bool createFrameSet(VkBuffer ringBuffer, uint32_t tag, VkDescriptorSet& outSet) {
+        return _descs.createFrameSet(ringBuffer, tag, outSet);
     }
     VkDescriptorSet fallbackTextureSet(uint32_t slot) const { return _descs.fallbackSet(slot); }
     // 纹理的采样描述符集。上传还没执行（帧内创建 → 延迟到下一帧，布局仍是
@@ -267,6 +267,8 @@ private:
     void*          _mlMapped = nullptr;
     VkCommandList* _mlList   = nullptr;
     uint32_t       _mlFrames = 0;
+    int            _mlMode   = 0;   // 1=单线程录制  2=工作线程并发录制
+    std::thread    _mlWorker;
     bool           _churnDone = false;
     void multListSelfTest();
     void commandListChurnTest();   // RHI_CMDLIST_CHURN=<N>：创建/录制/销毁压测
