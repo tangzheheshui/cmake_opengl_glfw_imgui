@@ -10,6 +10,7 @@
 
 #include "../IRHIDevice.h"
 #include "../detail/DeletionQueue.h"
+#include "../detail/HandleTable.h"
 #include "GLProgram.h"
 #include <memory>
 #include <string>
@@ -90,6 +91,12 @@ public:
     void destroyTexture(TextureHandle) override;
     void destroyPipeline(PipelineHandle) override;
 
+    // V3-1：句柄有效性（HandleTable 的 id 范围 + gen 校验）
+    bool alive(BufferHandle h)   const override;
+    bool alive(TextureHandle h)  const override;
+    bool alive(PipelineHandle h) const override;
+    bool alive(SamplerHandle h)  const override;
+
     // ---- v2 独立采样器（B2；接口在 IRHIDevice，此前 GL 返回空实现）----
     SamplerHandle createSampler(const SamplerDesc& desc) override;
     void destroySampler(SamplerHandle h) override;
@@ -127,7 +134,7 @@ public:
     const GLRenderTarget& renderTarget(RenderTargetHandle h) const;
     // B2：设备上是否存在显式创建的独立采样器。false 时 bindTexture 完全
     // 不触碰 GL_SAMPLER_BINDING 状态，保证遗留路径行为零变化。
-    bool hasSamplers() const { return !_samplers.empty(); }
+    bool hasSamplers() const { return _samplers.size() != 0; }
 
     // C1a：构造期有效性（上下文缺失/非法 desc 时 false，工厂据此报错）
     bool initialized() const { return _initialized; }
@@ -146,12 +153,12 @@ private:
     uint64_t _frameCount = 0;
     detail::DeletionQueue _delQueue;
 
-    // 句柄 id = 数组下标 + 1（0 保留为 invalid）
-    std::vector<GLBuffer>   _buffers;
-    std::vector<GLTexture>  _textures;
-    std::vector<GLSampler>  _samplers;   // B2 独立采样器
-    std::vector<GLPipeline> _pipelines;
-    std::vector<GLRenderTarget> _renderTargets;   // B4
+    // 句柄表：id = 槽下标 + 1（0 保留为 invalid），gen 校验销毁后复用（V3-1）
+    detail::HandleTable<GLBuffer>   _buffers;
+    detail::HandleTable<GLTexture>  _textures;
+    detail::HandleTable<GLSampler>  _samplers;   // B2 独立采样器
+    detail::HandleTable<GLPipeline> _pipelines;
+    detail::HandleTable<GLRenderTarget> _renderTargets;   // B4
 
     std::unique_ptr<GLCommandList> _commandList;
 };

@@ -73,13 +73,13 @@ GLDevice::~GLDevice() {
     waitIdle();
     // V3-0：渲染目标的 FBO/RBO 此前析构不释放（泄漏）；颜色纹理在下方
     // _textures 循环统一删除。手动 destroyRenderTarget 过的槽位 fbo 已为 0。
-    for (auto& rt : _renderTargets) {
+    _renderTargets.forEach([&](GLRenderTarget& rt) {
         if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
         if (rt.fbo)      glDeleteFramebuffers(1, &rt.fbo);
-    }
-    for (auto& b : _buffers)   if (b.id) glDeleteBuffers(1, &b.id);
-    for (auto& t : _textures)  if (t.id) glDeleteTextures(1, &t.id);
-    for (auto& s : _samplers)  if (s.id) glDeleteSamplers(1, &s.id);
+    });
+    _buffers.forEach([&](GLBuffer& b) { if (b.id) glDeleteBuffers(1, &b.id); });
+    _textures.forEach([&](GLTexture& t) { if (t.id) glDeleteTextures(1, &t.id); });
+    _samplers.forEach([&](GLSampler& s) { if (s.id) glDeleteSamplers(1, &s.id); });
     // GLPipeline 持有 unique_ptr<GLProgram>，其析构负责 glDeleteProgram
     _delQueue.flushAll();   // V3-0：延迟销毁兜底（waitIdle 后执行安全）
 }
@@ -209,8 +209,8 @@ BufferHandle GLDevice::createBuffer(const BufferDesc& desc) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     (void)target;
 
-    _buffers.push_back(std::move(buf));
-    BufferHandle h; h.id = static_cast<uint32_t>(_buffers.size());
+    RhiHandle base = _buffers.alloc(std::move(buf));
+    BufferHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }
 
@@ -280,8 +280,8 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     glBindTexture(target, 0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);   // V3-0：恢复默认紧排假设
 
-    _textures.push_back(std::move(tex));
-    TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
+    RhiHandle base = _textures.alloc(std::move(tex));
+    TextureHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }
 
@@ -299,8 +299,8 @@ PipelineHandle GLDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     pipe.program = std::move(prog);
     pipe.desc    = desc;
 
-    _pipelines.push_back(std::move(pipe));
-    PipelineHandle h; h.id = static_cast<uint32_t>(_pipelines.size());
+    RhiHandle base = _pipelines.alloc(std::move(pipe));
+    PipelineHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }
 
@@ -372,33 +372,33 @@ SamplerHandle GLDevice::createSampler(const SamplerDesc& desc) {
                         desc.compareEnable ? GL_COMPARE_REF_TO_TEXTURE : GL_NONE);
     glSamplerParameteri(s.id, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
 
-    _samplers.push_back(std::move(s));
-    SamplerHandle h; h.id = static_cast<uint32_t>(_samplers.size());
+    RhiHandle base = _samplers.alloc(std::move(s));
+    SamplerHandle h; h.id = base.id; h.gen = base.gen;
     ENGINE_LOG_INFO("[GL] sampler %u created (aniso=%.1f, compare=%d)",
                     h.id, desc.maxAnisotropy, desc.compareEnable ? 1 : 0);
     return h;
 }
 
 void GLDevice::destroySampler(SamplerHandle h) {
-    if (!h.valid() || h.id > _samplers.size()) return;
-    GLSampler& s = _samplers[h.id - 1];
+    if (!_samplers.alive(h)) return;
+    GLSampler& s = _samplers.get(h.id);
     if (s.id) {
         glDeleteSamplers(1, &s.id);
-        // 清理纹理上的悬空引用（GLSampler 槽位保留为失效，id 不复用）
-        for (auto& t : _textures) {
+        // 清理纹理上的悬空引用
+        _textures.forEach([&](GLTexture& t) {
             if (t.sampler.id == h.id) t.sampler = SamplerHandle{};
-        }
+        });
     }
-    s = GLSampler{};
+    _samplers.free(h.id);
 }
 
 void GLDevice::attachSampler(TextureHandle tex, SamplerHandle s) {
-    if (!tex.valid() || tex.id > _textures.size()) return;
-    if (s.valid() && (s.id > _samplers.size() || !_samplers[s.id - 1].id)) {
+    if (!_textures.alive(tex)) return;
+    if (s.valid() && !_samplers.alive(s)) {
         ENGINE_LOG_WARN("[GL] attachSampler: sampler %u invalid", s.id);
         return;
     }
-    GLTexture& t = _textures[tex.id - 1];
+    GLTexture& t = _textures.get(tex.id);
     if (!t.id) return;   // 已销毁的纹理不记录
     t.sampler = s;       // s invalid = 解除关联
 }
@@ -407,22 +407,20 @@ void GLDevice::attachSampler(TextureHandle tex, SamplerHandle s) {
 // V3-0：销毁走 DeletionQueue 延迟到下一帧 beginFrame（帧在飞的资源不得立即删；
 // GL 命令可能在 GPU 上仍在执行）。摘句柄立即生效（id 不复用），真删除到期批量。
 void GLDevice::destroyBuffer(BufferHandle h) {
-    if (!h.valid() || h.id > _buffers.size()) return;
-    GLBuffer& b = _buffers[h.id - 1];
-    if (!b.id) return;
-    GLuint id = b.id;
-    b = GLBuffer{};
+    if (!_buffers.alive(h)) return;
+    GLuint id = _buffers.get(h.id).id;
+    if (!id) return;
+    _buffers.free(h.id);                        // 摘句柄（清 value + gen++）
     _commandList->invalidateVAOForBuffer(id);   // VAO 持属性指针，源 buffer 先摘引用
     _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
                    [id] { glDeleteBuffers(1, &id); });
 }
 
 void GLDevice::destroyTexture(TextureHandle h) {
-    if (!h.valid() || h.id > _textures.size()) return;
-    GLTexture& t = _textures[h.id - 1];
-    if (!t.id) return;
-    GLuint id = t.id;
-    t = GLTexture{};
+    if (!_textures.alive(h)) return;
+    GLuint id = _textures.get(h.id).id;
+    if (!id) return;
+    _textures.free(h.id);
     _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
                    [id] { glDeleteTextures(1, &id); });
 }
@@ -473,16 +471,17 @@ RenderTargetHandle GLDevice::createRenderTarget(const RenderTargetDesc& desc) {
         return {};
     }
 
-    _renderTargets.push_back(rt);
-    RenderTargetHandle h; h.id = static_cast<uint32_t>(_renderTargets.size());
+    const GLuint fbo = rt.fbo;
+    RhiHandle base = _renderTargets.alloc(std::move(rt));
+    RenderTargetHandle h; h.id = base.id; h.gen = base.gen;
     ENGINE_LOG_INFO("[GL] render target %ux%u created (id=%u, fbo=%u, depth=%d)",
-                    desc.width, desc.height, h.id, rt.fbo, desc.hasDepth ? 1 : 0);
+                    desc.width, desc.height, h.id, fbo, desc.hasDepth ? 1 : 0);
     return h;
 }
 
 void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
-    if (!h.valid() || h.id > _renderTargets.size()) return;
-    GLRenderTarget& rt = _renderTargets[h.id - 1];
+    if (!_renderTargets.alive(h)) return;
+    GLRenderTarget& rt = _renderTargets.get(h.id);
     if (rt.fbo) {
         destroyTexture(rt.colorTex);
         GLuint fbo = rt.fbo, rbo = rt.depthRbo;
@@ -491,23 +490,21 @@ void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
             if (rbo) glDeleteRenderbuffers(1, &rbo);
             glDeleteFramebuffers(1, &fbo);
         });
-        rt = GLRenderTarget{};
     }
-    rt.alive = false;   // 槽位保留（id 不复用）
+    _renderTargets.free(h.id);   // 标记 dead + gen++（槽位可复用）
 }
 
 TextureHandle GLDevice::renderTargetColorTexture(RenderTargetHandle h) const {
-    if (!h.valid() || h.id > _renderTargets.size()) return {};
-    return _renderTargets[h.id - 1].colorTex;
+    if (!_renderTargets.alive(h)) return {};
+    return _renderTargets.get(h.id).colorTex;
 }
 
 // B4：同步回读。glGetTexImage 直接把整级读出（mipLevel 参数原生支持），
 // 再裁出区域；GL 是即时语义，无需额外同步。
 bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
                                const ReadbackDesc& rb) {
-    if (!tex.valid() || tex.id > _textures.size() || !outData) return false;
-    const GLTexture& t = _textures[tex.id - 1];
-    if (!t.id) return false;
+    if (!_textures.alive(tex) || !outData) return false;
+    const GLTexture& t = _textures.get(tex.id);
 
     const uint32_t bpp = FormatInfo::of(t.format).bytesPerPixel();
     if (bpp == 0) return false;
@@ -552,15 +549,13 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
 }
 
 void GLDevice::destroyPipeline(PipelineHandle h) {
-    if (!h.valid() || h.id > _pipelines.size()) return;
-    GLPipeline& p = _pipelines[h.id - 1];
-    if (p.program) {
+    if (!_pipelines.alive(h)) return;
+    if (_pipelines.get(h.id).program) {
         // V3-0：先清 VAO 缓存（VAO 固化了管线的属性布局指针），再删 program。
         // glDeleteProgram 自带"在用即标记删除"语义（帧在飞安全），无需入队。
         _commandList->invalidateVAOForPipeline(h.id);
-        p.program.reset();
     }
-    p.desc = GraphicsPipelineDesc{};
+    _pipelines.free(h.id);   // 重置 unique_ptr<GLProgram>（glDeleteProgram）+ desc
 }
 
 void GLDevice::waitIdle() {
@@ -596,33 +591,35 @@ IRHICommandList* GLDevice::commandList() {
 
 uint64_t GLDevice::nativeHandle(RhiHandle handle) const {
     // 过渡期与旧 GL 代码互操作：buffer 句柄 → GLuint；texture 句柄 → GLuint
-    if (handle.id >= 1 && handle.id <= _buffers.size()) {
-        return _buffers[handle.id - 1].id;
-    }
-    if (handle.id >= 1 && handle.id <= _textures.size()) {
-        return _textures[handle.id - 1].id;
-    }
+    if (_buffers.alive(handle)) return _buffers.get(handle.id).id;
+    if (_textures.alive(handle)) return _textures.get(handle.id).id;
     return 0;
 }
 
 const GLBuffer& GLDevice::buffer(BufferHandle h) const {
-    return _buffers[h.id - 1];
+    return _buffers.get(h.id);
 }
 
 const GLTexture& GLDevice::texture(TextureHandle h) const {
-    return _textures[h.id - 1];
+    return _textures.get(h.id);
 }
 
 const GLSampler& GLDevice::sampler(SamplerHandle h) const {
-    return _samplers[h.id - 1];
+    return _samplers.get(h.id);
 }
 
 const GLPipeline& GLDevice::pipeline(PipelineHandle h) const {
-    return _pipelines[h.id - 1];
+    return _pipelines.get(h.id);
 }
 
 const GLRenderTarget& GLDevice::renderTarget(RenderTargetHandle h) const {
-    return _renderTargets[h.id - 1];
+    return _renderTargets.get(h.id);
 }
+
+// V3-1：句柄有效性（id 范围 + gen 代际校验）
+bool GLDevice::alive(BufferHandle h)   const { return _buffers.alive(h); }
+bool GLDevice::alive(TextureHandle h)  const { return _textures.alive(h); }
+bool GLDevice::alive(PipelineHandle h) const { return _pipelines.alive(h); }
+bool GLDevice::alive(SamplerHandle h)  const { return _samplers.alive(h); }
 
 } // namespace rhi

@@ -184,33 +184,32 @@ VulkanDevice::~VulkanDevice() {
     // _semRenderDone 为 per-image，随 swapchain 销毁（destroySwapchainObjects）
     if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
     // E1：先走子分配器统计/告警，资源对象内存在随行销毁
-    for (auto& b : _buffers) {
+    _buffers.forEach([&](VkBufferRes& b) {
         if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
         _memAlloc.free(b.memAlloc);   // E1：内存归分配器（防双重释放）
-    }
-    for (auto& t : _textures) {
+    });
+    _textures.forEach([&](VkTextureRes& t) {
         if (t.sampler) vkDestroySampler(_device, t.sampler, nullptr);
         if (t.view)    vkDestroyImageView(_device, t.view, nullptr);
         if (t.image)   vkDestroyImage(_device, t.image, nullptr);
         _memAlloc.free(t.memAlloc);   // E1
-    }
-    for (auto& b : _uniformBlocks) {
+    });
+    _uniformBlocks.forEach([&](VkUniformBlockRes& b) {
         if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
         _memAlloc.free(b.memAlloc);   // E1
         // 描述符集随 pool 销毁
-    }
+    });
     // V3-0：离屏 RT 的深度附件兜底回收（宿主未调 destroyRenderTarget 的槽位；
     // 颜色附件是 VkTextureRes，已在上方 _textures 循环销毁）
-    for (auto& rt : _renderTargets) {
+    _renderTargets.forEach([&](VkRenderTargetRes& rt) {
         if (rt.depthView)  vkDestroyImageView(_device, rt.depthView, nullptr);
         if (rt.depthImage) vkDestroyImage(_device, rt.depthImage, nullptr);
         _memAlloc.free(rt.depthMemAlloc);
-    }
+    });
     // destroySwapchainObjects 只回收 swapchain/renderPass，不回收管线
-    for (auto& p : _pipelines) {
+    _pipelines.forEach([&](VkPipelineRes& p) {
         if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
-    }
-    _pipelines.clear();
+    });
     if (_pipelineLayout)    vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
     for (auto pool : _texDescriptorPools) {
         if (pool) vkDestroyDescriptorPool(_device, pool, nullptr);
@@ -544,26 +543,26 @@ void VulkanDevice::createLogicalDevice() {
     bool isVulkan13 = _deviceApiVersion >= VK_API_VERSION_1_3;
     if (isVulkan13 || hasDynamicRenderingExt) {
         _dynamicRendering = true;
-        if (!isVulkan13) {
-            // 1.2 设备走扩展路径：dynamic rendering 依赖的扩展必须一并启用
-            //（规范依赖链：format_feature_flags2 / maintenance2 → create_renderpass2
-            //  → depth_stencil_resolve → dynamic_rendering）
-            const char* dynDeps[] = {
-                "VK_KHR_maintenance2",
-                "VK_KHR_multiview",
-                "VK_KHR_format_feature_flags2",
-                "VK_KHR_create_renderpass2",
-                "VK_KHR_depth_stencil_resolve",
-            };
-            for (const char* dep : dynDeps) {
-                if (_caps.hasExtension(dep)) {
-                    devExts.push_back(dep);
-                } else {
-                    ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
-                }
+        // dynamic rendering 的依赖扩展（部分已 1.1/1.2 core 化）。1.2 设备必须启用；
+        // 1.3 设备虽已 core 化，但部分验证层对 KHR 别名仍要求显式列出（VUID 01387），
+        // 故统一启用。
+        const char* dynDeps[] = {
+            "VK_KHR_maintenance2",
+            "VK_KHR_multiview",
+            "VK_KHR_format_feature_flags2",
+            "VK_KHR_create_renderpass2",
+            "VK_KHR_depth_stencil_resolve",
+        };
+        for (const char* dep : dynDeps) {
+            if (_caps.hasExtension(dep)) {
+                devExts.push_back(dep);
+            } else {
+                ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
             }
-            devExts.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
         }
+        // 1.3 设备也显式启用 KHR 扩展：实例按 1.0 请求时 1.3 core 入口/特性不可用，
+        // 只有启用扩展后 KHR 别名才可解析（Windows 实机暴露）。
+        devExts.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
     } else {
         ENGINE_LOG_ERROR("[VK] dynamic rendering unavailable (api=%u.%u.%u, ext=%d) — B1 requires it; abort",
                          VK_VERSION_MAJOR(_deviceApiVersion), VK_VERSION_MINOR(_deviceApiVersion),
@@ -577,20 +576,13 @@ void VulkanDevice::createLogicalDevice() {
     vk12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     vk12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
 
-    // B1：dynamic rendering 特性（1.3 core 用 Vulkan13Features；1.2 + 扩展用 KHR struct）
-    VkPhysicalDeviceVulkan13Features vk13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-    vk13.dynamicRendering = VK_TRUE;
+    // B1：dynamic rendering 特性（统一走 KHR 扩展——实例按 1.0 请求时 1.3 core
+    // 特性 struct 不可用，启用扩展后走 KHR struct，1.2/1.3 路径一致）
     VkPhysicalDeviceDynamicRenderingFeaturesKHR dynFeat{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR};
     dynFeat.dynamicRendering = VK_TRUE;
-    void* featureChain = nullptr;
-    if (isVulkan13) {
-        vk12.pNext = &vk13;           // vk12 → vk13
-        featureChain = &vk12;
-    } else {
-        vk12.pNext = &dynFeat;        // vk12 → KHR dynamic rendering
-        featureChain = &vk12;
-    }
+    vk12.pNext = &dynFeat;        // vk12 → KHR dynamic rendering
+    void* featureChain = &vk12;
 
     // B3：启用 samplerAnisotropy（各向异性过滤，纹理采样描述符 SamplerDesc 使用；
     // 物理设备不支持时保持关闭，createSampler 会跳过 anisotropyEnable）
@@ -606,7 +598,7 @@ void VulkanDevice::createLogicalDevice() {
     ci.pNext                   = featureChain;
     VK_CHECK(vkCreateDevice(_physicalDevice, &ci, nullptr, &_device));
     vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
-    // B1：KHR 入口点（1.3 设备驱动同样导出已提升扩展的 KHR 别名，统一走它）
+    // B1：动态渲染入口点（KHR 扩展已统一启用，走 KHR 别名）
     _vkBeginRendering = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
         vkGetDeviceProcAddr(_device, "vkCmdBeginRenderingKHR"));
     _vkEndRendering = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
@@ -1182,8 +1174,8 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
         std::memcpy(res.mapped, desc.initialData, desc.size);
     }
 
-    _buffers.push_back(res);
-    BufferHandle h; h.id = static_cast<uint32_t>(_buffers.size());
+    RhiHandle base = _buffers.alloc(std::move(res));
+    BufferHandle h; h.id = base.id; h.gen = base.gen;
     char name[48];
     std::snprintf(name, sizeof(name), "RHI_Buffer_%u", h.id);
     setObjName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(res.buffer), name);
@@ -1192,8 +1184,8 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
 
 void VulkanDevice::updateBuffer(BufferHandle buffer, const void* data,
                             uint32_t size, uint32_t offset) {
-    if (!buffer.valid() || !data || buffer.id > _buffers.size()) return;
-    VkBufferRes& b = _buffers[buffer.id - 1];
+    if (!_buffers.alive(buffer) || !data) return;
+    VkBufferRes& b = _buffers.get(buffer.id);
     if (!b.mapped || offset + size > b.size) return;   // 已销毁 / 越界保护
     std::memcpy(static_cast<uint8_t*>(b.mapped) + offset, data, size);
 }
@@ -1203,12 +1195,12 @@ void VulkanDevice::updateBuffer(BufferHandle buffer, const void* data,
 // _frameCount + kLagFrames，beginFrame 的 fence 等待之后批量执行——资源不再
 // 被帧在飞的命令引用。析构路径 flushAll 兜底。
 void VulkanDevice::destroyBuffer(BufferHandle h) {
-    if (!h.valid() || h.id > _buffers.size()) return;
-    VkBufferRes& b = _buffers[h.id - 1];
+    if (!_buffers.alive(h)) return;
+    VkBufferRes& b = _buffers.get(h.id);
     if (!b.buffer) return;
     VkBuffer buf = b.buffer;
     VkMemAlloc mem = b.memAlloc;
-    b = VkBufferRes{};
+    _buffers.free(h.id);
     _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
                    [this, buf, mem] {
                        vkDestroyBuffer(_device, buf, nullptr);
@@ -1217,14 +1209,14 @@ void VulkanDevice::destroyBuffer(BufferHandle h) {
 }
 
 void VulkanDevice::destroyTexture(TextureHandle h) {
-    if (!h.valid() || h.id > _textures.size()) return;
-    VkTextureRes& t = _textures[h.id - 1];
+    if (!_textures.alive(h)) return;
+    VkTextureRes& t = _textures.get(h.id);
     if (!t.image) return;
     VkImage img = t.image;
     VkImageView view = t.view;
     VkSampler sm = t.sampler;
     VkMemAlloc mem = t.memAlloc;
-    t = VkTextureRes{};
+    _textures.free(h.id);
     _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
                    [this, img, view, sm, mem] {
                        if (sm)   vkDestroySampler(_device, sm, nullptr);
@@ -1235,30 +1227,28 @@ void VulkanDevice::destroyTexture(TextureHandle h) {
 }
 
 void VulkanDevice::destroyPipeline(PipelineHandle h) {
-    if (!h.valid() || h.id > _pipelines.size()) return;
-    VkPipelineRes& p = _pipelines[h.id - 1];
+    if (!_pipelines.alive(h)) return;
+    VkPipelineRes& p = _pipelines.get(h.id);
     if (p.pipeline) {
         VkPipeline pipe = p.pipeline;
-        p.pipeline = VK_NULL_HANDLE;
         // V3-0：管线可能被帧在飞的命令引用，同样延迟销毁
         _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
                        [this, pipe] { vkDestroyPipeline(_device, pipe, nullptr); });
     }
-    p = VkPipelineRes{};
-    p.alive = false;   // 槽位保留（id 不复用）；swapchain 重建不复活
+    _pipelines.free(h.id);   // 标记 dead + gen++（swapchain 重建不复活）
 }
 
 void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
-    if (!h.valid() || h.id > _uniformBlocks.size()) return;
+    if (!_uniformBlocks.alive(h)) return;
     if (h.id == _defaultUniformBlock.id) {
         ENGINE_LOG_WARN_ONCE("[VK] destroyUniformBlock: device default block is device-owned, ignored");
         return;
     }
-    VkUniformBlockRes& b = _uniformBlocks[h.id - 1];
+    VkUniformBlockRes& b = _uniformBlocks.get(h.id);
     if (!b.buffer) return;
     VkBuffer buf = b.buffer;
     VkMemAlloc mem = b.memAlloc;
-    b = VkUniformBlockRes{};
+    _uniformBlocks.free(h.id);
     _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
                    [this, buf, mem] {
                        vkDestroyBuffer(_device, buf, nullptr);
@@ -1346,28 +1336,25 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
         }
     }
 
-    _renderTargets.push_back(rt);
-    const uint32_t id = static_cast<uint32_t>(_renderTargets.size());
+    RhiHandle base = _renderTargets.alloc(std::move(rt));
+    RenderTargetHandle h; h.id = base.id; h.gen = base.gen;
     char name[48];
-    std::snprintf(name, sizeof(name), "RHI_RenderTarget_%u", id);
-    const VkTextureRes& ct = _renderTargets.back().colorTex.valid()
-        ? textureRes(_renderTargets.back().colorTex) : VkTextureRes{};
+    std::snprintf(name, sizeof(name), "RHI_RenderTarget_%u", h.id);
+    const VkTextureRes& ct = rt.colorTex.valid() ? textureRes(rt.colorTex) : VkTextureRes{};
     if (ct.image) {
         setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(ct.image), name);
     }
-    if (_renderTargets.back().depthImage) {
-        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_renderTargets.back().depthImage), name);
+    if (rt.depthImage) {
+        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(rt.depthImage), name);
     }
     ENGINE_LOG_INFO("[VK] render target %ux%u created (id=%u, depth=%d)",
-                    desc.width, desc.height, id, desc.hasDepth ? 1 : 0);
-    RenderTargetHandle h; h.id = id;
+                    desc.width, desc.height, h.id, desc.hasDepth ? 1 : 0);
     return h;
 }
 
 void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
-    if (!h.valid() || h.id > _renderTargets.size()) return;
-    VkRenderTargetRes& rt = _renderTargets[h.id - 1];
-    if (!rt.alive && !rt.colorTex.valid()) return;
+    if (!_renderTargets.alive(h)) return;
+    VkRenderTargetRes& rt = _renderTargets.get(h.id);
     destroyTexture(rt.colorTex);   // V3-0：颜色附件走纹理延迟销毁
     if (rt.depthView || rt.depthImage) {
         VkImageView view = rt.depthView;
@@ -1380,20 +1367,19 @@ void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
                            _memAlloc.free(mem);
                        });
     }
-    rt = VkRenderTargetRes{};
-    rt.alive = false;   // 槽位保留（id 不复用）
+    _renderTargets.free(h.id);
 }
 
 TextureHandle VulkanDevice::renderTargetColorTexture(RenderTargetHandle h) const {
-    if (!h.valid() || h.id > _renderTargets.size()) return {};
-    return _renderTargets[h.id - 1].colorTex;
+    if (!_renderTargets.alive(h)) return {};
+    return _renderTargets.get(h.id).colorTex;
 }
 
 // ---- B4：同步回读（契约 ReadbackDesc；submitOneTime 等待完成）----
 bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
                                    const ReadbackDesc& rb) {
-    if (!tex.valid() || tex.id > _textures.size() || !outData) return false;
-    const VkTextureRes& t = _textures[tex.id - 1];
+    if (!_textures.alive(tex) || !outData) return false;
+    const VkTextureRes& t = _textures.get(tex.id);
     if (!t.image || t.bpp == 0) return false;
 
     // 区域：宽高 0 = 整级（mip 级尺寸按 2^level 收缩）
@@ -1474,15 +1460,15 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
         _memAlloc.free(dstMem);
     });
     // 布局跟踪回写（submitOneTime 已同步完成）
-    _textures[tex.id - 1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    _textures.get(tex.id).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     return true;
 }
 
 // ---- B4：RT 布局屏障（命令列表在 beginRenderPass/endRenderPass 的 RT 分支调用）----
 void VulkanDevice::recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTargetHandle rt) {
-    VkRenderTargetRes& r = _renderTargets[rt.id - 1];
+    VkRenderTargetRes& r = _renderTargets.get(rt.id);
     if (r.colorTex.valid()) {
-        VkTextureRes& t = _textures[r.colorTex.id - 1];
+        VkTextureRes& t = _textures.get(r.colorTex.id);
         if (t.image && t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
             VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             bar.srcAccessMask = (t.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
@@ -1523,9 +1509,9 @@ void VulkanDevice::recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTar
 }
 
 void VulkanDevice::recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTargetHandle rt) {
-    VkRenderTargetRes& r = _renderTargets[rt.id - 1];
+    VkRenderTargetRes& r = _renderTargets.get(rt.id);
     if (!r.colorTex.valid()) return;
-    VkTextureRes& t = _textures[r.colorTex.id - 1];
+    VkTextureRes& t = _textures.get(r.colorTex.id);
     if (!t.image || t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
@@ -1754,7 +1740,7 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
             }
             // B4：布局跟踪（上传完成的稳定布局；附件/回读转换以此为基）
             if (newTexId <= _textures.size()) {
-                _textures[newTexId - 1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                _textures.get(newTexId).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
         }, [this, staging, stagingMem]() {
             vkDestroyBuffer(_device, staging, nullptr);
@@ -1818,13 +1804,13 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         return {};
     }
 
-    _textures.push_back(t);
+    RhiHandle base = _textures.alloc(std::move(t));
+    TextureHandle h; h.id = base.id; h.gen = base.gen;
     char tname[48];
-    std::snprintf(tname, sizeof(tname), "RHI_Texture_%u", static_cast<uint32_t>(_textures.size()));
+    std::snprintf(tname, sizeof(tname), "RHI_Texture_%u", h.id);
     setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(t.image), tname);
     setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(t.view), tname);
     setObjName(VK_OBJECT_TYPE_SAMPLER, reinterpret_cast<uint64_t>(t.sampler), tname);
-    TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
     return h;
 }
 
@@ -2009,8 +1995,8 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
 
     for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
 
-    _pipelines.push_back(std::move(res));
-    PipelineHandle h; h.id = static_cast<uint32_t>(_pipelines.size());
+    RhiHandle base = _pipelines.alloc(std::move(res));
+    PipelineHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }
 
@@ -2265,8 +2251,8 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     writes[0].descriptorCount = 1;
     writes[0].pBufferInfo = &bufInfo;
 
-    const VkTextureRes& white = _textures[_whiteTex.id - 1];
-    const VkTextureRes& whiteCube = _textures[_whiteCubeTex.id - 1];
+    const VkTextureRes& white = _textures.get(_whiteTex.id);
+    const VkTextureRes& whiteCube = _textures.get(_whiteCubeTex.id);
     VkDescriptorImageInfo imgInfos[4];
     for (uint32_t i = 0; i < 4; ++i) {
         const bool isCubeSlot = (i == 3);   // 槽 3 = cubemap（天空盒）
@@ -2285,24 +2271,29 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     setObjName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(blk.buffer), ubname);
     setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(blk.set), ubname);
 
-    _uniformBlocks.push_back(blk);
-    UniformBlockHandle h; h.id = static_cast<uint32_t>(_uniformBlocks.size());
+    RhiHandle base = _uniformBlocks.alloc(std::move(blk));
+    UniformBlockHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }
 
 void VulkanDevice::bindInstanceVertexBuffer(VkCommandBuffer cb, BufferHandle h) const {
-    if (!h.valid() || h.id > _buffers.size()) return;
-    VkBuffer vb = _buffers[h.id - 1].buffer;
+    if (!_buffers.alive(h)) return;
+    VkBuffer vb = _buffers.get(h.id).buffer;
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cb, 1, 1, &vb, &offset);   // binding1 = 实例率
 }
 
 uint64_t VulkanDevice::nativeHandle(RhiHandle handle) const {
-    if (handle.id >= 1 && handle.id <= _buffers.size()) {
-        return reinterpret_cast<uint64_t>(_buffers[handle.id - 1].buffer);
+    if (_buffers.alive(handle)) {
+        return reinterpret_cast<uint64_t>(_buffers.get(handle.id).buffer);
     }
     return 0;
 }
+
+// V3-1：句柄有效性（id 范围 + gen 代际校验）
+bool VulkanDevice::alive(BufferHandle h)   const { return _buffers.alive(h); }
+bool VulkanDevice::alive(TextureHandle h)  const { return _textures.alive(h); }
+bool VulkanDevice::alive(PipelineHandle h) const { return _pipelines.alive(h); }
 
 DeviceInfo VulkanDevice::info() const {
     DeviceInfo di;

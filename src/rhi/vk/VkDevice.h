@@ -15,6 +15,7 @@
 
 #include "../IRHIDevice.h"
 #include "../detail/DeletionQueue.h"
+#include "../detail/HandleTable.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
 #include <vector>
@@ -53,6 +54,11 @@ public:
     void destroyPipeline(PipelineHandle) override;
     void destroyUniformBlock(UniformBlockHandle) override;
 
+    // V3-1：句柄有效性（HandleTable 的 id 范围 + gen 校验）
+    bool alive(BufferHandle h)   const override;
+    bool alive(TextureHandle h)  const override;
+    bool alive(PipelineHandle h) const override;
+
     // v2 离屏渲染目标 + 同步回读（B4）
     RenderTargetHandle createRenderTarget(const RenderTargetDesc& desc) override;
     void destroyRenderTarget(RenderTargetHandle) override;
@@ -84,12 +90,12 @@ public:
     PFN_vkCmdEndRenderingKHR   endRenderingFn() const { return _vkEndRendering; }
 
     // 后端内部资源访问（句柄 id = 下标+1，同 GL 后端约定）
-    const VkBufferRes&   bufferRes(BufferHandle h) const { return _buffers[h.id - 1]; }
-    const VkPipelineRes& pipelineRes(PipelineHandle h) const { return _pipelines[h.id - 1]; }
-    const VkTextureRes&  textureRes(TextureHandle h) const { return _textures[h.id - 1]; }
-    const VkUniformBlockRes& uniformBlockRes(UniformBlockHandle h) const { return _uniformBlocks[h.id - 1]; }
-    const VkRenderTargetRes& renderTargetRes(RenderTargetHandle h) const { return _renderTargets[h.id - 1]; }
-    VkTextureRes&       textureResMut(TextureHandle h) { return _textures[h.id - 1]; }
+    const VkBufferRes&   bufferRes(BufferHandle h) const { return _buffers.get(h.id); }
+    const VkPipelineRes& pipelineRes(PipelineHandle h) const { return _pipelines.get(h.id); }
+    const VkTextureRes&  textureRes(TextureHandle h) const { return _textures.get(h.id); }
+    const VkUniformBlockRes& uniformBlockRes(UniformBlockHandle h) const { return _uniformBlocks.get(h.id); }
+    const VkRenderTargetRes& renderTargetRes(RenderTargetHandle h) const { return _renderTargets.get(h.id); }
+    VkTextureRes&       textureResMut(TextureHandle h) { return _textures.get(h.id); }
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
     VkDescriptorSetLayout texSetLayout() const { return _texSetLayout; }
     VkDescriptorPool      texDescriptorPool() const { return _texDescriptorPools.empty() ? VK_NULL_HANDLE : _texDescriptorPools.back(); }
@@ -205,11 +211,11 @@ private:
     PFN_vkSetDebugUtilsObjectNameEXT _setNameFn = nullptr;
     PFN_vkCreateDebugUtilsMessengerEXT _createDebugMessengerFn = nullptr;
     PFN_vkDestroyDebugUtilsMessengerEXT _destroyDebugMessengerFn = nullptr;
-    std::vector<VkTextureRes> _textures;
+    detail::HandleTable<VkTextureRes> _textures;
     TextureHandle _whiteTex;
     TextureHandle _whiteCubeTex;
-    std::vector<VkRenderTargetRes> _renderTargets;   // B4：离屏渲染目标
-    std::vector<VkUniformBlockRes> _uniformBlocks;
+    detail::HandleTable<VkRenderTargetRes> _renderTargets;   // B4：离屏渲染目标
+    detail::HandleTable<VkUniformBlockRes> _uniformBlocks;
     UniformBlockHandle _defaultUniformBlock;   // 未显式持有 block 的绘制使用
 
     VkSemaphore _semImageAvailable = VK_NULL_HANDLE;
@@ -228,8 +234,8 @@ private:
     uint64_t _frameCount     = 0;
     detail::DeletionQueue _delQueue;
 
-    std::vector<VkBufferRes>   _buffers;
-    std::vector<VkPipelineRes> _pipelines;
+    detail::HandleTable<VkBufferRes>   _buffers;
+    detail::HandleTable<VkPipelineRes> _pipelines;
     // 帧内请求的一次性 GPU 工作（纹理上传等）：render pass 活跃时提交会触发
     // DEVICE_LOST（MoltenVK），统一延迟到下一帧 beginFrame 执行
     struct DeferredGpuWork {
