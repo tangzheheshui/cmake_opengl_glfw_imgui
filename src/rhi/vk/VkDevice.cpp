@@ -4,6 +4,7 @@
 #include "log/LogMacros.h"
 #include "VkDevice.h"
 #include "VkCommandList.h"
+#include "rhi/FormatInfo.h"
 #include <GLFW/glfw3.h>
 #include <fstream>
 #include <cstring>
@@ -55,24 +56,6 @@ static uint32_t findMemoryType(VkPhysicalDevice pd, uint32_t typeBits, VkMemoryP
         }
     }
     return UINT32_MAX;
-}
-
-// ---- B3：RHI Format → VkFormat（契约枚举冻结，见 RhiTypes.h）----
-static VkFormat vkFormatOf(rhi::Format f) {
-    switch (f) {
-        case rhi::Format::RGBA8_UNorm: return VK_FORMAT_R8G8B8A8_UNORM;
-        case rhi::Format::RGBA8_SRGB:  return VK_FORMAT_R8G8B8A8_SRGB;
-        case rhi::Format::BGRA8_UNorm: return VK_FORMAT_B8G8R8A8_UNORM;
-        case rhi::Format::BGRA8_SRGB:  return VK_FORMAT_B8G8R8A8_SRGB;
-        case rhi::Format::R8_UNorm:    return VK_FORMAT_R8_UNORM;
-        case rhi::Format::R16F:        return VK_FORMAT_R16_SFLOAT;
-        case rhi::Format::RGBA16F:     return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case rhi::Format::RGBA32F:     return VK_FORMAT_R32G32B32A32_SFLOAT;
-        case rhi::Format::Depth32F:    return VK_FORMAT_D32_SFLOAT;
-        case rhi::Format::D24S8:       return VK_FORMAT_D24_UNORM_S8_UINT;
-        case rhi::Format::R32_UInt:    return VK_FORMAT_R32_UINT;
-    }
-    return VK_FORMAT_R8G8B8A8_UNORM;
 }
 
 // 完整 mip 链级数（TextureDesc::mipLevels == 0 的语义）
@@ -1344,8 +1327,9 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     VkTextureRes t;
     t.width = desc.width; t.height = desc.height;
     const uint32_t layerCount = desc.cubemap ? 6u : 1u;
-    const VkFormat vkFmt = vkFormatOf(desc.format);
-    const uint32_t bpp = formatBytesPerPixel(desc.format);
+    const FormatInfo& fi = FormatInfo::of(desc.format);
+    const VkFormat vkFmt = static_cast<VkFormat>(fi.vkFormat());
+    const uint32_t bpp = fi.bytesPerPixel();
     if (bpp == 0) {
         ENGINE_LOG_ERROR("[VK] unsupported format bpp (%d)", static_cast<int>(desc.format));
         return {};

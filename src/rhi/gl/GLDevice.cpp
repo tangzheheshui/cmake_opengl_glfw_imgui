@@ -3,6 +3,7 @@
 //
 #include "GLDevice.h"
 #include "GLCommandList.h"
+#include "rhi/FormatInfo.h"
 #include "shader.h"                 // 复用现有 GLSL 编译器（include path: src/render）
 #include <GLFW/glfw3.h>
 #include "log/LogMacros.h"
@@ -12,27 +13,6 @@
 #include <vector>
 
 namespace rhi {
-
-// Format → (internalFormat, dataFormat, dataType)。B3c：颜色格式用 sRGB 内部格式，
-// 硬件采样时解码到线性；法线/高度/ID 等数据格式保持线性。
-static void glFormatOf(Format f, GLenum& internal, GLenum& dataFmt, GLenum& dataType) {
-    internal = GL_RGBA8; dataFmt = GL_RGBA; dataType = GL_UNSIGNED_BYTE;
-    switch (f) {
-        case Format::RGBA8_SRGB: internal = GL_SRGB8_ALPHA8; dataFmt = GL_RGBA; break;
-        case Format::BGRA8_UNorm: internal = GL_RGBA8;   dataFmt = GL_BGRA; break;
-        case Format::BGRA8_SRGB:  internal = GL_SRGB8_ALPHA8; dataFmt = GL_BGRA; break;
-        case Format::R8_UNorm:    internal = GL_R8;      dataFmt = GL_RED; break;
-        case Format::R16F:        internal = GL_R16F;    dataFmt = GL_RED;  dataType = GL_FLOAT; break;
-        case Format::RGBA16F:     internal = GL_RGBA16F; dataFmt = GL_RGBA; dataType = GL_FLOAT; break;
-        case Format::RGBA32F:     internal = GL_RGBA32F; dataFmt = GL_RGBA; dataType = GL_FLOAT; break;
-        case Format::R32_UInt:    internal = GL_R32UI;   dataFmt = GL_RED_INTEGER; dataType = GL_UNSIGNED_INT; break;
-        case Format::Depth32F:    internal = GL_DEPTH_COMPONENT32F; dataFmt = GL_DEPTH_COMPONENT; dataType = GL_FLOAT; break;
-        case Format::D24S8:       internal = GL_DEPTH24_STENCIL8;   dataFmt = GL_DEPTH_STENCIL;
-                                  dataType = GL_UNSIGNED_INT_24_8; break;
-        case Format::RGBA8_UNorm:
-        default: break;
-    }
-}
 
 static GLenum glWrapOf(WrapMode m) {
     switch (m) {
@@ -236,8 +216,10 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     GLTexture tex;
     glGenTextures(1, &tex.id);
 
-    GLenum internalFmt = GL_RGBA8, dataFmt = GL_RGBA, dataType = GL_UNSIGNED_BYTE;
-    glFormatOf(desc.format, internalFmt, dataFmt, dataType);
+    const FormatInfo& fi = FormatInfo::of(desc.format);
+    const GLenum internalFmt = static_cast<GLenum>(fi.glInternalFormat());
+    const GLenum dataFmt     = static_cast<GLenum>(fi.glDataFormat());
+    const GLenum dataType    = static_cast<GLenum>(fi.glDataType());
 
     const GLenum target = desc.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
     // V3-0：R8 等非 4 字节对齐行宽的上传不能依赖默认 UNPACK_ALIGNMENT=4
@@ -249,7 +231,7 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
 
     if (desc.cubemap) {
         // 立方体贴图：6 面连续存放
-        const uint32_t bpp = formatBytesPerPixel(desc.format);
+        const uint32_t bpp = FormatInfo::of(desc.format).bytesPerPixel();
         const size_t faceBytes = static_cast<size_t>(desc.width) * desc.height * bpp;
         const unsigned char* base = static_cast<const unsigned char*>(desc.initialData);
         for (int face = 0; face < 6; ++face) {
@@ -507,7 +489,7 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
     const GLTexture& t = _textures[tex.id - 1];
     if (!t.id) return false;
 
-    const uint32_t bpp = formatBytesPerPixel(t.format);
+    const uint32_t bpp = FormatInfo::of(t.format).bytesPerPixel();
     if (bpp == 0) return false;
     const uint32_t mipW = std::max(1u, t.width  >> rb.mipLevel);
     const uint32_t mipH = std::max(1u, t.height >> rb.mipLevel);
@@ -523,8 +505,10 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
         return false;
     }
 
-    GLenum internalFmt = GL_RGBA8, dataFmt = GL_RGBA, dataType = GL_UNSIGNED_BYTE;
-    glFormatOf(t.format, internalFmt, dataFmt, dataType);
+    const FormatInfo& fi = FormatInfo::of(t.format);
+    const GLenum internalFmt = static_cast<GLenum>(fi.glInternalFormat());
+    const GLenum dataFmt     = static_cast<GLenum>(fi.glDataFormat());
+    const GLenum dataType    = static_cast<GLenum>(fi.glDataType());
 
     // core profile 无 glGetTexImage（compat-only）：临时 FBO 挂接纹理后
     // glReadPixels 直接区域回读（顺带省掉整图缓冲）

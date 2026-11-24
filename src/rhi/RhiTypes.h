@@ -109,23 +109,7 @@ enum class Format : int {
     R32_UInt,            // 拾取 Pass ID（D2）
 };
 
-// 字节数（0 = 后端/格式组合按运行时计算；压缩格式不在 v2 范围）
-inline uint32_t formatBytesPerPixel(Format f) {
-    switch (f) {
-        case Format::RGBA8_UNorm:
-        case Format::RGBA8_SRGB:
-        case Format::BGRA8_UNorm:
-        case Format::BGRA8_SRGB:
-        case Format::D24S8:
-        case Format::Depth32F:
-        case Format::R32_UInt:  return 4;
-        case Format::R8_UNorm:  return 1;
-        case Format::R16F:      return 2;
-        case Format::RGBA16F:   return 8;
-        case Format::RGBA32F:   return 16;
-    }
-    return 0;
-}
+// 格式知识（字节数/深度/sRGB/GL/VK）统一收口到 rhi/FormatInfo（V3-1），见 FormatInfo::of()。
 
 // ---- 采样器描述（v2；GL 后端 B2 落地，Vulkan 在 createTexture 内建）----
 enum class FilterMode : int { Nearest, Linear };
@@ -213,7 +197,7 @@ struct TextureDesc {
     uint32_t    usage = TEX_SAMPLED;
     const void* initialData = nullptr;
     // cubemap = true 时：initialData 为 6 个面连续存放（+X,-X,+Y,-Y,+Z,-Z），
-    // 每面 width*height*formatBytesPerPixel(format) 字节
+    // 每面 width*height*FormatInfo::of(format).bytesPerPixel() 字节
     bool        cubemap = false;
 
     // ---- v2 追加（B0 冻结；后端在 B2/B3 生效）----
