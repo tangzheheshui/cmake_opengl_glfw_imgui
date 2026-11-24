@@ -384,23 +384,22 @@ void VulkanDevice::createLogicalDevice() {
         // VK_KHR_dynamic_rendering，就显式启用扩展，保证 KHR 入口可解析。
         // 1.2 设备还需要规范要求的依赖扩展链。
         if (hasDynamicRenderingExt) {
-            if (!isVulkan13) {
-                // 1.2 设备走扩展路径：dynamic rendering 依赖的扩展必须一并启用
-                //（规范依赖链：format_feature_flags2 / maintenance2 → create_renderpass2
-                //  → depth_stencil_resolve → dynamic_rendering）
-                const char* dynDeps[] = {
-                    "VK_KHR_maintenance2",
-                    "VK_KHR_multiview",
-                    "VK_KHR_format_feature_flags2",
-                    "VK_KHR_create_renderpass2",
-                    "VK_KHR_depth_stencil_resolve",
-                };
-                for (const char* dep : dynDeps) {
-                    if (_caps.hasExtension(dep)) {
-                        devExts.push_back(dep);
-                    } else {
-                        ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
-                    }
+            // dynamic rendering 扩展的规范依赖链必须一并启用。
+            // 注意：1.3 设备 + 实例按 1.0 请求时同样需要显式列出
+            //（VUID-vkCreateDevice-ppEnabledExtensionNames-01387）；
+            // 已提升为 core 且未枚举的项跳过即可。
+            const char* dynDeps[] = {
+                "VK_KHR_maintenance2",
+                "VK_KHR_multiview",
+                "VK_KHR_format_feature_flags2",
+                "VK_KHR_create_renderpass2",
+                "VK_KHR_depth_stencil_resolve",
+            };
+            for (const char* dep : dynDeps) {
+                if (_caps.hasExtension(dep)) {
+                    devExts.push_back(dep);
+                } else if (!isVulkan13) {
+                    ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
                 }
             }
             devExts.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
@@ -1297,7 +1296,10 @@ void VulkanDevice::recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTarge
     if (!t.image || t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-    bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    // V3-0：这里的目标阶段是片元采样；TRANSFER_READ 不由此阶段支持
+    //（VUID-vkCmdPipelineBarrier-pImageMemoryBarriers-02820）。回读走
+    // readbackTexture 自己的 TRANSFER 屏障，不需要在这里预置。
+    bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     bar.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;

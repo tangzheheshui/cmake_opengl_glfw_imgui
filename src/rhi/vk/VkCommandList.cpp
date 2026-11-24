@@ -123,13 +123,16 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
 
 void VkCommandList::endRenderPass() {
     if (!_inRenderPass) return;
+    // V3-0：必须先结束 dynamic rendering，再做附件布局转换。
+    // vkCmdPipelineBarrier 不允许在 vkCmdBeginRendering 实例内做 layout transition
+    //（VUID-vkCmdPipelineBarrier-None-09553/01181/07891/09554/09555）。
+    _device->endRenderingFn()(_device->commandBuffer());
+    _inRenderPass = false;
     // B4：离屏 RT 收尾 → 颜色附件转回 SHADER_READ_ONLY（采样/回读就绪）
     if (_curRenderTarget.valid()) {
         _device->recordRenderTargetEndBarriers(_device->commandBuffer(), _curRenderTarget);
         _curRenderTarget = RenderTargetHandle{};
     }
-    _device->endRenderingFn()(_device->commandBuffer());
-    _inRenderPass = false;
 }
 
 void VkCommandList::bindPipeline(PipelineHandle pipeline) {

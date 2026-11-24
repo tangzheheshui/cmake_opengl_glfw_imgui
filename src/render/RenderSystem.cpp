@@ -58,6 +58,16 @@ void RenderSystem::shutdown() {
     // 先等 GPU 收尾，再销毁设备（Vulkan：导出 pipeline cache / 释放 swapchain）
     if (m_rhiDevice) {
         m_rhiDevice->waitIdle();
+        // V3-0：验证/拾取用的离屏 RT 由引擎持有，必须在设备销毁前释放，
+        // 否则 VK 验证层报 leaked VkImage/VkImageView。
+        if (m_pickRT.valid()) {
+            m_rhiDevice->destroyRenderTarget(m_pickRT);
+            m_pickRT = {};
+        }
+        if (m_rtTestTarget.valid()) {
+            m_rhiDevice->destroyRenderTarget(m_rtTestTarget);
+            m_rtTestTarget = {};
+        }
         m_rhiDevice.reset();
     }
     // 依赖 GL 上下文/窗口的对象（Pass 的 FBO、字体纹理等）在此释放
