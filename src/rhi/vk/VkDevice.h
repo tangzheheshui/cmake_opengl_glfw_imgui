@@ -55,7 +55,7 @@ public:
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 
-    void beginFrame() override;
+    bool beginFrame() override;
     void endFrame()   override;
     void waitIdle()   override;
     void onResize(int width, int height) override;
@@ -180,7 +180,7 @@ private:
     // B6：描述符池按需扩容——耗尽即追加新池（旧池连同其上 set 存活到销毁），
     // 取代固定 maxSets=32（31 mesh 即 abort 的规模上限）
     std::vector<VkDescriptorPool> _texDescriptorPools;
-    uint32_t _poolCapSets    = 256;
+    uint32_t _poolCapSets    = 1024;   // V3-0：首池容量对齐 v3 方案（耗尽仍会自动追加）
     uint32_t _poolCapSampler = 1024;
     uint32_t _poolCapUniform = 256;
     void growTexDescriptorPool();

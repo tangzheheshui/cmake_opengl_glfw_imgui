@@ -104,7 +104,7 @@ public:
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 
-    void beginFrame() override {}
+    bool beginFrame() override { return true; }
     void endFrame()   override {}
     void waitIdle()   override;
 

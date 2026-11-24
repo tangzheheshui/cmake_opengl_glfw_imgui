@@ -185,7 +185,7 @@ void RenderSystem::drawRhiScene() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd) return;
 
-    m_rhiDevice->beginFrame();
+    if (!m_rhiDevice->beginFrame()) return;   // V3-0：swapchain 无可用 image 时跳过本帧
     // B4 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交完成）
     runRenderTargetReadbackTest();
     // D2 拾取：同帧内渲染 ID 图（回读推迟到下一帧）
@@ -751,7 +751,7 @@ void RenderSystem::drawTexturedQuad() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd || !m_quadPipeline.valid() || !m_quadVB.valid() || !m_quadTex.valid()) return;
 
-    m_rhiDevice->beginFrame();
+    if (!m_rhiDevice->beginFrame()) return;   // V3-0：swapchain 无可用 image 时跳过本帧
 
     rhi::RenderPassDesc rp;
     rp.clearColor = false;
@@ -815,7 +815,7 @@ void RenderSystem::drawSmokeTriangle() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd || !m_smokePipeline.valid() || !m_smokeVB.valid()) return;
 
-    m_rhiDevice->beginFrame();
+    if (!m_rhiDevice->beginFrame()) return;   // V3-0：swapchain 无可用 image 时跳过本帧
 
     rhi::RenderPassDesc rp;
     rp.clearColor = false;      // 叠加在主场景上，不清屏

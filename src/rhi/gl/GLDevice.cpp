@@ -84,10 +84,22 @@ GLDevice::GLDevice(GLFWwindow* window, const std::string& shaderRootPath)
 
 GLDevice::~GLDevice() {
     waitIdle();
-    for (auto& b : _buffers)   if (b.id) glDeleteBuffers(1, &b.id);
-    for (auto& t : _textures)  if (t.id) glDeleteTextures(1, &t.id);
-    for (auto& s : _samplers)  if (s.id) glDeleteSamplers(1, &s.id);
+    // V3-0：离屏 RT 的 FBO/深度 RBO 必须在颜色纹理之前释放（FBO 引用纹理）
+    size_t liveRts = 0;
+    for (auto& rt : _renderTargets) {
+        if (!rt.fbo) continue;
+        ++liveRts;
+        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
+        glDeleteFramebuffers(1, &rt.fbo);
+    }
+    size_t liveBuffers = 0, liveTextures = 0, liveSamplers = 0, livePipelines = 0;
+    for (auto& b : _buffers)   if (b.id) { ++liveBuffers;  glDeleteBuffers(1, &b.id); }
+    for (auto& t : _textures)  if (t.id) { ++liveTextures; glDeleteTextures(1, &t.id); }
+    for (auto& s : _samplers)  if (s.id) { ++liveSamplers; glDeleteSamplers(1, &s.id); }
+    for (auto& p : _pipelines) if (p.program) ++livePipelines;
     // GLPipeline 持有 unique_ptr<Shader>，其析构负责 glDeleteProgram
+    ENGINE_LOG_INFO("[GL] shutdown: buffers=%zu textures=%zu samplers=%zu pipelines=%zu renderTargets=%zu",
+                    liveBuffers, liveTextures, liveSamplers, livePipelines, liveRts);
 }
 
 DeviceInfo GLDevice::info() const {
@@ -228,6 +240,8 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     glFormatOf(desc.format, internalFmt, dataFmt, dataType);
 
     const GLenum target = desc.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+    // V3-0：R8 等非 4 字节对齐行宽的上传不能依赖默认 UNPACK_ALIGNMENT=4
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glBindTexture(target, tex.id);
     tex.width  = desc.width;    // B4：readback/RT 需要
     tex.height = desc.height;
@@ -278,6 +292,7 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     glTexParameterf(target, GL_TEXTURE_MIN_LOD, sd.minLod);
     glTexParameterf(target, GL_TEXTURE_MAX_LOD, sd.maxLod);
     glBindTexture(target, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);   // 恢复默认，避免泄漏给后续上传
 
     _textures.push_back(std::move(tex));
     TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
@@ -400,7 +415,10 @@ void GLDevice::attachSampler(TextureHandle tex, SamplerHandle s) {
 void GLDevice::destroyBuffer(BufferHandle h) {
     if (!h.valid() || h.id > _buffers.size()) return;
     GLBuffer& b = _buffers[h.id - 1];
-    if (b.id) glDeleteBuffers(1, &b.id);
+    if (!b.id) return;
+    // V3-0：VAO 缓存持有该 buffer 的属性指针，先失效再删 GL 资源
+    if (_commandList) _commandList->discardVAOs(0, h.id);
+    glDeleteBuffers(1, &b.id);
     b = GLBuffer{};
 }
 
@@ -524,6 +542,7 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
     }
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(rb.x, rb.y, w, h, dataFmt, dataType, outData);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);   // 恢复默认，避免泄漏给后续回读
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &fbo);
     return true;
@@ -532,6 +551,9 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
 void GLDevice::destroyPipeline(PipelineHandle h) {
     if (!h.valid() || h.id > _pipelines.size()) return;
     GLPipeline& p = _pipelines[h.id - 1];
+    if (!p.program) return;
+    // V3-0：VAO 缓存按 pipelineId 关联，先失效再删 program
+    if (_commandList) _commandList->discardVAOs(h.id, 0);
     p.program.reset();   // Shader 析构负责 glDeleteProgram
     p.desc = GraphicsPipelineDesc{};
 }

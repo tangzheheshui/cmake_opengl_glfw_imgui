@@ -32,6 +32,23 @@ GLCommandList::~GLCommandList() {
     }
 }
 
+// V3-0：销毁 buffer/pipeline 时剔除引用它的 VAO 缓存条目。
+// 不清理的话，缓存命中会继续用持有已删除 buffer 属性指针的 VAO，画出垃圾。
+void GLCommandList::discardVAOs(uint32_t pipelineId, uint32_t bufferId) {
+    for (auto it = _vaoCache.begin(); it != _vaoCache.end();) {
+        const auto& key = it->first;
+        const bool hitPipeline = pipelineId != 0 && std::get<0>(key) == pipelineId;
+        const bool hitBuffer   = bufferId != 0 &&
+                                 (std::get<1>(key) == bufferId || std::get<2>(key) == bufferId);
+        if (hitPipeline || hitBuffer) {
+            if (it->second) glDeleteVertexArrays(1, &it->second);
+            it = _vaoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void GLCommandList::saveState(GLStateSnapshot& s) {
     s.depthTest = glIsEnabled(GL_DEPTH_TEST);
     glGetBooleanv(GL_DEPTH_WRITEMASK, &s.depthMask);

@@ -67,7 +67,9 @@ public:
     // ---- 帧循环 ----
     // GL 后端：空实现（swap 由 main 里的 glfwSwapBuffers 完成，保持现有主循环不变）
     // Vulkan 后端：beginFrame = acquire image；endFrame = submit + present
-    virtual void beginFrame() = 0;
+    // V3-0：返回 false 表示本帧没有可用的 swapchain image（过期/重建中），
+    // 上层必须跳过本帧录制与 endFrame，避免提交一个状态机不匹配的帧。
+    virtual bool beginFrame() = 0;
     virtual void endFrame()   = 0;
 
     // 窗口尺寸变化通知（Vulkan 后端重建 swapchain；GL 后端 no-op）

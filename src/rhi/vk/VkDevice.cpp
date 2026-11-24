@@ -379,22 +379,28 @@ void VulkanDevice::createLogicalDevice() {
     bool isVulkan13 = _deviceApiVersion >= VK_API_VERSION_1_3;
     if (isVulkan13 || hasDynamicRenderingExt) {
         _dynamicRendering = true;
-        if (!isVulkan13) {
-            // 1.2 设备走扩展路径：dynamic rendering 依赖的扩展必须一并启用
-            //（规范依赖链：format_feature_flags2 / maintenance2 → create_renderpass2
-            //  → depth_stencil_resolve → dynamic_rendering）
-            const char* dynDeps[] = {
-                "VK_KHR_maintenance2",
-                "VK_KHR_multiview",
-                "VK_KHR_format_feature_flags2",
-                "VK_KHR_create_renderpass2",
-                "VK_KHR_depth_stencil_resolve",
-            };
-            for (const char* dep : dynDeps) {
-                if (_caps.hasExtension(dep)) {
-                    devExts.push_back(dep);
-                } else {
-                    ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
+        // V3-0：实例按 API 1.0 请求时，1.3 设备上的 core 入口
+        //（vkCmdBeginRendering）对 vkGetDeviceProcAddr 不可见；只要设备列出
+        // VK_KHR_dynamic_rendering，就显式启用扩展，保证 KHR 入口可解析。
+        // 1.2 设备还需要规范要求的依赖扩展链。
+        if (hasDynamicRenderingExt) {
+            if (!isVulkan13) {
+                // 1.2 设备走扩展路径：dynamic rendering 依赖的扩展必须一并启用
+                //（规范依赖链：format_feature_flags2 / maintenance2 → create_renderpass2
+                //  → depth_stencil_resolve → dynamic_rendering）
+                const char* dynDeps[] = {
+                    "VK_KHR_maintenance2",
+                    "VK_KHR_multiview",
+                    "VK_KHR_format_feature_flags2",
+                    "VK_KHR_create_renderpass2",
+                    "VK_KHR_depth_stencil_resolve",
+                };
+                for (const char* dep : dynDeps) {
+                    if (_caps.hasExtension(dep)) {
+                        devExts.push_back(dep);
+                    } else {
+                        ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
+                    }
                 }
             }
             devExts.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
@@ -441,13 +447,23 @@ void VulkanDevice::createLogicalDevice() {
     ci.pNext                   = featureChain;
     VK_CHECK(vkCreateDevice(_physicalDevice, &ci, nullptr, &_device));
     vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
-    // B1：KHR 入口点（1.3 设备驱动同样导出已提升扩展的 KHR 别名，统一走它）
+    // B1：dynamic rendering 入口点。V3-0：部分 1.3 驱动只导出 core 入口
+    //（vkCmdBeginRendering），不导出已提升的 KHR 别名；两者 ABI 兼容，
+    // 优先 KHR、回退 core，避免驱动差异直接 abort。
     _vkBeginRendering = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
         vkGetDeviceProcAddr(_device, "vkCmdBeginRenderingKHR"));
+    if (!_vkBeginRendering) {
+        _vkBeginRendering = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
+            vkGetDeviceProcAddr(_device, "vkCmdBeginRendering"));
+    }
     _vkEndRendering = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
         vkGetDeviceProcAddr(_device, "vkCmdEndRenderingKHR"));
+    if (!_vkEndRendering) {
+        _vkEndRendering = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
+            vkGetDeviceProcAddr(_device, "vkCmdEndRendering"));
+    }
     if (_dynamicRendering && (!_vkBeginRendering || !_vkEndRendering)) {
-        ENGINE_LOG_ERROR("[VK] vkCmdBeginRenderingKHR not resolvable");
+        ENGINE_LOG_ERROR("[VK] no vkCmdBeginRendering entry (KHR/core)");
         std::abort();
     }
     setObjName(VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(_device), "RHI_VulkanDevice");
@@ -794,7 +810,7 @@ void VulkanDevice::drainDeferredGpuWork() {
     _deferredGpu.clear();
 }
 
-void VulkanDevice::beginFrame() {
+bool VulkanDevice::beginFrame() {
     drainDeferredGpuWork();   // 上一帧帧内延迟的纹理上传：现在帧外安全执行
     if (_needsRecreate) {
         vkDeviceWaitIdle(_device);
@@ -805,6 +821,8 @@ void VulkanDevice::beginFrame() {
     }
     _frameSkipped = !beginFrameInternal();
     _frameActive  = !_frameSkipped;
+    // V3-0：本帧没有可用 image 时上层必须跳过录制，不能进入 endFrame
+    return _frameActive;
 }
 
 void VulkanDevice::endFrame() {
@@ -1042,7 +1060,7 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
     VkUniformBlockRes& b = _uniformBlocks[h.id - 1];
     if (!b.buffer) return;
     vkDestroyBuffer(_device, b.buffer, nullptr);
-    _memAlloc.free(b.memAlloc);   // E1（描述符集随 pool 回收，无 FREE_DESCRIPTOR_SET_BIT）
+    _memAlloc.free(b.memAlloc);   // E1（池已开 FREE_BIT；set 实际归还需 DeletionQueue，V3-0 第 7 项）
     b = VkUniformBlockRes{};
 }
 
@@ -1814,7 +1832,10 @@ void VulkanDevice::growTexDescriptorPool() {
     poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = _poolCapUniform;
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    // V3-0：允许对象级归还描述符集（与 UPDATE_AFTER_BIND 可共存；
+    // 实际 vkFreeDescriptorSets 随 DeletionQueue 接入）
+    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT
+                     | VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pi.maxSets       = _poolCapSets;
     pi.poolSizeCount = 2;
     pi.pPoolSizes    = poolSizes;
@@ -1917,7 +1938,13 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     bi.size  = size;
     bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VK_CHECK(vkCreateBuffer(_device, &bi, nullptr, &blk.buffer));
+    // V3-0：资源创建失败返回 {}，不再 VK_CHECK abort（上层可降级/报错）
+    VkResult bufRes = vkCreateBuffer(_device, &bi, nullptr, &blk.buffer);
+    if (bufRes != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] createUniformBlock: vkCreateBuffer failed (%d), size=%u",
+                         (int)bufRes, size);
+        return {};
+    }
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(_device, blk.buffer, &req);
     // E1：HOST_VISIBLE 子分配（页持久映射）
@@ -1930,11 +1957,21 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     }
     blk.memory = blk.memAlloc.memory;
     blk.mapped = blk.memAlloc.mapped;
-    VK_CHECK(vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset));
+    VkResult bindRes = vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset);
+    if (bindRes != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] createUniformBlock: vkBindBufferMemory failed (%d)", (int)bindRes);
+        vkDestroyBuffer(_device, blk.buffer, nullptr);
+        _memAlloc.free(blk.memAlloc);
+        return {};
+    }
 
     // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器。
-    // B6：池耗尽（OUT_OF_POOL/ fragmentation）→ 扩容重试，无规模上限
+    // B6：池耗尽（OUT_OF_POOL / fragmentation）→ 扩容重试，无规模上限
+    // V3-0：descriptorSetCount / pSetLayouts 必须在首次分配前设置，
+    //       且失败时回滚 buffer/memory 返回 {}，不 abort。
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts        = &_texSetLayout;
     dai.descriptorPool     = _texDescriptorPools.back();
     VkResult setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
     if (setResult == VK_ERROR_OUT_OF_POOL_MEMORY || setResult == VK_ERROR_FRAGMENTED_POOL) {
@@ -1942,10 +1979,13 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
         dai.descriptorPool = _texDescriptorPools.back();
         setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
     }
-    VK_CHECK(setResult);
-    dai.descriptorSetCount = 1;
-    dai.pSetLayouts        = &_texSetLayout;
-    VK_CHECK(vkAllocateDescriptorSets(_device, &dai, &blk.set));
+    if (setResult != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] createUniformBlock: descriptor set alloc failed (%d), size=%u",
+                         (int)setResult, size);
+        vkDestroyBuffer(_device, blk.buffer, nullptr);
+        _memAlloc.free(blk.memAlloc);
+        return {};
+    }
 
     VkDescriptorBufferInfo bufInfo{blk.buffer, 0, size};
     VkWriteDescriptorSet writes[5]{};
