@@ -59,6 +59,14 @@ if(ENGINE_HAS_VULKAN)
     target_include_directories(engine PRIVATE "${VULKAN_INCLUDE_DIR}")
     target_link_libraries(engine PRIVATE "${VULKAN_LIBRARY}")
     target_compile_definitions(engine PRIVATE ENGINE_HAS_VULKAN)
+    # C1a：平台 surface 建面宏（VkDevice.cpp 平台分支用；公共头不含平台类型）
+    if(WIN32)
+        target_compile_definitions(engine PRIVATE VK_USE_PLATFORM_WIN32_KHR)
+    elseif(APPLE)
+        target_compile_definitions(engine PRIVATE VK_USE_PLATFORM_METAL_EXT)
+    elseif(UNIX)
+        target_compile_definitions(engine PRIVATE VK_USE_PLATFORM_XLIB_KHR)
+    endif()
 endif()
 
 # ---- Vulkan 着色器：构建期 GLSL → SPIR-V（glslangValidator）----
@@ -112,5 +120,8 @@ target_include_directories(engine
 # ---- 依赖 ----
 # PUBLIC：公共头暴露（glad/glm/assimp/freetype 类型出现在引擎公共头中——
 #         第三方类型泄漏进公共 API 是已知历史债务，M4 治理，见 docs）
-target_link_libraries(engine PUBLIC glad glfw glm assimp freetype)
-# PRIVATE：（暂无——待公共头去第三方类型后，assimp/freetype 移入此处）
+# C1a：glfw 移出 PUBLIC（引擎公共 API 不再暴露窗口库；app/C5 自行链接 glfw）。
+# PRIVATE 过渡：render 层遗留代码（RenderSystem 的 GLFW 桥接、GL Pass）仍引用
+# GLFW 头，C1b 移除桥接后删除此行。
+target_link_libraries(engine PUBLIC glad glm assimp freetype)
+target_link_libraries(engine PRIVATE glfw)

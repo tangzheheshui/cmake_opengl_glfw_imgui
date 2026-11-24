@@ -4,15 +4,69 @@
 #include "log/LogMacros.h"
 #include "VkDevice.h"
 #include "VkCommandList.h"
-#include <GLFW/glfw3.h>
 #include <fstream>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
 #include <filesystem>
 #include "fs/FilePathUtil.h"
 #include "VkShaderReflect.h"
 
+// C1a：平台 surface 建面宏由 CMake 注入（VK_USE_PLATFORM_*）。公共头不出现
+// Vk 类型；此处是全库唯一允许平台分支的位置（后端内部实现细节）。
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+#include <vulkan/vulkan_metal.h>
+#endif
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+#include <X11/Xlib.h>
+#include <vulkan/vulkan_xlib.h>
+#endif
+#if defined(VK_USE_PLATFORM_XCB_KHR)
+#include <xcb/xcb.h>
+#include <vulkan/vulkan_xcb.h>
+#endif
+#if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+#include <wayland-client.h>
+#include <vulkan/vulkan_wayland.h>
+#endif
+
 namespace rhi {
+
+// C1a：按 NativeWindowType 推导实例扩展（宿主未提供 instanceExtensions 时）。
+// 返回 false = 该窗口类型无对应平台 surface 扩展（无法自建面）。
+static bool platformInstanceExtensions(NativeWindowType t,
+                                       std::vector<const char*>& out) {
+    switch (t) {
+        case NativeWindowType::Win32:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_win32_surface");
+            return true;
+        case NativeWindowType::Xlib:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_xlib_surface");
+            return true;
+        case NativeWindowType::Xcb:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_xcb_surface");
+            return true;
+        case NativeWindowType::Wayland:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_wayland_surface");
+            return true;
+        case NativeWindowType::MetalLayer:
+        case NativeWindowType::Cocoa:   // Cocoa 窗口经 CAMetalLayer 建面（宿主回调常见）
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_EXT_metal_surface");
+            return true;
+        case NativeWindowType::None:
+        default:
+            return false;
+    }
+}
 
 static const char* kRequiredDeviceExts[] = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -94,11 +148,19 @@ static bool formatBlitSupported(VkPhysicalDevice pd, VkFormat f) {
 // ============================================================
 // 创建 / 销毁
 // ============================================================
-VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath)
-    : _window(window)
-    , _shaderRootPath(shaderRootPath) {
+// C1a：由 DeviceDesc 构造。早期初始化失败写入 outError 并保持 _initialized=false
+//（工厂转译为 nullptr + 诊断信息）；深度失败（资源路径 VK_CHECK）仍 abort，
+// V3-1 引入 Result<T> 后收口。
+VulkanDevice::VulkanDevice(const DeviceDesc& desc, std::string& outError)
+    : _desc(desc)
+    , _shaderRootPath(desc.shaderRootPath)
+    , _size{desc.width, desc.height} {
+    if (desc.offscreen) {
+        outError = "offscreen Vulkan device not supported yet (C4/F1)";
+        return;
+    }
     createInstance();
-    createSurface();
+    if (!createSurface(outError)) return;
     pickPhysicalDevice();
     // A3: 能力探测（启动日志打印能力表，多机验证的第一手资料）
     _caps = VkCaps::query(_physicalDevice, _surface);
@@ -119,6 +181,7 @@ VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath
     // 初值为无效句柄；所有真实绘制都先调 setDrawUniforms 掩盖了这个潜伏缺陷，
     // RT 内首个未设 block 的 draw 触发越界）
     _commandList = std::make_unique<VkCommandList>(this);
+    _initialized = true;
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -172,7 +235,8 @@ VulkanDevice::~VulkanDevice() {
     _memAlloc.shutdown();    // E1：设备销毁前回收页/专用分配（泄漏在此告警）
     _delQueue.flushAll();    // V3-0：延迟销毁兜底（在 waitIdle + drain 之后，安全）
     if (_device)   vkDestroyDevice(_device, nullptr);
-    if (_surface)  vkDestroySurfaceKHR(_instance, _surface, nullptr);
+    // C1a 所有权约定：externalSurface 归宿主；createSurface 回调/平台自建归 RHI
+    if (_surface && _surfaceOwned) vkDestroySurfaceKHR(_instance, _surface, nullptr);
     if (_debugMessenger && _destroyDebugMessengerFn) {
         _destroyDebugMessengerFn(_instance, _debugMessenger, nullptr);
     }
@@ -180,15 +244,24 @@ VulkanDevice::~VulkanDevice() {
 }
 
 void VulkanDevice::createInstance() {
-    // 1) GLFW 要求的平台 surface 扩展（macOS: VK_KHR_surface + VK_EXT_metal_surface）
+    // 1) 平台 surface 扩展：宿主显式提供（instanceExtensions）优先；
+    //    否则按 NativeWindowType 推导（C1a，RHI 不依赖任何窗口库）
     std::vector<const char*> exts;
-    {
-        uint32_t n = 0;
-        const char** e = glfwGetRequiredInstanceExtensions(&n);
-        exts.assign(e, e + n);
-        for (uint32_t i = 0; i < n; ++i) {
-            ENGINE_LOG_ERROR("[VK] glfw ext[%u] = %s", i, e[i]);
+    if (!_desc.instanceExtensions.empty()) {
+        for (const auto& e : _desc.instanceExtensions) {
+            exts.push_back(e.c_str());   // 指向 _desc 成员字符串，设备生命周期内稳定
         }
+        ENGINE_LOG_INFO("[VK] instance extensions provided by host (%zu)",
+                        _desc.instanceExtensions.size());
+    } else {
+        std::vector<const char*> plat;
+        if (!platformInstanceExtensions(_desc.window.type, plat)) {
+            ENGINE_LOG_ERROR("[VK] no platform surface extension for window type %d "
+                             "(provide DeviceDesc.createSurface or instanceExtensions)",
+                             static_cast<int>(_desc.window.type));
+            return;   // _initialized 保持 false
+        }
+        exts = plat;
     }
 
     // 2) 校验并启用 portability 枚举（macOS 必须，MoltenVK 是 portability 驱动）
@@ -210,14 +283,17 @@ void VulkanDevice::createInstance() {
     app.pApplicationName = "my_app";
     app.apiVersion       = VK_API_VERSION_1_0;   // 最低版本请求，规避 loader/MVK 版本协商问题
 
-    // A1: 验证层开关（RHI_VK_VALIDATION=1 强制开 / =0 强制关；Debug 构建默认开）
+    // A1: 验证层开关（RHI_VK_VALIDATION=1 强制开 / =0 强制关；Debug 构建默认开；
+    // DeviceDesc::enableValidation=false 关闭——环境变量可覆盖宿主设置）
     const char* venv = std::getenv("RHI_VK_VALIDATION");
-    bool wantValidation = false;
+    bool wantValidation = _desc.enableValidation;
     if (venv) {
         wantValidation = (std::strcmp(venv, "0") != 0);
     }
 #ifndef NDEBUG
-    else {
+    else if (!_desc.enableValidation) {
+        wantValidation = false;   // 宿主显式关闭
+    } else {
         wantValidation = true;   // Debug 构建默认开启
     }
 #endif
@@ -296,8 +372,103 @@ void VulkanDevice::setObjName(VkObjectType type, uint64_t handle, const char* na
     _setNameFn(_device, &oi);
 }
 
-void VulkanDevice::createSurface() {
-    VK_CHECK(glfwCreateWindowSurface(_instance, _window, nullptr, &_surface));
+// C1a：surface 来源优先级 externalSurface（宿主持有，RHI 不销毁）
+// → createSurface 回调（RHI 接管）→ 平台自建（RHI 接管）。
+bool VulkanDevice::createSurface(std::string& outError) {
+    if (_desc.externalSurface != 0) {
+        _surface = reinterpret_cast<VkSurfaceKHR>(_desc.externalSurface);
+        _surfaceOwned = false;
+        ENGINE_LOG_INFO("[VK] using host-owned external surface");
+        return true;
+    }
+    if (_desc.createSurface) {
+        const uint64_t s = _desc.createSurface(reinterpret_cast<uint64_t>(_instance));
+        if (s == 0) {
+            outError = "host createSurface callback returned 0";
+            return false;
+        }
+        _surface = reinterpret_cast<VkSurfaceKHR>(s);
+        _surfaceOwned = true;
+        return true;
+    }
+
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+    if (_desc.window.type == NativeWindowType::MetalLayer
+        || _desc.window.type == NativeWindowType::Cocoa) {
+        if (_desc.window.type == NativeWindowType::Cocoa) {
+            // Cocoa 窗口句柄（NSView*）不能直接建面；需要 CAMetalLayer。
+            // 由宿主提供 createSurface 回调（GLFW 宿主内部处理窗口→layer 转换）
+            outError = "Cocoa window requires host createSurface callback (NSView -> CAMetalLayer)";
+            return false;
+        }
+        VkMetalSurfaceCreateInfoEXT mi{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+        mi.pLayer = _desc.window.handle;   // CAMetalLayer*
+        mi.flags  = 0;
+        if (vkCreateMetalSurfaceEXT(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateMetalSurfaceEXT failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+    if (_desc.window.type == NativeWindowType::Win32) {
+        VkWin32SurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+        mi.hinstance = GetModuleHandle(nullptr);
+        mi.hwnd      = static_cast<HWND>(_desc.window.handle);
+        if (vkCreateWin32SurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateWin32SurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+    if (_desc.window.type == NativeWindowType::Xlib) {
+        VkXlibSurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
+        mi.dpy       = static_cast<Display*>(_desc.window.display);
+        mi.window    = reinterpret_cast<Window>(_desc.window.handle);
+        if (vkCreateXlibSurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateXlibSurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_XCB_KHR)
+    if (_desc.window.type == NativeWindowType::Xcb) {
+        VkXcbSurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR};
+        mi.connection = static_cast<xcb_connection_t*>(_desc.window.display);
+        mi.window     = static_cast<xcb_window_t>(reinterpret_cast<uintptr_t>(_desc.window.handle));
+        if (vkCreateXcbSurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateXcbSurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+    if (_desc.window.type == NativeWindowType::Wayland) {
+        VkWaylandSurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+        mi.display   = static_cast<wl_display*>(_desc.window.display);
+        mi.surface   = static_cast<wl_surface*>(_desc.window.handle);
+        if (vkCreateWaylandSurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateWaylandSurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+    (void)outError;
+    outError = "no platform surface path for window type "
+               + std::to_string(static_cast<int>(_desc.window.type))
+               + " (platform macro not compiled in?)";
+    return false;
 }
 
 void VulkanDevice::pickPhysicalDevice() {
@@ -463,16 +634,17 @@ void VulkanDevice::createLogicalDevice() {
 }
 
 void VulkanDevice::createSwapchainObjects() {
-    int fbW = 0, fbH = 0;
-    glfwGetFramebufferSize(_window, &fbW, &fbH);
+    // C1a：RHI 不回查窗口系统——尺寸来自 DeviceDesc/onResize（宿主推送）
+    const uint32_t fbW = _size.width;
+    const uint32_t fbH = _size.height;
 
     // surface 能力
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physicalDevice, _surface, &caps);
     _swapchainExtent = caps.currentExtent;
     if (_swapchainExtent.width == UINT32_MAX) {
-        _swapchainExtent.width  = std::clamp(static_cast<uint32_t>(fbW),  caps.minImageExtent.width,  caps.maxImageExtent.width);
-        _swapchainExtent.height = std::clamp(static_cast<uint32_t>(fbH), caps.minImageExtent.height, caps.maxImageExtent.height);
+        _swapchainExtent.width  = std::clamp(fbW, caps.minImageExtent.width,  caps.maxImageExtent.width);
+        _swapchainExtent.height = std::clamp(fbH, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
 
     // surface 格式（B3c）：优先 sRGB 交换链（线性工作流的编码端）。
@@ -849,6 +1021,7 @@ void VulkanDevice::endFrame() {
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &renderDone;
     VK_CHECK(vkQueueSubmit(_queue, 1, &si, _fenceInFlight));
+    _frameSubmitted = true;   // C1b：present() 消费该标志
 
     // ---- RHI_PROBE=1：第 30 帧回读中心像素（M3 验证用，之后可移除）----
     // 必须在 present 之前执行：此时图像仍处于 acquired 状态，布局转换合法。
@@ -945,8 +1118,18 @@ void VulkanDevice::endFrame() {
         _memAlloc.free(readbackMem);   // E1
         std::fflush(stdout);
     }
+    // C1b：present 由 IRHIDevice::present() 独立执行（GL 宿主 swapBuffers 与
+    // VK vkQueuePresentKHR 同一入口），endFrame 只负责 submit
+}
+
+// ---- C1a/C1b：呈现独立于提交（GL 宿主 swap 与 VK present 同一入口）----
+void VulkanDevice::present() {
+    if (!_frameSubmitted) return;   // 帧跳过/未提交：无可呈现图像
+    _frameSubmitted = false;
+    if (_imageIndex >= _semRenderDone.size() || _swapchain == VK_NULL_HANDLE) return;
 
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    VkSemaphore renderDone = _semRenderDone[_imageIndex];
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores    = &renderDone;
     pi.swapchainCount     = 1;
@@ -959,6 +1142,11 @@ void VulkanDevice::endFrame() {
 }
 
 void VulkanDevice::onResize(int width, int height) {
+    // C1a：尺寸由宿主推送，保存为帧缓冲尺寸真相源（framebufferSize 返回值）
+    if (width > 0 && height > 0) {
+        _size.width  = static_cast<uint32_t>(width);
+        _size.height = static_cast<uint32_t>(height);
+    }
     // 尺寸未变则忽略（应用启动时 onWindowSizeChanged 传来的尺寸与创建时一致，
     // 若此时重建 swapchain，会销毁管线引用的 renderPass 导致绘制崩溃）
     if (width > 0 && height > 0 &&

@@ -10,8 +10,6 @@
 #include <memory>
 #include <vector>
 
-struct GLFWwindow;
-
 namespace rhi {
 
 class IRHICommandList;
@@ -73,8 +71,22 @@ public:
     virtual bool beginFrame() = 0;
     virtual void endFrame()   = 0;
 
-    // 窗口尺寸变化通知（Vulkan 后端重建 swapchain；GL 后端 no-op）
+    // 窗口尺寸变化通知（Vulkan 后端重建 swapchain；GL 后端保存尺寸）
     virtual void onResize(int width, int height) { (void)width; (void)height; }
+
+    // ---- C1a：尺寸查询与呈现（RHI 永不回查窗口系统）----
+    struct FramebufferSize {
+        uint32_t width  = 0;
+        uint32_t height = 0;
+    };
+    // 默认帧缓冲/离屏目标的像素尺寸（GL：构造/onResize 保存的值；
+    // VK：swapchain extent）
+    virtual FramebufferSize framebufferSize() const { return {}; }
+
+    // 呈现当前帧。GL：调用 NativeWindow::swapBuffers 回调（宿主拥有窗口）；
+    // VK：vkQueuePresentKHR；离屏：no-op。
+    // C1b 起由 RenderSystem::renderFrame 统一调用。
+    virtual void present() {}
 
     // 命令录制（每帧从 device 获取，框架内部可复用同一实例）
     virtual IRHICommandList* commandList() = 0;

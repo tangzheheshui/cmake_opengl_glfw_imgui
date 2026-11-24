@@ -3,7 +3,6 @@
 //
 #include "GLDevice.h"
 #include "GLCommandList.h"
-#include <GLFW/glfw3.h>
 #include "log/LogMacros.h"
 #include <algorithm>
 #include <cstring>
@@ -75,9 +74,18 @@ static std::string shaderFileOf(const GraphicsPipelineDesc& desc, ShaderStage st
     return "";
 }
 
-GLDevice::GLDevice(GLFWwindow* window, const std::string& shaderRootPath)
-    : _window(window)
-    , _shaderRootPath(shaderRootPath) {
+// C1a：宿主已把 GL 上下文设为 current 后调用。RHI 不创建窗口/上下文，
+// 只保存尺寸与宿主交换回调。
+GLDevice::GLDevice(const DeviceDesc& desc)
+    : _shaderRootPath(desc.shaderRootPath)
+    , _size{desc.width, desc.height}
+    , _window(desc.window) {
+    if (!_window.valid() || !_window.swapBuffers) {
+        ENGINE_LOG_ERROR("[GL] DeviceDesc.window invalid or missing swapBuffers callback "
+                         "(host owns window/swap, see docs ARCHITECTURE_INTERFACES §3.2)");
+        return;   // _initialized 保持 false，工厂报错
+    }
+    _initialized = true;
     _commandList = std::make_unique<GLCommandList>(this);
 }
 
@@ -158,7 +166,7 @@ DeviceCapabilities GLDevice::capabilities() const {
 
     // sRGB 默认帧缓冲（等价 VK 的 sRGB 交换链）：GL 3.0 起核心提供
     // GL_FRAMEBUFFER_SRGB 写入编码开关（B3c 线性工作流依赖它）。
-    // 注意 GLFW_SRGB_CAPABLE 在 macOS 上查不到（见 app/main.cpp B3c 注释），
+    // 注意 macOS 上 GLFW 不报告 GLFW_SRGB_CAPABLE（见 app/main.cpp B3c 注释），
     // GL_BACK 的 COLOR_ENCODING 查询也实测报 linear——按核心版本能力报告。
     caps.sRGBSwapchain = (major >= 3);
 
@@ -581,6 +589,21 @@ bool GLDevice::beginFrame() {
     ++_frameCount;
     _delQueue.flush(_frameCount);
     return true;
+}
+
+// ---- C1a：尺寸推送 + 呈现 ----
+void GLDevice::onResize(int width, int height) {
+    if (width > 0 && height > 0) {
+        _size.width  = static_cast<uint32_t>(width);
+        _size.height = static_cast<uint32_t>(height);
+    }
+}
+
+void GLDevice::present() {
+    // 宿主拥有窗口与交换时机策略（vsync 等）；RHI 只转发回调
+    if (_window.swapBuffers) {
+        _window.swapBuffers(_window.swapUser);
+    }
 }
 
 IRHICommandList* GLDevice::commandList() {

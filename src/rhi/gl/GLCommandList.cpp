@@ -8,7 +8,6 @@
 // docs/ARCHITECTURE_INTERFACES.md 2026-11-24 状态对齐暂缓（V3-2 绑定层重做时处理），
 // 是 src/rhi → render 的唯一残留 include
 #include "render/DrawUniforms.h"
-#include <GLFW/glfw3.h>
 
 namespace rhi {
 
@@ -89,7 +88,8 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
         glClear(GL_DEPTH_BUFFER_BIT);
     }
 
-    // 视口：desc 未指定时取 RT 尺寸（B4）或窗口大小（Retina 下 framebuffer 尺寸 ≠ 窗口尺寸）
+    // 视口：desc 未指定时取 RT 尺寸（B4）或设备保存的帧缓冲尺寸
+    //（C1a：RHI 不回查窗口系统；Retina 下 framebuffer 尺寸 ≠ 窗口逻辑尺寸）
     int w = static_cast<int>(desc.viewportWidth);
     int h = static_cast<int>(desc.viewportHeight);
     if (w <= 0 || h <= 0) {
@@ -98,7 +98,9 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
             w = static_cast<int>(rt.width);
             h = static_cast<int>(rt.height);
         } else {
-            glfwGetFramebufferSize(_device->window(), &w, &h);
+            const auto fb = _device->framebufferSize();
+            w = static_cast<int>(fb.width);
+            h = static_cast<int>(fb.height);
         }
     }
     glViewport(0, 0, w, h);

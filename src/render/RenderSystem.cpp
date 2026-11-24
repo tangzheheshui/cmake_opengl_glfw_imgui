@@ -16,7 +16,14 @@
 #include "rhi/IRHICommandList.h"
 #include "color/ColorSpace.h"
 #include "fs/FilePathUtil.h"
+// C1a 临时桥接需要 Vulkan 类型（surface 回调）；C1b 移入 app 后 render 层不再 include
+#if defined(ENGINE_HAS_VULKAN)
+#define GLFW_INCLUDE_VULKAN   // glfw3.h 内联 vulkan 声明（glfwCreateWindowSurface）
 #include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
+#else
+#include <GLFW/glfw3.h>
+#endif
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
@@ -105,15 +112,55 @@ void RenderSystem::init(const std::string& rootPath) {
         m_vec_renderpass.push_back(std::make_shared<CPickPass>(mRenderContent));
     }
 
-    // ---- 创建 RHI 设备（RHI_BACKEND 环境变量选择：opengl[默认] / vulkan）----
+    // ---- 创建 RHI 设备（C1a：经 DeviceDesc 契约入口；GLFW→NativeWindow 桥接
+    // 临时保留在 render 层，C1b 移入 app 宿主）----
     if (_window) {
         std::filesystem::path shaderRoot = shaderPath;
         if (_backend == rhi::Backend::Vulkan) {
             shaderRoot = shaderPath.parent_path() / "shaders_vk";
         }
-        m_rhiDevice = rhi::RHIFactory::createDevice(
-            _backend, _window,
-            engine::fs::utf8FromPath(shaderRoot) + std::string(1, std::filesystem::path::preferred_separator));
+        rhi::DeviceDesc desc;
+        desc.backend          = _backend;
+        desc.appName          = "my_app";
+        desc.shaderRootPath   = engine::fs::utf8FromPath(shaderRoot)
+                              + std::string(1, std::filesystem::path::preferred_separator);
+        desc.enableValidation = true;   // RHI_VK_VALIDATION 环境变量可覆盖（后端内）
+        int fbW = 0, fbH = 0;
+        glfwGetFramebufferSize(_window, &fbW, &fbH);
+        desc.width  = static_cast<uint32_t>(fbW);
+        desc.height = static_cast<uint32_t>(fbH);
+        // 窗口类型按平台（Vulkan 建面回调在下方提供，GL 只用交换回调）
+#if defined(_WIN32)
+        desc.window.type = rhi::NativeWindowType::Win32;
+#elif defined(__APPLE__)
+        desc.window.type = rhi::NativeWindowType::Cocoa;
+#else
+        desc.window.type = rhi::NativeWindowType::Xlib;
+#endif
+        desc.window.handle = (void*)_window;
+        // GL：宿主交换回调（present() 转发；RHI 不直接碰 GLFW）
+        desc.window.swapBuffers = [](void* user) {
+            glfwSwapBuffers(static_cast<GLFWwindow*>(user));
+        };
+        desc.window.swapUser = _window;
+#if defined(ENGINE_HAS_VULKAN)
+        // VK：macOS/GLFW 的 surface 建面必须走宿主回调（引擎不碰 GLFW/ObjC++）
+        if (_backend == rhi::Backend::Vulkan) {
+            desc.createSurface = [win = _window](uint64_t instance) -> uint64_t {
+                VkSurfaceKHR s = VK_NULL_HANDLE;
+                if (glfwCreateWindowSurface(reinterpret_cast<VkInstance>(instance),
+                                            win, nullptr, &s) != VK_SUCCESS) {
+                    return 0;
+                }
+                return reinterpret_cast<uint64_t>(s);
+            };
+        }
+#endif
+        std::string devErr;
+        m_rhiDevice = rhi::RHIFactory::createDevice(desc, &devErr);
+        if (!m_rhiDevice && !devErr.empty()) {
+            ENGINE_LOG_ERROR("[RHI] device creation failed: %s", devErr.c_str());
+        }
         if (m_rhiDevice) {
             createSmokeTriangle();
             createTexturedQuad();
@@ -297,6 +344,7 @@ void RenderSystem::drawRhiScene() {
     }
     cmd->endRenderPass();
     m_rhiDevice->endFrame();
+    m_rhiDevice->present();   // C1a：呈现独立于提交
 }
 
 void RenderSystem::draw() {
