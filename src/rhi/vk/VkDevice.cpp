@@ -1758,7 +1758,14 @@ void VulkanDevice::createDescriptorObjects() {
     VkDescriptors::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
         setObjName(type, handle, name);
     };
-    if (!_descs.init(_device, minAlign, &_memAlloc, VkFrames::kDefaultSlots, nameFn)) {
+    // 采样槽数：set0 + N 个纹理槽必须 <= maxBoundDescriptorSets（规范最低保证 4，
+    // 桌面卡通常 32，Intel/MoltenVK 可能 8）。按上限裁，不够时只减少槽位，不崩。
+    const uint32_t boundSets = _caps.props.limits.maxBoundDescriptorSets;
+    uint32_t texSlots = (boundSets > 1) ? (boundSets - 1) : 1;
+    if (texSlots > kMaxTexSlots) texSlots = kMaxTexSlots;
+    ENGINE_LOG_INFO("[VK] texture slots = %u (maxBoundDescriptorSets=%u)",
+                    texSlots, boundSets);
+    if (!_descs.init(_device, minAlign, &_memAlloc, VkFrames::kDefaultSlots, texSlots, nameFn)) {
         ENGINE_LOG_ERROR("[VK] descriptor objects init failed");
     }
     // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用。

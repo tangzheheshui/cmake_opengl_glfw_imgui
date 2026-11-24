@@ -7,15 +7,19 @@
 namespace rhi {
 
 bool VkDescriptors::init(VkDevice device, uint32_t minUboAlign,
-                         VkMemoryAllocator* alloc, uint32_t slotCount, NameFn nameFn) {
+                         VkMemoryAllocator* alloc, uint32_t frameSlotCount,
+                         uint32_t texSlotCount, NameFn nameFn) {
     _device = device;
     _alloc  = alloc;
     _nameFn = std::move(nameFn);
     if (!_nameFn) _nameFn = [](VkObjectType, uint64_t, const char*) {};
     _minAlign = minUboAlign;
-    if (slotCount < 1) slotCount = 1;
+    if (texSlotCount < 1) texSlotCount = 1;
+    if (texSlotCount > kMaxTexSlots) texSlotCount = kMaxTexSlots;
+    _texSlotCount = texSlotCount;
+    if (frameSlotCount < 1) frameSlotCount = 1;
 
-    createPoolsAndLayouts(slotCount);
+    createPoolsAndLayouts(frameSlotCount, texSlotCount);
 
     bool ok = true;
     for (auto& fs : _frameSlots) {
@@ -28,7 +32,7 @@ bool VkDescriptors::init(VkDevice device, uint32_t minUboAlign,
     return ok;
 }
 
-void VkDescriptors::createPoolsAndLayouts(uint32_t slotCount) {
+void VkDescriptors::createPoolsAndLayouts(uint32_t frameSlotCount, uint32_t texSlotCount) {
     // ---- set0：帧 uniform 环。动态偏移 = 每绘制的小数据块位置 ----
     VkDescriptorSetLayoutBinding frameBinding{};
     frameBinding.binding         = 0;
@@ -60,9 +64,9 @@ void VkDescriptors::createPoolsAndLayouts(uint32_t slotCount) {
     // ---- 帧 set 的池（每帧槽位一个 set，永不复位，只重写）----
     VkDescriptorPoolSize framePoolSize{};
     framePoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    framePoolSize.descriptorCount = slotCount;
+    framePoolSize.descriptorCount = frameSlotCount;
     VkDescriptorPoolCreateInfo fpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    fpi.maxSets       = slotCount;
+    fpi.maxSets       = frameSlotCount;
     fpi.poolSizeCount = 1;
     fpi.pPoolSizes    = &framePoolSize;
     VK_CHECK(vkCreateDescriptorPool(_device, &fpi, nullptr, &_frameDescPool));
@@ -76,11 +80,11 @@ void VkDescriptors::createPoolsAndLayouts(uint32_t slotCount) {
     pushRange.size       = kPushTotalSize;
     VkDescriptorSetLayout setLayouts[1 + kMaxTexSlots];
     setLayouts[0] = _frameSetLayout;
-    for (uint32_t i = 0; i < kMaxTexSlots; ++i) setLayouts[i + 1] = _texSlotSetLayout;
+    for (uint32_t i = 0; i < texSlotCount; ++i) setLayouts[i + 1] = _texSlotSetLayout;
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges    = &pushRange;
-    plci.setLayoutCount         = 1 + kMaxTexSlots;
+    plci.setLayoutCount         = 1 + texSlotCount;
     plci.pSetLayouts            = setLayouts;
     VK_CHECK(vkCreatePipelineLayout(_device, &plci, nullptr, &_pipelineLayout));
     _nameFn(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
@@ -88,8 +92,8 @@ void VkDescriptors::createPoolsAndLayouts(uint32_t slotCount) {
 
     // ---- 帧 uniform 环（每槽位 1MB；对齐取设备要求与 256 的较大值）----
     const uint32_t align = _minAlign < 256 ? 256 : _minAlign;
-    _frameSlots.resize(slotCount);
-    for (uint32_t i = 0; i < slotCount; ++i) {
+    _frameSlots.resize(frameSlotCount);
+    for (uint32_t i = 0; i < frameSlotCount; ++i) {
         if (!_frameSlots[i].ring.init(_device, _alloc, 1024u * 1024u, align)) {
             ENGINE_LOG_ERROR("[VK] frame %u uniform ring init failed", i);
         }

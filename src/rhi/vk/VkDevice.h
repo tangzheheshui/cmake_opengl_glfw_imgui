@@ -110,6 +110,7 @@ public:
     VkTextureRes&       textureResMut(TextureHandle h) { return _textures.get(h.id); }
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
     VkPipelineLayout   pipelineLayout() const { return _descs.pipelineLayout(); }
+    uint32_t           texSlotCount() const { return _descs.texSlotCount(); }
 
     // ---- V3-2 绑定层：命令列表用的内部接口（实现在 VkDescriptors）----
     VkDescriptorSet frameUniformSet() const { return _descs.frameSet(_frames.index()); }

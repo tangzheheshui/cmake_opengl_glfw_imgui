@@ -320,7 +320,7 @@ void VkCommandList::bindIndexBuffer(BufferHandle buffer) {
 void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
     // V3-2：只记录槽位。纹理在创建期已写好自己的描述符集（sampler + view 不变），
     // draw 时直接绑 set1..4 —— 这里不再 vkUpdateDescriptorSets。
-    if (!texture.valid() || slot >= kMaxTexSlots) return;
+    if (!texture.valid() || slot >= _device->texSlotCount()) return;
     _texSlots[slot] = texture;
 }
 
@@ -362,25 +362,26 @@ void VkCommandList::applyPushConstants() {
 // 纹理槽没绑时用白纹理兜底（避免描述符未定义）。
 // 相邻绘制常共用同一组纹理 + 同一块 uniform，缓存命中就跳过绑定命令。
 void VkCommandList::bindDescriptorState() {
+    const uint32_t texSlots = _device->texSlotCount();
     VkDescriptorSet sets[1 + kMaxTexSlots];
     sets[0] = _device->frameUniformSet();
-    for (uint32_t i = 0; i < kMaxTexSlots; ++i) {
+    for (uint32_t i = 0; i < texSlots; ++i) {
         const VkDescriptorSet texSet =
             _device->textureSet(_texSlots[i].valid() ? _texSlots[i] : TextureHandle{});
         sets[i + 1] = texSet ? texSet : _device->fallbackTextureSet(i);
     }
 
     bool same = (_lastOffset == _uniformOffset);
-    for (uint32_t i = 0; same && i < 1 + kMaxTexSlots; ++i) {
+    for (uint32_t i = 0; same && i < 1 + texSlots; ++i) {
         same = (_lastSets[i] == sets[i]);
     }
     if (same) return;
 
     const uint32_t dynOffset = _uniformOffset;
     vkCmdBindDescriptorSets(commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            _device->pipelineLayout(), 0, 1 + kMaxTexSlots,
+                            _device->pipelineLayout(), 0, 1 + texSlots,
                             sets, 1, &dynOffset);
-    for (uint32_t i = 0; i < 1 + kMaxTexSlots; ++i) _lastSets[i] = sets[i];
+    for (uint32_t i = 0; i < 1 + texSlots; ++i) _lastSets[i] = sets[i];
     _lastOffset = _uniformOffset;
 }
 

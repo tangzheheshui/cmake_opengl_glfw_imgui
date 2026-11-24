@@ -124,8 +124,9 @@ constexpr uint32_t kPushColorOffset = 64;  // vec4
 constexpr uint32_t kPushTotalSize   = 128;   // M4.3: 天空盒需双 mat4（uViewMat@0 + uProjMat@64）
 // 绘制级 uniform UBO 大小（engine::DrawUniforms = 176B，对齐预留到 256）
 constexpr uint32_t kDrawUniformsSize = 256;
-// V3-2：采样槽位数（= 描述符集 set1..set4）
-constexpr uint32_t kMaxTexSlots = 4;
+// 采样槽位上限（= 描述符集 set1..setN，N 由设备 maxBoundDescriptorSets 裁）。
+// CAD 材质典型：albedo/normal/roughness/metal/emissive/AO/…，4 个不够。
+constexpr uint32_t kMaxTexSlots = 8;
 
 } // namespace rhi
 

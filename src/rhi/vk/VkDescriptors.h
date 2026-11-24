@@ -28,8 +28,10 @@ public:
 
     // slotCount = 帧在飞数量：每个槽位一套 uniform 环 + 描述符集，
     // 避免上一帧还在 GPU 上跑时被这一帧覆盖
+    // texSlotCount = 实际可用的采样槽数（<= kMaxTexSlots，由设备能力裁）
     bool init(VkDevice device, uint32_t minUboAlign, VkMemoryAllocator* alloc,
-              uint32_t slotCount, NameFn nameFn);
+              uint32_t frameSlotCount, uint32_t texSlotCount, NameFn nameFn);
+    uint32_t texSlotCount() const { return _texSlotCount; }
     void shutdown();
 
     // ---- 每帧（slot = 当前帧槽位）----
@@ -43,7 +45,8 @@ public:
     VkDescriptorSet frameSet(uint32_t slot) const { return _frameSlots[slot].set; }
     // 白纹理兜底：未绑定的槽位、上传还没完成的纹理
     VkDescriptorSet fallbackSet(uint32_t slot) const {
-        return (slot == kMaxTexSlots - 1) ? _whiteCubeSet : _whiteSet;
+        // 槽 3 约定给 cubemap（天空盒）；其余槽用 2D 白纹理
+        return (slot == 3) ? _whiteCubeSet : _whiteSet;
     }
     void setFallbackSets(VkDescriptorSet white, VkDescriptorSet whiteCube) {
         _whiteSet = white;
@@ -62,7 +65,7 @@ private:
         uint32_t        defaultOffset = 0;
     };
 
-    void createPoolsAndLayouts(uint32_t slotCount);
+    void createPoolsAndLayouts(uint32_t frameSlotCount, uint32_t texSlotCount);
     void growTexturePool();
     void writeFrameSet(uint32_t slot);
     void growRing(uint32_t slot);
@@ -77,6 +80,7 @@ private:
     VkPipelineLayout      _pipelineLayout   = VK_NULL_HANDLE;
 
     uint32_t _minAlign = 256;   // minUniformBufferOffsetAlignment（至少 256）
+    uint32_t _texSlotCount = 4; // 实际采样槽数（<= kMaxTexSlots）
     std::vector<FrameSlot> _frameSlots;
 
     std::vector<VkDescriptorPool> _texPools;
