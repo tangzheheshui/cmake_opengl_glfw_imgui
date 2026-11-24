@@ -680,17 +680,42 @@ bool VulkanDevice::beginFrameInternal() {
 }
 
 void VulkanDevice::deferGpuWork(std::function<void(VkCommandBuffer)> fn, std::function<void()> onComplete) {
-    if (_frameActive) {
-        _deferredGpu.push_back({std::move(fn), std::move(onComplete)});   // 帧内：延迟到下一帧开头
-        return;
-    }
-    submitOneTime(std::move(fn), std::move(onComplete));                // 帧外：立即执行
+    // E2：一律排队，由下一次 beginFrame 的 drainDeferredGpuWork 批量提交。
+    // 以前帧外创建（初始化阶段）是"每张纹理 submit + waitIdle 一次"，加载几十张
+    // 纹理就是几十次同步往返；批量后整批只提交一次、等一次。
+    _deferredGpu.push_back({std::move(fn), std::move(onComplete)});
 }
 
 void VulkanDevice::drainDeferredGpuWork() {
     if (_deferredGpu.empty()) return;
-    // 用独立一次性提交执行（不动主命令缓冲：此时它可能仍处于 pending 状态）
-    for (auto& w : _deferredGpu) submitOneTime(std::move(w.record), std::move(w.onComplete));
+
+    // E2：整批录进一个临时命令缓冲，一次提交、一次等待。
+    // 用独立命令缓冲是为了不动主命令缓冲（此时它可能仍处于 pending 状态）。
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.commandPool        = _commandPool;
+    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = 1;
+    VkCommandBuffer cb = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateCommandBuffers(_device, &ai, &cb));
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    VK_CHECK(vkBeginCommandBuffer(cb, &bi));
+    for (auto& w : _deferredGpu) {
+        if (w.record) w.record(cb);
+    }
+    VK_CHECK(vkEndCommandBuffer(cb));
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers    = &cb;
+    VK_CHECK(vkQueueSubmit(_queue, 1, &si, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(_queue));
+
+    // GPU 已执行完，完成回调（staging 释放等）现在安全
+    for (auto& w : _deferredGpu) {
+        if (w.onComplete) w.onComplete();
+    }
+    vkFreeCommandBuffers(_device, _commandPool, 1, &cb);
+
+    ENGINE_LOG_INFO("[VK] upload batch: %zu item(s) in one submit", _deferredGpu.size());
     _deferredGpu.clear();
     // 句柄占位已随回调执行完毕（回调自己持有 shared_ptr），向量可以清空
     _deferredTexHandles.clear();
@@ -1357,11 +1382,8 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
     // 开头执行；数据由 lambda 持有（调用方的 initialData 生命周期未知）
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height * bpp * layerCount;
-    // V3-2：记录上传是不是延迟到下一帧。延迟时布局在上传 lambda 里回写；
-    // 立即执行（帧外创建，submitOneTime 已等待完成）时下面 alloc 之后直接置位——
-    // 上传 lambda 里的回写在"立即"路径下看不到槽位（alloc 尚未发生），
-    // 早先靠描述符不读布局掩盖着，接入绑定层后必须显式区分。
-    const bool uploadDeferred = _frameActive;
+    // E2：上传一律走延迟批处理（下一次 beginFrame 统一提交），布局由上传
+    // lambda 完成后回写；在那之前 textureSet() 返回空，绘制退白纹理兜底。
     if (desc.initialData && bytes > 0) {
         auto dataCopy = std::make_shared<std::vector<unsigned char>>(
             static_cast<const unsigned char*>(desc.initialData),
@@ -1590,10 +1612,6 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     // 回填延迟上传回调里的句柄占位（槽位复用也安全：句柄带 gen）
     if (!_deferredTexHandles.empty() && !_deferredTexHandles.back()->valid()) {
         *_deferredTexHandles.back() = h;
-    }
-    // 立即上传的纹理此时已处于 SHADER_READ_ONLY（见 uploadDeferred 注释）
-    if (desc.initialData && bytes > 0 && !uploadDeferred) {
-        _textures.get(h.id).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
     char tname[48];
     std::snprintf(tname, sizeof(tname), "RHI_Texture_%u", h.id);
