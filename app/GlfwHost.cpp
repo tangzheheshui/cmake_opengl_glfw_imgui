@@ -239,6 +239,9 @@ bool GlfwHost::initImGui(bool useVulkan) {
         init.MinImageCount = h.minImageCount;
         init.ImageCount = h.imageCount;
         init.UseDynamicRendering = true;
+        // V3-15：MSAA——ImGui 管线的采样数必须与主帧缓冲一致。
+        // 引擎从 NativeHandles 暴露实际值（1 = 关闭），宿主不自己猜。
+        init.MSAASamples = (VkSampleCountFlagBits)(h.msaaSamples ? h.msaaSamples : 1);
         init.PipelineRenderingCreateInfo = {};
         init.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
         init.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
