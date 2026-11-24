@@ -94,7 +94,10 @@ res/
   shaders/                GLSL（GL 后端，无扩展名 vert_xxx/frag_xxx）
   shaders_vk/             GLSL（Vulkan 变体，.vert/.frag → 构建期编译为 .spv）
   textures/ font/ model/  资源
-docs/RHI_DESIGN.md       RHI 设计文档：接口说明、里程碑、调试经验（必读）
+docs/RHI_DESIGN.md       RHI 设计文档：接口说明、B0 契约、调试经验（必读）
+docs/ARCHITECTURE_INTERFACES.md  接口分层与嵌入宿主设计（L0/C1/C5 + 两机分工）
+docs/RHI_V3_PLAN.md      RHI v3 重构执行计划（当前 RHI 内部重构主线）
+docs/ROADMAP_ZW3D.md     路线图：优先级、排期、里程碑状态（排期唯一来源）
 ```
 
 ## 渲染管线
