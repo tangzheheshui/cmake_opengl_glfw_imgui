@@ -14,7 +14,10 @@ class VulkanDevice;
 
 class VkCommandList final : public IRHICommandList {
 public:
-    explicit VkCommandList(VulkanDevice* device);
+    // primary=true 是设备的主列表（每帧最后提交）；false 是 createCommandList()
+    // 拿到的附加列表（先于主列表提交）。
+    explicit VkCommandList(VulkanDevice* device, bool primary = true);
+    ~VkCommandList() override;
 
     void beginRenderPass(const RenderPassDesc& desc) override;
     void endRenderPass() override;
@@ -35,9 +38,19 @@ public:
     void popDebugLabel() override;
     uint64_t nativeCommandBuffer() const override;
 
-    // V3-2：每帧开头由 VulkanDevice::beginFrame 调用——描述符绑定缓存、
-    // uniform 环偏移、采样槽都按帧归零（命令缓冲换了，旧绑定不再有效）。
-    void onFrameBegin();
+    // V3-6：命令缓冲按帧槽位各一份（两帧在飞时不能共用）。
+    // 设备在命令池就绪后调用一次；失败返回 false，该列表不可用。
+    bool initCommandBuffers(uint32_t slots);
+    // 每帧开头：重置并开始录制本槽位命令缓冲，同时把绑定缓存/uniform 偏移/
+    // 采样槽按帧归零（新命令缓冲里旧绑定不再有效）。
+    void beginFrameSlot(uint32_t slot);
+    // 本帧是否录过东西（没录过的附加列表不提交）
+    bool used() const { return _used; }
+    void markUsed() { _used = true; }
+    uint32_t slot() const { return _slot; }
+    VkCommandBuffer commandBuffer() const {
+        return _slot < _cmdBuffers.size() ? _cmdBuffers[_slot] : VK_NULL_HANDLE;
+    }
 
 private:
     void applyPushConstants();
@@ -47,6 +60,11 @@ private:
 
     // pipeline layout 由 VulkanDevice 持有（所有管线共用，固定 push 布局），
     // 通过 _device->pipelineLayout() 访问
+
+    bool _primary = true;
+    std::vector<VkCommandBuffer> _cmdBuffers;   // 下标 = 帧槽位
+    uint32_t _slot = 0;
+    bool     _used = false;
 
     PipelineHandle _curPipeline;
     BufferHandle   _curVertexBuffer;

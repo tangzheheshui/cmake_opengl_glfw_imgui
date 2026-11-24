@@ -99,6 +99,14 @@ public:
     // 命令录制（每帧从 device 获取，框架内部可复用同一实例）
     virtual IRHICommandList* commandList() = 0;
 
+    // ---- V3-6：附加命令列表（多列表录制）----
+    // 取一个附加列表，把一帧的部分录制工作放进去；一帧内可以取多个。
+    // 提交顺序：所有用到的附加列表（按创建顺序）→ 主列表。主列表最后执行，
+    // 负责最终呈现前的收尾（现在的 UI 叠加就在主列表里）。
+    // 语义保证：最终画面与"按上述顺序录在同一个列表上"完全一致。
+    // OpenGL 后端没有"延迟提交"，这里返回主列表本身，命令按调用顺序立即执行。
+    virtual IRHICommandList* createCommandList() { return commandList(); }
+
     // ---- 原生句柄（app 层接入第三方库用，如 ImGui Vulkan backend）----
     struct NativeHandles {
         uint64_t instance       = 0;   // VkInstance

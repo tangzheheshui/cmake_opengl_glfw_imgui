@@ -7,12 +7,48 @@
 
 namespace rhi {
 
-VkCommandList::VkCommandList(VulkanDevice* device)
+VkCommandList::VkCommandList(VulkanDevice* device, bool primary)
     : _device(device)
+    , _primary(primary)
     , _uniformOffset(device->defaultUniformOffset()) {
 }
 
-void VkCommandList::onFrameBegin() {
+VkCommandList::~VkCommandList() {
+    if (_cmdBuffers.empty()) return;
+    VkCommandPool pool = _device->commandPool();
+    if (pool != VK_NULL_HANDLE) {
+        vkFreeCommandBuffers(_device->vkDeviceHandle(), pool,
+                             static_cast<uint32_t>(_cmdBuffers.size()), _cmdBuffers.data());
+    }
+    _cmdBuffers.clear();
+}
+
+bool VkCommandList::initCommandBuffers(uint32_t slots) {
+    if (slots < 1) slots = 1;
+    _cmdBuffers.resize(slots, VK_NULL_HANDLE);
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.commandPool        = _device->commandPool();
+    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.commandBufferCount = slots;
+    if (vkAllocateCommandBuffers(_device->vkDeviceHandle(), &ai, _cmdBuffers.data()) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] command list buffers alloc failed");
+        _cmdBuffers.clear();
+        return false;
+    }
+    return true;
+}
+
+void VkCommandList::beginFrameSlot(uint32_t slot) {
+    if (slot >= _cmdBuffers.size()) return;
+    _slot = slot;
+    _used = false;
+    if (vkResetCommandBuffer(_cmdBuffers[slot], 0) != VK_SUCCESS) return;
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    if (vkBeginCommandBuffer(_cmdBuffers[slot], &bi) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] command list begin failed (slot %u)", slot);
+        return;
+    }
+    // 绑定状态按帧归零：新命令缓冲里旧绑定不再有效
     for (uint32_t i = 0; i < kMaxTexSlots; ++i) _texSlots[i] = TextureHandle{};
     _uniformOffset = _device->defaultUniformOffset();
     for (auto& s : _lastSets) s = VK_NULL_HANDLE;
@@ -22,6 +58,7 @@ void VkCommandList::onFrameBegin() {
 }
 
 void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
+    _used = true;
     // B4：离屏 RenderTarget 分支（dynamic rendering 附件来自 RT 资源）
     if (desc.renderTarget.valid()) {
         const VkRenderTargetRes& rt = _device->renderTargetRes(desc.renderTarget);
@@ -58,8 +95,8 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
             ri.pDepthAttachment = &depthAtt;
         }
 
-        _device->recordRenderTargetBeginBarriers(_device->commandBuffer(), desc.renderTarget);
-        _device->beginRenderingFn()(_device->commandBuffer(), &ri);
+        _device->recordRenderTargetBeginBarriers(commandBuffer(), desc.renderTarget);
+        _device->beginRenderingFn()(commandBuffer(), &ri);
         _inRenderPass    = true;
         _curRenderTarget = desc.renderTarget;
 
@@ -67,7 +104,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         setViewport(0, static_cast<float>(extent.height),
                     static_cast<float>(extent.width), -static_cast<float>(extent.height));
         VkRect2D scissor{{0, 0}, extent};
-        vkCmdSetScissor(_device->commandBuffer(), 0, 1, &scissor);
+        vkCmdSetScissor(commandBuffer(), 0, 1, &scissor);
         return;
     }
 
@@ -113,8 +150,8 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     ri.pColorAttachments    = &colorAtt;
     ri.pDepthAttachment     = &depthAtt;
 
-    _device->recordBeginPassBarriers(_device->commandBuffer(), desc.clearColor, desc.clearDepth);
-    _device->beginRenderingFn()(_device->commandBuffer(), &ri);
+    _device->recordBeginPassBarriers(commandBuffer(), desc.clearColor, desc.clearDepth);
+    _device->beginRenderingFn()(commandBuffer(), &ri);
     _inRenderPass = true;
 
     // 动态 viewport/scissor（desc 未指定时用 swapchain 尺寸）
@@ -127,7 +164,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     // ImGui 自设正高度 viewport + 自带投影（动态状态逐命令生效），互不影响。
     setViewport(0, static_cast<float>(h), static_cast<float>(w), -static_cast<float>(h));
     VkRect2D scissor{{0, 0}, {w, h}};
-    vkCmdSetScissor(_device->commandBuffer(), 0, 1, &scissor);
+    vkCmdSetScissor(commandBuffer(), 0, 1, &scissor);
 }
 
 void VkCommandList::endRenderPass() {
@@ -136,9 +173,9 @@ void VkCommandList::endRenderPass() {
     // V3-0：屏障必须记录在 vkCmdEndRendering 之后——rendering 实例内禁止
     // 图像布局转换（验证层 6 条 error 的来源），实例外记录即合法
     const bool hadRT = _curRenderTarget.valid();
-    _device->endRenderingFn()(_device->commandBuffer());
+    _device->endRenderingFn()(commandBuffer());
     if (hadRT) {
-        _device->recordRenderTargetEndBarriers(_device->commandBuffer(), _curRenderTarget);
+        _device->recordRenderTargetEndBarriers(commandBuffer(), _curRenderTarget);
         _curRenderTarget = RenderTargetHandle{};
     }
     _inRenderPass = false;
@@ -146,10 +183,11 @@ void VkCommandList::endRenderPass() {
 
 void VkCommandList::bindPipeline(PipelineHandle pipeline) {
     if (!pipeline.valid()) return;
+    _used = true;
     _curPipeline = pipeline;
     // 关键：真正绑定管线命令（漏掉此调用时 encoder 无绑定管线，
     // draw 编码时 getGraphicsPipeline() 返回 null 直接崩溃）
-    vkCmdBindPipeline(_device->commandBuffer(),
+    vkCmdBindPipeline(commandBuffer(),
                       VK_PIPELINE_BIND_POINT_GRAPHICS,
                       _device->pipelineRes(pipeline).pipeline);
     const VkPipelineRes& p = _device->pipelineRes(pipeline);
@@ -242,13 +280,13 @@ void VkCommandList::bindVertexBuffer(BufferHandle buffer, uint32_t binding) {
     if (binding == 0) _curVertexBuffer = buffer;
     VkBuffer vb = _device->bufferRes(buffer).buffer;
     VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(_device->commandBuffer(), binding, 1, &vb, &offset);
+    vkCmdBindVertexBuffers(commandBuffer(), binding, 1, &vb, &offset);
 }
 
 void VkCommandList::bindIndexBuffer(BufferHandle buffer) {
     if (!buffer.valid()) return;
     _curIndexBuffer = buffer;
-    vkCmdBindIndexBuffer(_device->commandBuffer(), _device->bufferRes(buffer).buffer,
+    vkCmdBindIndexBuffer(commandBuffer(), _device->bufferRes(buffer).buffer,
                          0, VK_INDEX_TYPE_UINT32);
 }
 
@@ -260,6 +298,7 @@ void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
 }
 
 void VkCommandList::setDrawUniforms(UniformBlockHandle /*block*/, const void* data, uint32_t size) {
+    _used = true;
     // V3-2：数据追加进帧内 uniform 环（256B 对齐），draw 时作为 set0 的动态偏移。
     // block 句柄不再承载 GPU 数据（GL 后端本来就是哑句柄）。
     if (!data || size == 0) return;
@@ -273,19 +312,19 @@ void VkCommandList::setViewport(float x, float y, float w, float h) {
     // （beginRenderPass 传入 y=+height / h=-height；maintenance1，Vulkan 1.1 核心）。
     // ImGui 侧用自己的正高度 viewport 录制（动态状态，逐命令生效，互不影响）。
     VkViewport vp{x, y, w, h, 0.0f, 1.0f};
-    vkCmdSetViewport(_device->commandBuffer(), 0, 1, &vp);
+    vkCmdSetViewport(commandBuffer(), 0, 1, &vp);
 }
 
 // C2：裁剪矩形。VK 帧缓冲坐标即左上原点，与契约一致，直接透传。
 // （负高度 viewport 只翻转光栅化 y，scissor 仍在帧缓冲坐标系）
 void VkCommandList::setScissor(int x, int y, int w, int h) {
     VkRect2D sc{{x, y}, {static_cast<uint32_t>(w), static_cast<uint32_t>(h)}};
-    vkCmdSetScissor(_device->commandBuffer(), 0, 1, &sc);
+    vkCmdSetScissor(commandBuffer(), 0, 1, &sc);
 }
 
 void VkCommandList::applyPushConstants() {
     if (_pushDirty && _curPipeline.valid()) {
-        vkCmdPushConstants(_device->commandBuffer(), _device->pipelineLayout(),
+        vkCmdPushConstants(commandBuffer(), _device->pipelineLayout(),
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, kPushTotalSize, _pushData);
         _pushDirty = false;
@@ -311,7 +350,7 @@ void VkCommandList::bindDescriptorState() {
     if (same) return;
 
     const uint32_t dynOffset = _uniformOffset;
-    vkCmdBindDescriptorSets(_device->commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
+    vkCmdBindDescriptorSets(commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
                             _device->pipelineLayout(), 0, 1 + kMaxTexSlots,
                             sets, 1, &dynOffset);
     for (uint32_t i = 0; i < 1 + kMaxTexSlots; ++i) _lastSets[i] = sets[i];
@@ -320,23 +359,25 @@ void VkCommandList::bindDescriptorState() {
 
 void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
     if (!_inRenderPass || !_curPipeline.valid()) return;
+    _used = true;
     applyPushConstants();
     bindDescriptorState();
-    vkCmdDraw(_device->commandBuffer(), vertexCount, 1, firstVertex, 0);
+    vkCmdDraw(commandBuffer(), vertexCount, 1, firstVertex, 0);
 }
 
 void VkCommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex) {
     if (!_inRenderPass || !_curPipeline.valid() || !_curIndexBuffer.valid()) return;
+    _used = true;
     applyPushConstants();
     bindDescriptorState();
-    vkCmdDrawIndexed(_device->commandBuffer(), indexCount, instanceCount, firstIndex, 0, 0);
+    vkCmdDrawIndexed(commandBuffer(), indexCount, instanceCount, firstIndex, 0, 0);
 }
 
 void VkCommandList::pushDebugLabel(const char*) {}
 void VkCommandList::popDebugLabel() {}
 
 uint64_t VkCommandList::nativeCommandBuffer() const {
-    return reinterpret_cast<uint64_t>(_device->commandBuffer());
+    return reinterpret_cast<uint64_t>(commandBuffer());
 }
 
 } // namespace rhi

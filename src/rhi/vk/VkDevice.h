@@ -80,6 +80,10 @@ public:
     void present() override;   // vkQueuePresentKHR（离屏 no-op）
 
     IRHICommandList* commandList() override;
+    // V3-6：附加命令列表（先于主列表提交；GL 后端返回主列表本身）
+    IRHICommandList* createCommandList() override;
+    // 命令池（命令列表按槽位分配命令缓冲用）
+    VkCommandPool commandPool() const { return _commandPool; }
     uint64_t nativeBuffer(BufferHandle h)   const override;
     uint64_t nativeTexture(TextureHandle h) const override;
     uint64_t nativePipeline(PipelineHandle h) const override;
@@ -134,7 +138,7 @@ public:
     void recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTargetHandle rt);
     // endFrame 提交前的 color → PRESENT_SRC 转换（dynamic rendering 无自动 finalLayout）
     void recordPresentBarrier(VkCommandBuffer cb);
-    VkCommandBuffer commandBuffer() const { return _frames.current().cmd; }
+    VkCommandBuffer commandBuffer() const;   // 主列表本帧的命令缓冲（定义在 .cpp）
     uint32_t currentImageIndex() const { return _imageIndex; }
     void bindInstanceVertexBuffer(VkCommandBuffer cb, BufferHandle h) const;
 
@@ -246,6 +250,17 @@ private:
     PFN_vkCmdEndRenderingKHR   _vkEndRendering = nullptr;
 
     std::unique_ptr<VkCommandList> _commandList;
+    std::vector<std::unique_ptr<VkCommandList>> _extraLists;   // V3-6 附加列表
+
+    // V3-6 自检（RHI_VK_MULTILIST=1）：附加列表写 0xAAAA、主列表写 0xBBBB，
+    // 回读应为 0xBBBB（证明"附加列表先、主列表后"的提交顺序生效）
+    bool           _mlTest   = false;
+    VkBuffer       _mlBuf    = VK_NULL_HANDLE;
+    VkMemAlloc     _mlMem;
+    void*          _mlMapped = nullptr;
+    VkCommandList* _mlList   = nullptr;
+    uint32_t       _mlFrames = 0;
+    void multListSelfTest();
     std::string _adapterName;
 };
 

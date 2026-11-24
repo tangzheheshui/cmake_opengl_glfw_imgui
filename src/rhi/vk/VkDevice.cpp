@@ -161,7 +161,10 @@ VulkanDevice::VulkanDevice(const DeviceDesc& desc, std::string& outError)
     // 白纹理创建完才知道它们的描述符集，这里交给 VkDescriptors 做兜底
     _descs.setFallbackSets(_textures.get(_whiteTex.id).set,
                            _textures.get(_whiteCubeTex.id).set);
-    _commandList = std::make_unique<VkCommandList>(this);
+    _commandList = std::make_unique<VkCommandList>(this, true);
+    if (!_commandList->initCommandBuffers(_frames.slotCount())) {
+        ENGINE_LOG_ERROR("[VK] primary command list init failed");
+    }
     _initialized = true;
 }
 
@@ -178,6 +181,13 @@ VulkanDevice::~VulkanDevice() {
     _delQueue.flushAll();
     destroySwapchainObjects();
     _frames.shutdown();
+    if (_mlBuf) {
+        vkDestroyBuffer(_device, _mlBuf, nullptr);
+        _memAlloc.free(_mlMem);
+        _mlBuf = VK_NULL_HANDLE;
+    }
+    _extraLists.clear();       // 附加列表释放自己的命令缓冲
+    _commandList.reset();
     if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
     // E1：先走子分配器统计/告警，资源对象内存在随行销毁
     _buffers.forEach([&](VkBufferRes& b) {
@@ -634,7 +644,7 @@ void VulkanDevice::createSyncObjects() {
     VkFrames::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
         setObjName(type, handle, name);
     };
-    if (!_frames.init(_device, _commandPool, VkFrames::kDefaultSlots, nameFn)) {
+    if (!_frames.init(_device, VkFrames::kDefaultSlots, nameFn)) {
         ENGINE_LOG_ERROR("[VK] frame sync objects init failed");
     }
 }
@@ -656,8 +666,8 @@ bool VulkanDevice::beginFrameInternal() {
     if (!_swapchain.acquire(_frames.current().imageAvailable, _imageIndex)) {
         return false;   // OUT_OF_DATE 等：本帧跳过，beginFrame 下一轮重建
     }
-    if (!_frames.beginRecording()) {
-        ENGINE_LOG_ERROR("[VK] frame command buffer begin failed");
+    if (!_frames.resetFence()) {
+        ENGINE_LOG_ERROR("[VK] frame fence reset failed");
         return false;
     }
     return true;
@@ -697,9 +707,12 @@ bool VulkanDevice::beginFrame() {
 
         // V3-2：帧内 uniform 环归零。上一帧命令已执行完（fence 已等待），
         // 现在整块复用是安全的；offset 0 留给"没调 setDrawUniforms 的绘制"。
+        // 先归零本槽位的 uniform 环（命令列表 beginFrameSlot 里要读默认偏移），
+        // 再让所有命令列表开始录制本帧
         _descs.beginFrame(_frames.index());
-
-        if (_commandList) _commandList->onFrameBegin();
+        if (_commandList) _commandList->beginFrameSlot(_frames.index());
+        for (auto& l : _extraLists) l->beginFrameSlot(_frames.index());
+        multListSelfTest();
     }
     return _frameActive;
 }
@@ -710,9 +723,24 @@ void VulkanDevice::endFrame() {
 
     // B1：dynamic rendering 无 renderpass finalLayout，present 前手动转回 PRESENT_SRC。
     // 仅在本帧真正渲染过（布局已被转到 COLOR_ATTACHMENT）时需要；空帧已是 PRESENT。
-    VkCommandBuffer cb = _frames.current().cmd;
+    // V3-6：提交顺序 = 用过的附加列表（按创建顺序）→ 主列表。
+    // 主列表最后执行，负责最终呈现屏障（UI 叠加也录在它上面）。
+    std::vector<VkCommandBuffer> cbs;
+    cbs.reserve(_extraLists.size() + 1);
+    for (auto& l : _extraLists) {
+        if (l->used()) cbs.push_back(l->commandBuffer());
+    }
+    VkCommandBuffer cb = _commandList ? _commandList->commandBuffer() : VK_NULL_HANDLE;
+    if (cb == VK_NULL_HANDLE) return;
+    if (_mlTest && _mlBuf) {
+        vkCmdFillBuffer(cb, _mlBuf, 0, sizeof(uint32_t), 0xBBBBBBBBu);
+    }
     recordPresentBarrier(cb);
     VK_CHECK(vkEndCommandBuffer(cb));
+    cbs.push_back(cb);
+    for (auto& l : _extraLists) {
+        if (l->used()) VK_CHECK(vkEndCommandBuffer(l->commandBuffer()));
+    }
 
     // 每个 swapchain image 使用独立的 render-done semaphore：
     // presentation 完成前不能复用同一个 binary semaphore（VUID-...-00067）
@@ -728,8 +756,8 @@ void VulkanDevice::endFrame() {
     VkSemaphore imageAvailable = _frames.current().imageAvailable;
     si.pWaitSemaphores    = &imageAvailable;
     si.pWaitDstStageMask  = &waitStage;
-    si.commandBufferCount = 1;
-    si.pCommandBuffers    = &cb;
+    si.commandBufferCount = static_cast<uint32_t>(cbs.size());
+    si.pCommandBuffers    = cbs.data();
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &renderDone;
     VK_CHECK(vkQueueSubmit(_queue, 1, &si, _frames.current().fence));
@@ -759,7 +787,8 @@ void VulkanDevice::endFrame() {
         VK_CHECK(vkBindBufferMemory(_device, readback, readbackMem.memory, readbackMem.offset));
 
         // 主命令缓冲已完成，可 reset 后复用录制回读
-        VkCommandBuffer cb = _frames.current().cmd;
+        VkCommandBuffer cb = _commandList ? _commandList->commandBuffer() : VK_NULL_HANDLE;
+        if (cb == VK_NULL_HANDLE) return;
         VK_CHECK(vkResetCommandBuffer(cb, 0));
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         VK_CHECK(vkBeginCommandBuffer(cb, &bi));
@@ -1592,6 +1621,61 @@ bool VulkanDevice::nativeHandles(NativeHandles& out) const {
 
 IRHICommandList* VulkanDevice::commandList() {
     return _commandList.get();
+}
+
+VkCommandBuffer VulkanDevice::commandBuffer() const {
+    return _commandList ? _commandList->commandBuffer() : VK_NULL_HANDLE;
+}
+
+// V3-6：附加命令列表。一帧内先于主列表提交，语义与"按顺序录在同一列表上"一致。
+// 列表对象由设备持有（一次创建、逐帧复用），不适合每帧新建。
+// V3-6 自检：验证"附加列表先提交、主列表后提交"的顺序。
+// 附加列表每帧写 0xAAAA，主列表每帧末尾写 0xBBBB；回读应为 0xBBBB。
+void VulkanDevice::multListSelfTest() {
+    static const bool enabled = (std::getenv("RHI_VK_MULTILIST") != nullptr);
+    if (!enabled) return;
+
+    if (!_mlTest) {
+        _mlTest = true;
+        VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bci.size        = sizeof(uint32_t);
+        bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &_mlBuf));
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(_device, _mlBuf, &req);
+        _mlMem = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                      | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VK_CHECK(vkBindBufferMemory(_device, _mlBuf, _mlMem.memory, _mlMem.offset));
+        _mlMapped = _mlMem.mapped;
+        _mlList = static_cast<VkCommandList*>(createCommandList());
+        // 新列表加入 _extraLists 时本帧的 beginFrameSlot 循环已经跑过，这里补一次
+        if (_mlList) _mlList->beginFrameSlot(_frames.index());
+        ENGINE_LOG_INFO("[VK][multilist] self-test enabled (secondary list + ordering check)");
+    }
+
+    if (_mlList) {
+        vkCmdFillBuffer(_mlList->commandBuffer(), _mlBuf, 0, sizeof(uint32_t), 0xAAAAAAAAu);
+        _mlList->markUsed();
+    }
+
+    // 读第 20 帧的值：此时前几帧的提交早已完成（帧在飞 2 + 延迟销毁滞后）
+    if (++_mlFrames == 20 && _mlMapped) {
+        const uint32_t v = *static_cast<const uint32_t*>(_mlMapped);
+        ENGINE_LOG_INFO("[VK][multilist] buffer=0x%08X (%s)", v,
+                        v == 0xBBBBBBBBu ? "order ok" : "ORDER WRONG");
+    }
+}
+
+IRHICommandList* VulkanDevice::createCommandList() {
+    auto list = std::make_unique<VkCommandList>(this, false);
+    if (!list->initCommandBuffers(_frames.slotCount())) {
+        ENGINE_LOG_WARN_ONCE("[VK] secondary command list init failed; fallback to primary");
+        return commandList();
+    }
+    VkCommandList* raw = list.get();
+    _extraLists.push_back(std::move(list));
+    return raw;
 }
 
 // V3-3：管线创建/缓存交给 VkPipelines；设备只保留句柄表

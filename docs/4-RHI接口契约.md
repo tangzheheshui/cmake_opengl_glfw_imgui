@@ -9,6 +9,7 @@ RHI 是引擎内部统一两个后端的图形接口层。这份写它有哪些�
 | 工厂 | RHIFactory | 按后端创建设备（入口） |
 | 设备 | IRHIDevice | 创建、销毁资源；开始一帧、结束一帧 |
 | 命令列表 | IRHICommandList | 录一帧的绘制命令 |
+| 附加命令列表 | createCommandList() | 一帧内拆出多条列表录制；提交顺序：附加列表 → 主列表 |
 | 缓冲 | BufferHandle | 顶点、索引等数据 |
 | 纹理 | TextureHandle | 贴图 |
 | 采样器 | SamplerHandle | 贴图怎么采样 |
