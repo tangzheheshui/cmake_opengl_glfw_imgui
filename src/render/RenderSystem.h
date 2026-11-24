@@ -103,6 +103,9 @@ private:
 	};
 	PickRequest m_pickReq;
 	void loadTexture(const std::filesystem::path& dirPath);
+	// V3-0 验证设施（RHI_CHURN=<N>）：N 轮创建/销毁纹理，压测延迟销毁队列
+	// 与内存分配器账目（VK 配合验证层观察 0 error / 退出 live=0）
+	void runChurnTest();
     std::shared_ptr<TextureMng> m_texMng;
     std::shared_ptr<FontManager> m_fontMng;
 	std::shared_ptr<Scene> mCurScene;

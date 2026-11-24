@@ -65,9 +65,12 @@ public:
     virtual UniformBlockHandle createUniformBlock(uint32_t size) = 0;
 
     // ---- 帧循环 ----
-    // GL 后端：空实现（swap 由 main 里的 glfwSwapBuffers 完成，保持现有主循环不变）
-    // Vulkan 后端：beginFrame = acquire image；endFrame = submit + present
-    virtual void beginFrame() = 0;
+    // GL 后端：执行延迟销毁队列（V3-0 DeletionQueue），恒返回 true
+    // Vulkan 后端：beginFrame = 等待 fence + acquire image；endFrame = submit + present
+    // 返回 false = 本帧无法开始（swapchain 过期重建中/窗口最小化），上层必须
+    // 跳过全部命令录制（此前返回 void 时失败被内部吞掉，上层会录制一个
+    // 不会提交的帧——V3-0 止血项）
+    virtual bool beginFrame() = 0;
     virtual void endFrame()   = 0;
 
     // 窗口尺寸变化通知（Vulkan 后端重建 swapchain；GL 后端 no-op）

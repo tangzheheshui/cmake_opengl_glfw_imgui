@@ -18,6 +18,7 @@
 #include "fs/FilePathUtil.h"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 
 // ---- RHI 冒烟三角形几何（NDC 位置 + 颜色，交错存放）----
@@ -116,6 +117,7 @@ void RenderSystem::init(const std::string& rootPath) {
         if (m_rhiDevice) {
             createSmokeTriangle();
             createTexturedQuad();
+            runChurnTest();
             // 无 UI 环境（如 Vulkan 模式早期验证）可强制显示验证内容
             if (std::getenv("RHI_SMOKE")) {
                 m_settings.rhiSmokeTriangle = true;
@@ -172,6 +174,33 @@ void RenderSystem::createSmokeTriangle() {
     m_smokeIB = m_rhiDevice->createBuffer(ibDesc);
 }
 
+// ---- V3-0 验证设施：RHI_CHURN=<N> 纹理创建/销毁压测 ----
+// 每轮 beginFrame → 创建 8 张 64x64 纹理 → 逐帧 destroy → endFrame；
+// 结束后等 GPU 空闲，验证：销毁队列正确清空、（VK）验证层 0 error、
+// 退出时分配器 live=0（退出日志）。
+void RenderSystem::runChurnTest() {
+    const char* e = std::getenv("RHI_CHURN");
+    if (!e) return;
+    const int rounds = std::max(1, std::atoi(e));
+    if (!m_rhiDevice) return;
+    std::vector<unsigned char> px(64 * 64 * 4, 128);
+    for (int i = 0; i < rounds; ++i) {
+        if (!m_rhiDevice->beginFrame()) break;
+        std::vector<rhi::TextureHandle> texs;
+        for (int k = 0; k < 8; ++k) {
+            rhi::TextureDesc td;
+            td.width = 64; td.height = 64;
+            td.usage = rhi::TEX_SAMPLED;
+            td.initialData = px.data();
+            texs.push_back(m_rhiDevice->createTexture(td));
+        }
+        for (auto& t : texs) m_rhiDevice->destroyTexture(t);
+        m_rhiDevice->endFrame();
+    }
+    m_rhiDevice->waitIdle();
+    ENGINE_LOG_INFO("[CHURN] %d rounds x 8 textures created+destroyed", rounds);
+}
+
 void RenderSystem::update() {
 
 }
@@ -185,7 +214,9 @@ void RenderSystem::drawRhiScene() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd) return;
 
-    m_rhiDevice->beginFrame();
+    // V3-0：beginFrame 失败（swapchain 过期/重建中）= 本帧跳过全部录制。
+    // 此前返回 void，失败被吞掉后仍录制命令到一个不会提交的 command buffer。
+    if (!m_rhiDevice->beginFrame()) return;
     // B4 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交完成）
     runRenderTargetReadbackTest();
     // D2 拾取：同帧内渲染 ID 图（回读推迟到下一帧）
@@ -278,12 +309,16 @@ void RenderSystem::draw() {
     // 硬件做 linear→sRGB 编码（纹理已在采样时解码）。ImGui 在 main 中绘制前
     // 会关闭本开关，保持其既有的 gamma 空间 UI 外观。
     glEnable(GL_FRAMEBUFFER_SRGB);
+    // V3-0：统一帧生命周期入口（GL 后端 = 帧号推进 + 延迟销毁 flush；
+    // C1b 起两端走同一 renderFrame 流程）
+    if (m_rhiDevice && !m_rhiDevice->beginFrame()) return;
     // 帧级 Pass 循环（调试面板可按开关跳过）
     renderScenePasses();
     drawSceneOverlays();
     selfTestAB();   // M4.2 验证设施：同帧 A/B 逐像素对比（调试用）
     runRenderTargetReadbackTest();   // B4 验证设施（GL 即时语义，渲染/回读可同帧）
     runPickPass();                   // D2 拾取（GL 即时语义）
+    if (m_rhiDevice) m_rhiDevice->endFrame();
 }
 
 // M4.2 验证设施：同帧 A/B 对比（调试用）
@@ -751,7 +786,7 @@ void RenderSystem::drawTexturedQuad() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd || !m_quadPipeline.valid() || !m_quadVB.valid() || !m_quadTex.valid()) return;
 
-    m_rhiDevice->beginFrame();
+    if (!m_rhiDevice->beginFrame()) return;
 
     rhi::RenderPassDesc rp;
     rp.clearColor = false;
@@ -815,7 +850,7 @@ void RenderSystem::drawSmokeTriangle() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd || !m_smokePipeline.valid() || !m_smokeVB.valid()) return;
 
-    m_rhiDevice->beginFrame();
+    if (!m_rhiDevice->beginFrame()) return;
 
     rhi::RenderPassDesc rp;
     rp.clearColor = false;      // 叠加在主场景上，不清屏

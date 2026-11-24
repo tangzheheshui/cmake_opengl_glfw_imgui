@@ -14,6 +14,7 @@
 #define VkDevice_h
 
 #include "../IRHIDevice.h"
+#include "../detail/DeletionQueue.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
 #include <vector>
@@ -55,7 +56,7 @@ public:
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 
-    void beginFrame() override;
+    bool beginFrame() override;
     void endFrame()   override;
     void waitIdle()   override;
     void onResize(int width, int height) override;
@@ -209,6 +210,10 @@ private:
     bool     _frameActive    = false;
     bool     _frameSkipped   = false;
     bool     _needsRecreate  = false;
+    // V3-0：帧号（非 swapchain image 下标）。延迟销毁队列的时基：
+    // destroy* 登记 _frameCount + kLagFrames，beginFrame 在 fence 等待后 flush。
+    uint64_t _frameCount     = 0;
+    detail::DeletionQueue _delQueue;
 
     std::vector<VkBufferRes>   _buffers;
     std::vector<VkPipelineRes> _pipelines;

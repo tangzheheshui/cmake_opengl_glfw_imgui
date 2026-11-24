@@ -84,10 +84,17 @@ GLDevice::GLDevice(GLFWwindow* window, const std::string& shaderRootPath)
 
 GLDevice::~GLDevice() {
     waitIdle();
+    // V3-0：渲染目标的 FBO/RBO 此前析构不释放（泄漏）；颜色纹理在下方
+    // _textures 循环统一删除。手动 destroyRenderTarget 过的槽位 fbo 已为 0。
+    for (auto& rt : _renderTargets) {
+        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
+        if (rt.fbo)      glDeleteFramebuffers(1, &rt.fbo);
+    }
     for (auto& b : _buffers)   if (b.id) glDeleteBuffers(1, &b.id);
     for (auto& t : _textures)  if (t.id) glDeleteTextures(1, &t.id);
     for (auto& s : _samplers)  if (s.id) glDeleteSamplers(1, &s.id);
     // GLPipeline 持有 unique_ptr<Shader>，其析构负责 glDeleteProgram
+    _delQueue.flushAll();   // V3-0：延迟销毁兜底（waitIdle 后执行安全）
 }
 
 DeviceInfo GLDevice::info() const {
@@ -224,6 +231,10 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     GLTexture tex;
     glGenTextures(1, &tex.id);
 
+    // V3-0：上传逐字节假定紧排（R8 / 非 4 倍数宽度会错位）。GL 默认
+    // GL_UNPACK_ALIGNMENT=4，只对本 Width*4 对齐安全。入口设 1，出口恢复。
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     GLenum internalFmt = GL_RGBA8, dataFmt = GL_RGBA, dataType = GL_UNSIGNED_BYTE;
     glFormatOf(desc.format, internalFmt, dataFmt, dataType);
 
@@ -278,6 +289,7 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     glTexParameterf(target, GL_TEXTURE_MIN_LOD, sd.minLod);
     glTexParameterf(target, GL_TEXTURE_MAX_LOD, sd.maxLod);
     glBindTexture(target, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);   // V3-0：恢复默认紧排假设
 
     _textures.push_back(std::move(tex));
     TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
@@ -397,18 +409,27 @@ void GLDevice::attachSampler(TextureHandle tex, SamplerHandle s) {
 }
 
 // ---- v2 对象级销毁（B0）----
+// V3-0：销毁走 DeletionQueue 延迟到下一帧 beginFrame（帧在飞的资源不得立即删；
+// GL 命令可能在 GPU 上仍在执行）。摘句柄立即生效（id 不复用），真删除到期批量。
 void GLDevice::destroyBuffer(BufferHandle h) {
     if (!h.valid() || h.id > _buffers.size()) return;
     GLBuffer& b = _buffers[h.id - 1];
-    if (b.id) glDeleteBuffers(1, &b.id);
+    if (!b.id) return;
+    GLuint id = b.id;
     b = GLBuffer{};
+    _commandList->invalidateVAOForBuffer(id);   // VAO 持属性指针，源 buffer 先摘引用
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [id] { glDeleteBuffers(1, &id); });
 }
 
 void GLDevice::destroyTexture(TextureHandle h) {
     if (!h.valid() || h.id > _textures.size()) return;
     GLTexture& t = _textures[h.id - 1];
-    if (t.id) glDeleteTextures(1, &t.id);
+    if (!t.id) return;
+    GLuint id = t.id;
     t = GLTexture{};
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [id] { glDeleteTextures(1, &id); });
 }
 
 // ---- B4：离屏渲染目标 ----
@@ -469,8 +490,12 @@ void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
     GLRenderTarget& rt = _renderTargets[h.id - 1];
     if (rt.fbo) {
         destroyTexture(rt.colorTex);
-        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
-        glDeleteFramebuffers(1, &rt.fbo);
+        GLuint fbo = rt.fbo, rbo = rt.depthRbo;
+        // FBO/RBO 同走延迟队列（Pass 可能仍在帧内引用）
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames, [fbo, rbo] {
+            if (rbo) glDeleteRenderbuffers(1, &rbo);
+            glDeleteFramebuffers(1, &fbo);
+        });
         rt = GLRenderTarget{};
     }
     rt.alive = false;   // 槽位保留（id 不复用）
@@ -532,12 +557,25 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
 void GLDevice::destroyPipeline(PipelineHandle h) {
     if (!h.valid() || h.id > _pipelines.size()) return;
     GLPipeline& p = _pipelines[h.id - 1];
-    p.program.reset();   // Shader 析构负责 glDeleteProgram
+    if (p.program) {
+        // V3-0：先清 VAO 缓存（VAO 固化了管线的属性布局指针），再删 program。
+        // glDeleteProgram 自带"在用即标记删除"语义（帧在飞安全），无需入队。
+        _commandList->invalidateVAOForPipeline(h.id);
+        p.program.reset();
+    }
     p.desc = GraphicsPipelineDesc{};
 }
 
 void GLDevice::waitIdle() {
     glFinish();
+}
+
+// V3-0：帧号推进 + 到期延迟销毁。GL 路径 RenderSystem 每帧调用一次；
+// 遗留叠加路径（drawSmokeTriangle 等）的额外调用幂等（flush 空队列无副作用）。
+bool GLDevice::beginFrame() {
+    ++_frameCount;
+    _delQueue.flush(_frameCount);
+    return true;
 }
 
 IRHICommandList* GLDevice::commandList() {

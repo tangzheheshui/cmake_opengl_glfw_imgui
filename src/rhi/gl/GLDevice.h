@@ -9,6 +9,7 @@
 #define GLDevice_h
 
 #include "../IRHIDevice.h"
+#include "../detail/DeletionQueue.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -104,7 +105,7 @@ public:
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 
-    void beginFrame() override {}
+    bool beginFrame() override;   // V3-0：帧号推进 + 延迟销毁队列 flush
     void endFrame()   override {}
     void waitIdle()   override;
 
@@ -123,9 +124,16 @@ public:
     bool hasSamplers() const { return !_samplers.empty(); }
     GLFWwindow*       window() const { return _window; }
 
+    // V3-0：销毁走延迟队列（帧在飞的资源不得立即删）。供析构兜底 flushAll。
+    detail::DeletionQueue& deletionQueue() { return _delQueue; }
+
 private:
     GLFWwindow* _window = nullptr;
     std::string _shaderRootPath;
+    // V3-0：GL 无 fence，帧号由 beginFrame 推进（GL 路径 RenderSystem 每帧调用；
+    // 遗留叠加路径的多次调用幂等无副作用）
+    uint64_t _frameCount = 0;
+    detail::DeletionQueue _delQueue;
 
     // 句柄 id = 数组下标 + 1（0 保留为 invalid）
     std::vector<GLBuffer>   _buffers;

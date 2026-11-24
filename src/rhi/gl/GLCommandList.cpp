@@ -204,6 +204,31 @@ void GLCommandList::setViewport(float x, float y, float w, float h) {
                static_cast<GLsizei>(w), static_cast<GLsizei>(h));
 }
 
+// V3-0：销毁后清理 VAO 缓存。VAO 固化的是 GL 对象名——源资源删除后驱动
+// 可能复用同名 id 给新资源，旧 VAO 就会指向错误对象（画出垃圾/踩内存）。
+void GLCommandList::invalidateVAOForBuffer(uint32_t bufferId) {
+    for (auto it = _vaoCache.begin(); it != _vaoCache.end();) {
+        const auto& key = it->first;
+        if (std::get<1>(key) == bufferId || std::get<2>(key) == bufferId) {
+            if (it->second) glDeleteVertexArrays(1, &it->second);
+            it = _vaoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void GLCommandList::invalidateVAOForPipeline(uint32_t pipelineId) {
+    for (auto it = _vaoCache.begin(); it != _vaoCache.end();) {
+        if (std::get<0>(it->first) == pipelineId) {
+            if (it->second) glDeleteVertexArrays(1, &it->second);
+            it = _vaoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 GLuint GLCommandList::obtainVAO() {
     if (!_curPipeline.valid() || !_curVertexBuffer.valid()) return 0;
 

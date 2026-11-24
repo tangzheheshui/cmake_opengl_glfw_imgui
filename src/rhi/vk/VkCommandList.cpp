@@ -124,11 +124,14 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
 void VkCommandList::endRenderPass() {
     if (!_inRenderPass) return;
     // B4：离屏 RT 收尾 → 颜色附件转回 SHADER_READ_ONLY（采样/回读就绪）
-    if (_curRenderTarget.valid()) {
+    // V3-0：屏障必须记录在 vkCmdEndRendering 之后——rendering 实例内禁止
+    // 图像布局转换（验证层 6 条 error 的来源），实例外记录即合法
+    const bool hadRT = _curRenderTarget.valid();
+    _device->endRenderingFn()(_device->commandBuffer());
+    if (hadRT) {
         _device->recordRenderTargetEndBarriers(_device->commandBuffer(), _curRenderTarget);
         _curRenderTarget = RenderTargetHandle{};
     }
-    _device->endRenderingFn()(_device->commandBuffer());
     _inRenderPass = false;
 }
 
