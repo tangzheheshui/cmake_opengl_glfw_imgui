@@ -3,11 +3,14 @@
 # package_mac.sh —— macOS .app 打包（F2 基础版）
 #
 # 用法：
-#   scripts/package_mac.sh [gl|vulkan]     # 默认 vulkan（含 VK 时）
+#   scripts/package_mac.sh [gl|vulkan]     # 默认 vulkan
 #
-# 产物：dist/MyDuck.app（双击可运行；GL-only 产物无外部 dylib 依赖）
-# 说明：Vulkan 版把 MoltenVK loader 拷入 Frameworks 并修 rpath；
-#       glad/glfw/freetype 均为静态库，无额外依赖。
+# 产物：dist/MyDuck.app——双击/直接运行，不依赖 DYLD_LIBRARY_PATH。
+# Vulkan 版：libvulkan loader 拷入 Frameworks 并改 @executable_path；
+# 启动器注入 RHI_VK_VALIDATION=0（验证层 dylib 随 SDK 装在 Homebrew
+# 路径，bundle 运行环境无该搜索路径；开发调试用 build/ 目录 +
+# RHI_VK_VALIDATION=1）。MoltenVK ICD 经系统 icd.d 自动发现（需目标
+# 机已安装 molten-vk）。
 # ============================================================
 set -euo pipefail
 
@@ -52,8 +55,7 @@ cat > "$DIST/$APP_NAME.app/Contents/Info.plist" <<PLIST
 PLIST
 
 if [[ "$MODE" == "vulkan" ]]; then
-    # MoltenVK loader（动态库）拷入 Frameworks 并改 rpath——运行不再依赖
-    # DYLD_LIBRARY_PATH（CLAUDE.md 运行说明的打包解法）
+    # Vulkan loader（动态库）拷入 Frameworks 并改 @executable_path
     VK_LIB="$(otool -L "$BIN" | grep -oE '/[^ ]*libvulkan[^ ]*\.dylib' | head -1 || true)"
     if [[ -n "${VK_LIB:-}" && -f "$VK_LIB" ]]; then
         cp "$VK_LIB" "$DIST/$APP_NAME.app/Contents/Frameworks/"
@@ -62,6 +64,18 @@ if [[ "$MODE" == "vulkan" ]]; then
             "@executable_path/../Frameworks/$VL_BASENAME" \
             "$DIST/$APP_NAME.app/Contents/MacOS/$APP_NAME"
         echo "已内嵌 Vulkan loader: $VL_BASENAME"
+
+        # 启动器：真二进制改名，启动器默认关验证层（bundle 内无 SDK 层路径）
+        mv "$DIST/$APP_NAME.app/Contents/MacOS/$APP_NAME" \
+           "$DIST/$APP_NAME.app/Contents/MacOS/$APP_NAME.real"
+        cat > "$DIST/$APP_NAME.app/Contents/MacOS/$APP_NAME" <<LAUNCH
+#!/bin/bash
+HERE="\$(cd "\$(dirname "\$0")" && pwd)"
+export RHI_VK_VALIDATION=0
+exec "\$HERE/$APP_NAME.real" "\$@"
+LAUNCH
+        chmod +x "$DIST/$APP_NAME.app/Contents/MacOS/$APP_NAME"
+        echo "已生成启动器（默认 RHI_VK_VALIDATION=0）"
     else
         echo "警告：未找到 libvulkan 动态库引用（GL-only 构建？）"
     fi

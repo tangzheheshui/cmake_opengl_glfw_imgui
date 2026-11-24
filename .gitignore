@@ -9,3 +9,4 @@ build-asan/
 imgui.ini
 res/shaders_vk/pipeline_cache.bin
 res/shaders_vk/pipeline_cache.bin.tmp
+dist/
