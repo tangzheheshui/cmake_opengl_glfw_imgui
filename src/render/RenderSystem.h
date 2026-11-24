@@ -15,7 +15,6 @@ class MeshPass;
 class IRenderPass;
 class RenderContext;
 class FontManager;
-struct GLFWwindow;
 namespace rhi { class IRHIDevice; class IRHICommandList; }
 
 struct Point2D {
@@ -38,22 +37,37 @@ public:
 	RenderSystem(const RenderSystem&) = delete;
 	RenderSystem& operator=(const RenderSystem&) = delete;
 
-	void init(const std::string &rootPath);
-	// 必须在 glfwTerminate() 之前显式调用：RHI 设备/GL 资源的析构依赖窗口与
-	// 图形上下文存活（单例静态析构发生在 main 返回、窗口销毁之后）。
+	// ---- C1b：门面初始化（宿主拥有设备与窗口，引擎只借用）----
+	struct InitDesc {
+		rhi::IRHIDevice* device = nullptr;   // 宿主创建并持有；引擎不销毁
+		std::string assetRoot;               // 含 res/ 的根目录（UTF-8）
+		uint32_t frameWidth  = 0;            // 帧缓冲像素尺寸
+		uint32_t frameHeight = 0;
+		uint32_t windowWidth  = 0;           // 窗口逻辑尺寸（拾取坐标换算用；
+		uint32_t windowHeight = 0;           //   0 = 等于帧缓冲，scale=1）
+	};
+	// 生命周期约定（宿主必须遵守）：
+	//   窗口创建 → GL 上下文 current（GL）/ 设备创建 → renderer.init
+	//     → 每帧 renderer.renderFrame()
+	//     → renderer.shutdown() → 宿主销毁 device → 窗口销毁
+	bool init(const InitDesc& desc, std::string* outError = nullptr);
+	// 只销毁引擎自己的资源，不销毁 device（宿主在窗口销毁前自行销毁设备；
+	// 单例静态析构发生在 main 返回之后，此时销毁依赖图形上下文的资源会崩溃）
 	void shutdown();
 	void update();
     void BeginDraw();
-	void draw();
+	// 完整一帧：beginFrame → passes → overlay → endFrame → present。
+	// GL/VK 主循环零后端分支（ImGui backend 初始化除外）
+	void renderFrame();
+	void draw();   // 过渡别名：内部转调 renderFrame()（保留一个迭代）
 public:
     // ---- RHI（引擎层，与 UI 解耦）----
-    // 必须在 init() 之前调用（GL 后端复用主窗口上下文）
-    void setWindow(GLFWwindow* window) { _window = window; }
     RenderSettings& settings() { return m_settings; }            // 渲染设置（UI 层可读写）
-    rhi::IRHIDevice* rhiDevice() { return m_rhiDevice.get(); }   // RHI 设备（可能为空，UI/业务层只读使用）
+    rhi::IRHIDevice* rhiDevice() { return m_rhiDevice; }         // 只读借用（可能为空）
     // 资源预载（app 层显式调用，引擎不假设项目资源布局）
     void preloadTextures(const std::string& dirPath);
-    // 叠加渲染回调：在 RHI render pass 内、场景之后调用（ImGui Vulkan 等 UI 层用）
+    // 叠加渲染回调（UI 合成点）：VK 在 render pass 内、场景之后调用；
+    // GL 在默认帧缓冲、GL_FRAMEBUFFER_SRGB 关闭后调用（ImGui GL 等）
     void setOverlayRenderer(std::function<void(rhi::IRHICommandList*)> fn) { m_overlayFn = std::move(fn); }
 public:
     std::shared_ptr<Scene> GetCurScene() { return mCurScene; }
@@ -67,7 +81,7 @@ public:
     void onMouseMiddleDown(double x, double y);  // 滚轮点击
     void onMouseMove(double x, double y);       // 鼠标移动
 #pragma endregion
-    void onWindowSizeChanged(int x, int y);
+    void onWindowSizeChanged(int x, int y);   // 窗口尺寸变化（宿主回调转发）
 private:
 	RenderSystem();
 	~RenderSystem();
@@ -81,7 +95,7 @@ private:
 	void recordTexturedQuad(rhi::IRHICommandList* cmd);
 	void renderScenePasses();       // 帧级 Pass 循环
 	void drawSceneOverlays();       // RHI 叠加内容（冒烟三角形/贴图四边形）
-	void drawRhiScene();            // Vulkan 后端：RHI 场景绘制
+	void drawRhiSceneContents();    // Vulkan 后端：RHI 场景内容（renderFrame 的 VK 分支）
 	std::function<void(rhi::IRHICommandList*)> m_overlayFn;
 	void selfTestAB();              // M4.2 验证设施：同帧 A/B 逐像素对比
 	// B4 验证设施（RHI_RT_TEST=1）：离屏 RT 渲染冒烟三角形 → 回读中心/角落像素。
@@ -113,11 +127,13 @@ private:
     std::shared_ptr<RenderContext> mRenderContent;
     MouseState mMouseState;
 
-    // ---- RHI（新增，纯增量）----
-    GLFWwindow* _window = nullptr;
-    rhi::Backend _backend = rhi::Backend::OpenGL;   // 启动时由 RHI_BACKEND 环境变量决定
+    // ---- RHI（C1b 门面）----
+    rhi::Backend _backend = rhi::Backend::OpenGL;   // 由 device->backend() 得到
     RenderSettings m_settings;
-    std::unique_ptr<rhi::IRHIDevice> m_rhiDevice;
+    rhi::IRHIDevice* m_rhiDevice = nullptr;   // 借用（宿主持有，引擎不销毁）
+    // 窗口→帧缓冲坐标换算（拾取；InitDesc 提供逻辑尺寸）
+    uint32_t m_frameW = 0, m_frameH = 0;
+    uint32_t m_windowW = 0, m_windowH = 0;
     // 冒烟三角形资源（验证 RHI 链路，业务无关）
     rhi::BufferHandle m_smokeVB;
     rhi::BufferHandle m_smokeIB;

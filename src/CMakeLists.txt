@@ -120,8 +120,6 @@ target_include_directories(engine
 # ---- 依赖 ----
 # PUBLIC：公共头暴露（glad/glm/assimp/freetype 类型出现在引擎公共头中——
 #         第三方类型泄漏进公共 API 是已知历史债务，M4 治理，见 docs）
-# C1a：glfw 移出 PUBLIC（引擎公共 API 不再暴露窗口库；app/C5 自行链接 glfw）。
-# PRIVATE 过渡：render 层遗留代码（RenderSystem 的 GLFW 桥接、GL Pass）仍引用
-# GLFW 头，C1b 移除桥接后删除此行。
+# C1b：glfw 不再链接（引擎无窗口库依赖；宿主窗口/交换回调经 NativeWindow
+# 进入，app 层自行链接 glfw）
 target_link_libraries(engine PUBLIC glad glm assimp freetype)
-target_link_libraries(engine PRIVATE glfw)

@@ -1,4 +1,8 @@
 #include <glad/glad.h>
+// C1b：宿主 surface 回调需要 glfwCreateWindowSurface（VK 构建）
+#if ENGINE_HAS_VULKAN
+#define GLFW_INCLUDE_VULKAN
+#endif
 #include <GLFW/glfw3.h>
 #include "3rdparty/imgui/imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -31,9 +35,15 @@
 #include "app/DebugPanel.h"
 #include "rhi/IRHICommandList.h"
 #include "rhi/IRHIDevice.h"   // UI 层：ImGui 面板只在 app 层使用，不进引擎库
+#include "rhi/RHIFactory.h"   // C1b：宿主创建设备（窗口/GL 上下文属 app 职责）
 #include "color/ColorSpace.h"
 #include "fs/FilePathUtil.h"
 #include "debug/CrashBacktrace.h"
+
+// C1b：GL 交换回调（RHI present() 转发；引擎不直接碰 GLFW）
+static void glfwSwapAdapter(void* user) {
+    glfwSwapBuffers(static_cast<GLFWwindow*>(user));
+}
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -210,10 +220,78 @@ int main()
     size_t pos =  proPath.find(buildFolder);
     proPath = proPath.substr(0, pos);
     // ��ʼ����Ⱦ����
-    int width, height;
+    // ---- C1b：宿主创建设备（窗口/GL 上下文/surface 均属宿主职责）----
+    int width = 0, height = 0, winW = 0, winH = 0;
     glfwGetFramebufferSize(window, &width, &height);
-    RenderSystem::getInstance().setWindow(window);   // RHI: must be called before init
-    RenderSystem::getInstance().init(proPath);
+    glfwGetWindowSize(window, &winW, &winH);
+    rhi::DeviceDesc desc;
+    desc.backend = useVulkan ? rhi::Backend::Vulkan : rhi::Backend::OpenGL;
+    desc.appName = "my_app";
+    desc.width   = static_cast<uint32_t>(width);
+    desc.height  = static_cast<uint32_t>(height);
+    // 后端变体着色器根目录（以路径分隔符结尾；GL=shaders GLSL 直编，VK=SPIR-V）
+    {
+        const std::string shaderDir = std::string("res") + sep + "shaders"
+            + (useVulkan ? std::string("_vk") : std::string()) + sep;
+        desc.shaderRootPath = proPath + sep + shaderDir;
+    }
+    // 窗口类型按平台（VK 建面在下方回调提供；GL 只用交换回调）
+#if defined(_WIN32)
+    desc.window.type = rhi::NativeWindowType::Win32;
+#elif defined(__APPLE__)
+    desc.window.type = rhi::NativeWindowType::Cocoa;
+#else
+    desc.window.type = rhi::NativeWindowType::Xlib;
+#endif
+    desc.window.handle      = (void*)window;
+    desc.window.swapBuffers = glfwSwapAdapter;   // GL present
+    desc.window.swapUser    = window;
+#if ENGINE_HAS_VULKAN
+    // macOS/GLFW 的 surface 建面必须走宿主回调（引擎不碰 GLFW/ObjC++）
+    if (useVulkan) {
+        desc.createSurface = [win = window](uint64_t instance) -> uint64_t {
+            VkSurfaceKHR s = VK_NULL_HANDLE;
+            if (glfwCreateWindowSurface(reinterpret_cast<VkInstance>(instance),
+                                        win, nullptr, &s) != VK_SUCCESS) {
+                return 0;
+            }
+            return reinterpret_cast<uint64_t>(s);
+        };
+    }
+#endif
+    std::string devErr;
+    auto rhiDevice = rhi::RHIFactory::createDevice(desc, &devErr);
+    if (!rhiDevice) {
+        std::cout << "Failed to create RHI device: " << devErr << std::endl;
+        glfwTerminate();
+        return -1;
+    }
+
+    // ---- 引擎初始化（借用设备；引擎不读环境变量、不持有窗口）----
+    RenderSystem::InitDesc initDesc;
+    initDesc.device      = rhiDevice.get();
+    initDesc.assetRoot   = proPath;
+    initDesc.frameWidth  = static_cast<uint32_t>(width);
+    initDesc.frameHeight = static_cast<uint32_t>(height);
+    initDesc.windowWidth  = static_cast<uint32_t>(winW);
+    initDesc.windowHeight = static_cast<uint32_t>(winH);
+    std::string initErr;
+    if (!RenderSystem::getInstance().init(initDesc, &initErr)) {
+        std::cout << "Failed to init RenderSystem: " << initErr << std::endl;
+        rhiDevice.reset();
+        glfwTerminate();
+        return -1;
+    }
+    // 调试开关经 settings() 注入（引擎不读环境变量）
+    {
+        auto& renderSys = RenderSystem::getInstance();
+        if (std::getenv("RHI_SMOKE"))   renderSys.settings().rhiSmokeTriangle = true;
+        if (std::getenv("RHI_TEXQUAD")) renderSys.settings().rhiTexQuad = true;
+        if (const char* clip = std::getenv("RHI_CLIP")) {   // D7 剖切（法线 (1,0,0)）
+            renderSys.settings().clipPlaneEnabled = true;
+            renderSys.settings().clipPlaneDistance = static_cast<float>(std::atof(clip));
+        }
+    }
     // 资源加载是 app 层职责（引擎不假设项目资源布局）
     {
         auto& renderSys = RenderSystem::getInstance();
@@ -298,7 +376,14 @@ int main()
     }
 #endif
 
-    // 使用rendersysytem的各种接口
+    // GL 模式：UI 在 renderFrame 的 overlay 合成点绘制（引擎已关 GL_FRAMEBUFFER_SRGB）
+    if (!useVulkan) {
+        RenderSystem::getInstance().setOverlayRenderer([](rhi::IRHICommandList*) {
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        });
+    }
+
+    // 场景组装（app 层职责）
     testRenderSystem(proPath, useVulkan);
 
     // 冒烟/回归：RHI_EXIT_AFTER=<帧数> 后正常关闭窗口（走完整析构，验证缓存落盘等）
@@ -326,43 +411,29 @@ int main()
 
         RenderSystem::getInstance().update();
 
+        // ---- C1b 统一 UI 时序（GL/VK 同序，仅 backend NewFrame 调用不同）----
+        // NewFrame → 调试面板 → Render → renderFrame（内部 overlay 合成 + present）
 #if ENGINE_HAS_VULKAN
-        // Vulkan mode: build ImGui frame before draw (RenderDrawData runs inside drawRhiScene's pass)
         if (useVulkan) {
             ImGui_ImplGlfw_NewFrame();      // 先设置 DisplaySize（依赖 GLFW 窗口）
             ImGui_ImplVulkan_NewFrame();
-            ImGui::NewFrame();
-            {
-                auto& renderSys = RenderSystem::getInstance();
-                DebugPanel::draw(renderSys.settings(), renderSys.rhiDevice());
-            }
-            ImGui::Render();
-        }
+        } else
 #endif
-
-        RenderSystem::getInstance().draw();
-
-        if (!useVulkan) {
-            // B3c：ImGui（GL backend）保持既有 gamma 空间外观；场景已在
-            // RenderSystem::draw() 内开启 GL_FRAMEBUFFER_SRGB。
-            glDisable(GL_FRAMEBUFFER_SRGB);
+        {
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
-            {
-                auto& renderSys = RenderSystem::getInstance();
-                DebugPanel::draw(renderSys.settings(), renderSys.rhiDevice());
-            }
-            ImGui::Render();
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
+        ImGui::NewFrame();
+        {
+            auto& renderSys = RenderSystem::getInstance();
+            DebugPanel::draw(renderSys.settings(), renderSys.rhiDevice());
+        }
+        ImGui::Render();
 
-        // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
-        // -------------------------------------------------------------------------------
-        // Vulkan 模式：present 由 RHI endFrame 完成，且 NO_API 窗口无 GL 上下文可 swap
-        if (!useVulkan) {
-            glfwSwapBuffers(window);
-        }
+        // 完整一帧：beginFrame → passes → overlay（UI 合成点）→ endFrame → present。
+        // GL：present 转发宿主 swapBuffers 回调；VK：vkQueuePresentKHR
+        RenderSystem::getInstance().renderFrame();
+
         glfwPollEvents();
     }
 
@@ -389,9 +460,11 @@ int main()
         ImGui::DestroyContext();
     }
 
-    // RHI 设备/GL 资源必须在窗口销毁前显式释放（单例静态析构太晚，会崩溃；
-    // Vulkan 后端还依赖此处导出 pipeline cache）
+    // C1b 生命周期约定：引擎 shutdown（只销毁引擎资源，不销毁设备）
+    // → 宿主销毁设备（GL 上下文/窗口仍存活；Vulkan 依赖此处导出 pipeline cache）
+    // → 窗口销毁（glfwTerminate）。单例静态析构太晚，禁止依赖。
     RenderSystem::getInstance().shutdown();
+    rhiDevice.reset();
 
     // glfw: terminate, clearing all previously allocated GLFW resources.
     // ------------------------------------------------------------------
