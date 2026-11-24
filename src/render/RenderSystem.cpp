@@ -282,41 +282,45 @@ void RenderSystem::drawRhiSceneContents() {
             const auto fb = m_rhiDevice->framebufferSize();   // C1b：设备尺寸，不查窗口
             int fw = static_cast<int>(fb.width), fh = static_cast<int>(fb.height);
 
-            // D3：透明排序绘制列表（两端共用同一排序；每帧算一次）
-            // E3：传入 VP 做 CPU 视锥剔除（frustumCull 开关；剔除只影响不可见
-            // 对象，像素结果不变）
-            const auto drawList = mCurScene->getSortedDrawList(cam->getPossition(),
-                                                               vp.buffer());
-            static bool sortLogged = false;
-            if (!sortLogged && std::getenv("RHI_ALPHA_DEMO")) {
-                sortLogged = true;
-                for (size_t i = 0; i < drawList.size(); ++i) {
-                    auto model = std::dynamic_pointer_cast<Model>(drawList[i]);
-                    if (model && model->getAlpha() < 0.999f) {
-                        const glm::vec3 c = model->worldCenter();
-                        ENGINE_LOG_INFO("[SORT] idx=%zu model id=%u alpha=%.2f center=(%.1f,%.1f,%.1f)",
-                                        i, model->GetID(), model->getAlpha(), c.x, c.y, c.z);
+            // C2 收尾：多相机视口——tile 0 恒为主相机，tile i>0 依次用
+            // Scene::addViewportCamera 加入的相机；无自定义相机时全部 tile
+            // 用主相机（行为与旧版一致）
+            const auto vpCams = mCurScene->getViewportCameras();
+
+            auto drawSceneContent = [&](const Matrix& tileVP,
+                                        const std::shared_ptr<Camera>& tileCam) {
+                // D3：透明排序 + E3：视锥剔除——按 tile 相机计算（多相机下
+                // 各 tile 的可见集不同，剔除与排序必须逐 tile 做）
+                const auto drawList = mCurScene->getSortedDrawList(tileCam->getPossition(),
+                                                                   tileVP.buffer());
+                static bool sortLogged = false;
+                if (!sortLogged && std::getenv("RHI_ALPHA_DEMO")) {
+                    sortLogged = true;
+                    for (size_t i = 0; i < drawList.size(); ++i) {
+                        auto model = std::dynamic_pointer_cast<Model>(drawList[i]);
+                        if (model && model->getAlpha() < 0.999f) {
+                            const glm::vec3 c = model->worldCenter();
+                            ENGINE_LOG_INFO("[SORT] idx=%zu model id=%u alpha=%.2f center=(%.1f,%.1f,%.1f)",
+                                            i, model->GetID(), model->getAlpha(), c.x, c.y, c.z);
+                        }
                     }
                 }
-            }
-
-            auto drawSceneContent = [&]() {
                 // D3/D4 顺序契约：不透明 → 天空盒 → overlay/透明（视深排序）。
                 // 透明与 overlay 不写深度，天空若在其后绘制会因深度测试覆盖
                 // 它们的输出（透明被覆盖 = 混合结果丢失；overlay 被覆盖 = 全消失）。
                 for (auto& obj : drawList) {
                     if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) continue;
-                    obj->draw(vp);
+                    obj->draw(tileVP);
                 }
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
                 if (m_settings.drawSkyPass) {
                     if (auto sky = mCurScene->GetSkyBox()) {
-                        sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
+                        sky->drawRHI(cmd, tileCam->GetViewMatrix(), tileCam->GetProjectMatrix());
                     }
                 }
                 for (auto& obj : drawList) {
                     if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) {
-                        obj->draw(vp);
+                        obj->draw(tileVP);
                     }
                 }
             };
@@ -328,18 +332,27 @@ void RenderSystem::drawRhiSceneContents() {
                 for (int r = 0; r < rows; ++r) {
                     for (int c = 0; c < cols; ++c) {
                         const int tx = c * tw, ty = r * th;
+                        // C2 收尾：每 tile 独立相机（tile 0 = 主相机；纵按相机
+                        // 逻辑宽高比 = tile 尺寸）
+                        std::shared_ptr<Camera> tileCam = cam;
+                        const int idx = r * cols + c;
+                        if (idx > 0 && !vpCams.empty()) {
+                            tileCam = vpCams[(idx - 1) % vpCams.size()];
+                        }
+                        tileCam->setViewport(tw, th);
+                        const Matrix tileVP = tileCam->GetVPMatrix();
                         // VK：负高度 viewport（B3a），锚点 y = tile 底（tileY + tileH）
                         cmd->setViewport(static_cast<float>(tx), static_cast<float>(ty + th),
                                          static_cast<float>(tw), -static_cast<float>(th));
                         cmd->setScissor(tx, ty, tw, th);
-                        drawSceneContent();
+                        drawSceneContent(tileVP, tileCam);
                     }
                 }
                 // 恢复全目标（overlay/UI 按 swapchain 全尺寸绘制）
                 cmd->setViewport(0, static_cast<float>(fh), static_cast<float>(fw), -static_cast<float>(fh));
                 cmd->setScissor(0, 0, fw, fh);
             } else {
-                drawSceneContent();
+                drawSceneContent(vp, cam);
             }
         }
     }

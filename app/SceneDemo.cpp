@@ -114,6 +114,20 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     pScene->AddObj(line_z);
     pScene->SetSkyBox(objSky);
 
+    // C2 收尾验证开关：RHI_VIEWPORT_CAMS=1 加三个辅助相机（配 RHI_VIEWPORTS=4
+    // 时 tile0=主相机 / tile1=右视 / tile2=顶视 / tile3=后视）
+    if (std::getenv("RHI_VIEWPORT_CAMS")) {
+        auto right = std::make_shared<Camera>();
+        right->setPosition({40, 0, 0});
+        auto top = std::make_shared<Camera>();
+        top->setPosition({0, 40, 0});
+        auto back = std::make_shared<Camera>();
+        back->setPosition({-40, 0, 0});
+        pScene->addViewportCamera(right);
+        pScene->addViewportCamera(top);
+        pScene->addViewportCamera(back);
+    }
+
     // D3 验证开关：RHI_ALPHA_DEMO=1 加一只透明鸭子（默认关，不影响像素门禁；
     // RHI_ALPHA=<0..1> 覆盖透明度，1.0 用于隔离几何/混合问题）
     if (std::getenv("RHI_ALPHA_DEMO")) {
