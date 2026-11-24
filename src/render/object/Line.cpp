@@ -145,7 +145,7 @@ void Line::uploadRhiExpandData(rhi::IRHIDevice* device) {
         m_rhiIB = device->createBuffer(ibDesc);
         return;
     }
-    // v1 契约：buffer 大小固定为首次创建时尺寸（见 RHI_DESIGN M2 备注），
+    // v1 契约：buffer 大小固定为首次创建时尺寸（见 docs/4-RHI接口契约.md），
     // setData 扩容超限时后端 updateBuffer 越界保护会拒绝（与原路径行为一致）
     if (vbBytes > 0 && ibBytes > 0) {
         device->updateBuffer(m_rhiVB, m_rhiVerts.data(), vbBytes);

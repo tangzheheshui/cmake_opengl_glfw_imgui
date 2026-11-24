@@ -70,7 +70,7 @@ app/                    -- app 层（编译进 my_app）
   DebugPanel.h/cpp      -- ImGui 渲染调试面板（后端信息 / Pass 开关 / RHI 开关）
 src/                    -- 引擎层（engine 静态库）
   CMakeLists.txt        -- engine 库定义 + Vulkan 检测 + SPIR-V 构建规则
-  rhi/                  -- RHI 抽象层（Vulkan 语义设计，详见 docs/RHI_DESIGN.md）
+  rhi/                  -- RHI 抽象层（Vulkan 语义设计，详见 docs/4-RHI接口契约.md）
     RhiTypes.h            句柄/描述符/UniformValue（bgfx 风格每-draw uniform 块）
     IRHIDevice.h          设备：资源创建 + beginFrame/endFrame + onResize
     IRHICommandList.h     命令录制：beginRenderPass → bindPipeline → setUniform → draw
@@ -94,11 +94,38 @@ res/
   shaders/                GLSL（GL 后端，无扩展名 vert_xxx/frag_xxx）
   shaders_vk/             GLSL（Vulkan 变体，.vert/.frag → 构建期编译为 .spv）
   textures/ font/ model/  资源
-docs/RHI_DESIGN.md       RHI 设计文档：接口说明、B0 契约、调试经验（必读）
-docs/ARCHITECTURE_INTERFACES.md  接口分层与嵌入宿主设计（L0/C1/C5 + 两机分工）
-docs/RHI_V3_PLAN.md      RHI v3 重构执行计划（当前 RHI 内部重构主线）
-docs/ROADMAP_ZW3D.md     路线图：优先级、排期、里程碑状态（排期唯一来源）
+docs/1-架构设计.md        分几层、每层干什么、边界
+docs/2-类设计与时序图.md  代码怎么组织、怎么协作
+docs/3-ADR.md            关键决策和理由
+docs/4-RHI接口契约.md     RHI 保证什么、不能依赖什么
+docs/5-后端对照与差异.md  OpenGL 和 Vulkan 哪里不同
+docs/6-测试验证与性能基准.md  怎么证明一致、怎么达标
+docs/7-实现进度.md        做到哪了、下一步做什么
 ```
+
+## 文档约定（固定清单）
+
+项目文档是**固定清单**，各司其职。AI 写文档时：**禁止新建 .md 文档**，只能写进下面某一份；
+先判断内容属于哪份，写进去，不要另起炉灶。
+
+| 文档 | 唯一职责 |
+|------|---------|
+| `README.md`（根目录） | 项目是什么 + 文档清单 + 构建运行 |
+| `docs/1-架构设计.md` | 分几层、每层干什么、边界 |
+| `docs/2-类设计与时序图.md` | 代码怎么组织、怎么协作 |
+| `docs/3-ADR.md` | 关键决策和理由 |
+| `docs/4-RHI接口契约.md` | RHI 保证什么、不能依赖什么 |
+| `docs/5-后端对照与差异.md` | OpenGL 和 Vulkan 哪里不同 |
+| `docs/6-测试验证与性能基准.md` | 怎么证明一致、怎么达标 |
+| `docs/7-实现进度.md` | 做到哪了、下一步做什么 |
+
+写文档的规矩：
+
+1. **大白话优先**：用表格、短句、短列表，不用表情符号和术语堆砌；能画表就画表，别写长段。
+2. **进度唯一**：「做到哪了」只写进 `docs/7-实现进度.md`，其他文档不要各自维护一份进度。
+3. **一事一处**：同一主题只在一份文档展开，跨文档用链接引用，不复制粘贴。
+4. **新增内容归位**：设计决策写进对应文档（架构 → 1，决策 → 3，契约 → 4，差异 → 5，
+   验证 → 6，状态 → 7），不新开文件。
 
 ## 渲染管线
 

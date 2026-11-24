@@ -41,7 +41,7 @@ public:
     // ---- 绘制级 uniform 数据块 ----
     // 将一次绘制所需的 uniform 数据（灯光/材质/相机等）一次性提交。
     // GL 后端：引擎按约定字段名拆解为 glUniform*；
-    // Vulkan 后端：整块写入共享 UBO（固定布局，见 docs/RHI_DESIGN.md 的 FrameData）。
+    // Vulkan 后端：整块写入共享 UBO（固定布局，见 docs/4-RHI接口契约.md 的 FrameData）。
     // 两后端的着色器各自声明匹配的数据视图。
     virtual void setDrawUniforms(UniformBlockHandle block, const void* data, uint32_t size) = 0;
 

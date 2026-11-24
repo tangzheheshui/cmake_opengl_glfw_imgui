@@ -21,7 +21,7 @@
 
 namespace rhi {
 
-// RHI v2 契约版本（B0 冻结，2026-11-23）。改动公共头必须同步 docs/RHI_DESIGN.md。
+// RHI v2 契约版本（B0 冻结，2026-11-23）。改动公共头必须同步 docs/4-RHI接口契约.md。
 // v2 相比 v1 新增：DeviceDesc（宿主窗口/离屏）、RenderTarget、SamplerDesc、
 // TextureDesc(mip/sRGB/sampler)、readback、对象级销毁、结构化 Capabilities。
 constexpr int RhiContractVersion = 2;

@@ -1,7 +1,7 @@
 # ============================================================
 # cmake_opengl_glfw_imgui —— 顶层构建脚本
 #
-# 三层结构（详见 docs/RHI_DESIGN.md）：
+# 三层结构（详见 docs/1-架构设计.md）：
 #   3rdparty/   third-party 层：各库独立 target，互不知晓
 #   src/        engine 层：静态库 libengine（RHI + 渲染系统），禁含 UI
 #   app/        app 层：可执行文件 my_app（窗口 + ImGui UI + 场景组装）
