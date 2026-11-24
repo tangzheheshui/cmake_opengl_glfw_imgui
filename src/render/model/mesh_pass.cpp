@@ -43,6 +43,15 @@ bool MeshPass::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, 
     return true;
 }
 
+// D8：高亮 push/uniform 值（选中 = 淡蓝 × 强度；未选中 = 全零即关闭）
+static glm::vec4 highlightValueOf(uint32_t flags) {
+    if (!(flags & DrawOption::DRAW_HIGHLIGHT)) {
+        return glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    const float strength = RenderSystem::getInstance().settings().highlightStrength;
+    return glm::vec4(0.25f, 0.55f, 1.0f, strength);
+}
+
 bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit) {
     // M4.2: RHI 路由（Vulkan 后端必走；GL 后端可经 modelUseRHI 开关切换对比）
     {
@@ -71,6 +80,12 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
                         settings.clipPlaneNormal[2], settings.clipPlaneDistance)
             : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         shader->setFloat4("uClipPlane", clipPlane.x, clipPlane.y, clipPlane.z, clipPlane.w);
+    }
+
+    // D8：选中高亮（未选中传全零，mix 无效果）
+    {
+        const glm::vec4 hl = highlightValueOf(flags);
+        shader->setFloat4("uHighlight", hl.x, hl.y, hl.z, hl.w);
     }
 
     bool bDrawPick = (flags & DrawOption::DRAW_PICK);
@@ -348,6 +363,12 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
                         settings.clipPlaneNormal[2], settings.clipPlaneDistance)
             : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         cmd->setUniform("uClipPlane", rhi::UniformValue::fromVec4(glm::value_ptr(clipPlane)));
+    }
+
+    // D8：选中高亮 → push constant offset 80（B6 反射表按名定位）
+    {
+        const glm::vec4 hl = highlightValueOf(flags);
+        cmd->setUniform("uHighlight", rhi::UniformValue::fromVec4(glm::value_ptr(hl)));
     }
 
     // 绘制级 uniform（灯光/材质/相机）

@@ -658,6 +658,13 @@ void RenderSystem::runPickPass() {
         for (const auto& kv : idCount) {
             ENGINE_LOG_INFO("[PICK][selftest] id=%u pixels=%zu", kv.first, kv.second);
         }
+        // D8 门禁：自测自动选中命中集合中最小 ID 的对象，高亮帧可经
+        // RHI_DUMP 目视；点击空白不改变选中
+        if (!idCount.empty()) {
+            m_settings.selectedId = idCount.begin()->first;
+            ENGINE_LOG_INFO("[HIGHLIGHT] auto-selected id=%u (strength=%.2f)",
+                            m_settings.selectedId, m_settings.highlightStrength);
+        }
         // 调试导出：ID 图原样落盘（PPM）
         {
             std::error_code ec;
@@ -697,11 +704,12 @@ void RenderSystem::runPickPass() {
     }
     // BGRA 序：R=px[2]（ID 低字节） G=px[1]（ID 高字节）
     const uint16_t hitId = static_cast<uint16_t>(px[2] | (px[1] << 8));
-    // 解析对象：遍历场景 Model，匹配 GetID()
+    // 解析对象：遍历场景 Model，匹配 GetID()；命中即选中（D8 高亮）
     for (auto& obj : mCurScene->GetObjs()) {
         auto model = std::dynamic_pointer_cast<Model>(obj);
         if (model && model->GetID() == hitId) {
-            ENGINE_LOG_INFO("[PICK] HIT id=%u (%s)", hitId, "Model");
+            ENGINE_LOG_INFO("[PICK] HIT id=%u (Model) -> selected", hitId);
+            m_settings.selectedId = hitId;   // D8：选中高亮
             return;
         }
     }

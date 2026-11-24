@@ -17,6 +17,14 @@ layout(set = 0, binding = 1) uniform sampler2D texture_diffuse0;
 layout(set = 0, binding = 2) uniform sampler2D texture_specular0;
 layout(set = 0, binding = 3) uniform sampler2D texture_normal0;
 
+// D8：高亮经 push constant offset 80（布局与 vert_model 的 PC 块一致：
+// mat4@0 + vec4@64 + vec4@80；前两项此着色器不消费，仅占位对齐）
+layout(push_constant) uniform PC {
+    mat4 uViewProj;
+    vec4 uClipPlane;
+    vec4 uHighlight;   // rgb 颜色 + a 强度
+} pc;
+
 layout(location = 0) in VS_OUT
 {
     layout(location = 0) vec3 pFragPos;
@@ -68,6 +76,9 @@ void main()
             result += specular;
         }
     }
+
+    // D8：选中高亮混合（uHighlight.a = 0 时无效果）
+    result = mix(result, pc.uHighlight.rgb, pc.uHighlight.a);
 
     FragColor = vec4(result, 1.0);
 }

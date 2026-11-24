@@ -450,9 +450,17 @@ bool Model::draw(const Matrix &mtx) {
     if (getLightOpen()) {
         flags |= DrawOption::LIGHT_OPEN;
     }
-    
+
     if (m_nMultiViewport > 1) {
         flags |= DrawOption::MULTI_VIEWPORT;
+    }
+
+    // D8：本对象被选中（拾取命中 → settings().selectedId）
+    {
+        auto& rs = RenderSystem::getInstance();
+        if (rs.settings().selectedId == GetID() && rs.settings().highlightStrength > 0.0f) {
+            flags |= DrawOption::DRAW_HIGHLIGHT;
+        }
     }
     
     for (auto mesh : m_mesh) {

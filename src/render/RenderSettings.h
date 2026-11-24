@@ -4,6 +4,8 @@
 //
 //  原则：只放"渲染管线级"开关。业务层（相机/光照）参数下一阶段再接入。
 //
+#include <cstdint>
+
 #ifndef RenderSettings_h
 #define RenderSettings_h
 
@@ -24,6 +26,12 @@ struct RenderSettings {
     bool  clipPlaneEnabled  = false;
     float clipPlaneNormal[3] = {1.0f, 0.0f, 0.0f};
     float clipPlaneDistance  = 0.0f;
+
+    // ---- CAD 选中高亮（D8）----
+    // selectedId = 拾取命中的对象 ID（BaseDraw::GetID，0 = 无选中）；
+    // 高亮颜色固定淡蓝，强度面板可调（0 = 关）
+    uint16_t selectedId        = 0;
+    float    highlightStrength = 0.40f;
 
     // ---- 全局 ----
     bool vsync          = true;
