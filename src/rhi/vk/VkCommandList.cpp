@@ -81,11 +81,12 @@ void VkCommandList::claimThread() {
 
 // V3-12：本 Pass 实际附件格式（beginRenderPass 时算一次，bindPipeline 比对）
 void VkCommandList::recordPassFormats(bool hasColor, Format colorFormat,
-                                      bool hasDepth, Format depthFormat) {
+                                      bool hasDepth, Format depthFormat, uint32_t samples) {
     _passHasColor    = hasColor;
     _passColorFormat = colorFormat;
     _passHasDepth    = hasDepth;
     _passDepthFormat = depthFormat;
+    _passSamples     = samples;
     _formatMismatch  = false;
 }
 
@@ -157,7 +158,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         _inRenderPass    = true;
         _curRenderTarget = desc.renderTarget;
         recordPassFormats(true, rt.colorFormat,
-                          rt.depthView != VK_NULL_HANDLE, rt.depthFormat);
+                          rt.depthView != VK_NULL_HANDLE, rt.depthFormat, 1);   // RT 暂不支持 MSAA
 
         // 与 swapchain 路径相同的负高度 viewport（B3a）+ scissor
         setViewport(0, static_cast<float>(extent.height),
@@ -175,16 +176,26 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     // 附件布局转换由 device 布局跟踪屏障完成（recordBeginPassBarriers）。
     const VkExtent2D extent = _device->swapchainExtent();
 
+    // V3-15：主帧缓冲 MSAA——渲染进多采样附件，resolve 回交换链图
+    const uint32_t msaaSamples = _device->msaaSamples();
+    const bool msaa = (msaaSamples > 1);
+
     VkRenderingAttachmentInfo colorAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    colorAtt.imageView   = _device->currentColorView();
+    colorAtt.imageView   = msaa ? _device->msaaColorView() : _device->currentColorView();
     colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAtt.loadOp      = desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-    colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAtt.storeOp     = msaa ? VK_ATTACHMENT_STORE_OP_DONT_CARE   // 只留 resolve 结果
+                                : VK_ATTACHMENT_STORE_OP_STORE;
     colorAtt.clearValue.color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
                                    desc.clearColorValue[2], desc.clearColorValue[3] }};
+    if (msaa) {
+        colorAtt.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+        colorAtt.resolveImageView   = _device->currentColorView();
+        colorAtt.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 
     VkRenderingAttachmentInfo depthAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depthAtt.imageView   = _device->depthImageView();
+    depthAtt.imageView   = msaa ? _device->msaaDepthView() : _device->depthImageView();
     depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAtt.loadOp      = desc.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -201,6 +212,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     ri.pDepthAttachment     = &depthAtt;
 
     _device->recordBeginPassBarriers(commandBuffer(), desc.clearColor, desc.clearDepth);
+    if (msaa) _device->recordMsaaBeginBarriers(commandBuffer());
     _device->beginRenderingFn()(commandBuffer(), &ri);
     _inRenderPass = true;
     {
@@ -209,7 +221,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         Format depthF = Format::Depth32F;
         FormatInfo::fromVkFormat(static_cast<uint32_t>(_device->swapchainFormat()), colorF);
         FormatInfo::fromVkFormat(static_cast<uint32_t>(_device->depthFormat()), depthF);
-        recordPassFormats(true, colorF, true, depthF);
+        recordPassFormats(true, colorF, true, depthF, msaaSamples);
     }
 
     // 动态 viewport/scissor（desc 未指定时用 swapchain 尺寸）
@@ -247,13 +259,16 @@ void VkCommandList::bindPipeline(PipelineHandle pipeline) {
     {
         const VkPipelineRes& pr = _device->pipelineRes(pipeline);
         const bool depthOk = !_passHasDepth || pr.depthFormat == _passDepthFormat;
-        if (!_passHasColor || pr.colorFormat != _passColorFormat || !depthOk) {
+        const bool samplesOk = pr.samples == _passSamples;
+        if (!_passHasColor || pr.colorFormat != _passColorFormat || !depthOk || !samplesOk) {
             _formatMismatch = true;
-            ENGINE_LOG_ERROR("[VK] pass attachment mismatch: pipeline(color=%d depth=%d) "
-                             "vs pass(color=%d/%d depth=%d/%d) — draws skipped",
+            ENGINE_LOG_ERROR("[VK] pass attachment mismatch: pipeline(color=%d depth=%d samples=%u) "
+                             "vs pass(color=%d/%d depth=%d/%d samples=%u) — draws skipped",
                              static_cast<int>(pr.colorFormat), static_cast<int>(pr.depthFormat),
+                             pr.samples,
                              _passHasColor ? 1 : 0, static_cast<int>(_passColorFormat),
-                             _passHasDepth ? 1 : 0, static_cast<int>(_passDepthFormat));
+                             _passHasDepth ? 1 : 0, static_cast<int>(_passDepthFormat),
+                             _passSamples);
         } else {
             _formatMismatch = false;
         }

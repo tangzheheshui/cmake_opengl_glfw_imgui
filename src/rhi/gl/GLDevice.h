@@ -142,6 +142,9 @@ public:
     // C1a：构造期有效性（上下文缺失/非法 desc 时 false，工厂据此报错）
     bool initialized() const { return _initialized; }
 
+    // V3-15：主帧缓冲采样数（GL 由上下文决定，创建时校验；RT 恒为 1）
+    uint32_t msaaSamples() const { return _msaaSamples; }
+
     // V3-0：销毁走延迟队列（帧在飞的资源不得立即删）。供析构兜底 flushAll。
     detail::DeletionQueue& deletionQueue() { return _delQueue; }
 
@@ -151,6 +154,7 @@ private:
     FramebufferSize _size;
     NativeWindow    _window;      // 宿主交换回调（present 用；非 GLFW 类型）
     bool _initialized = false;
+    uint32_t _msaaSamples = 1;   // 来自 DeviceDesc，须与上下文 GL_SAMPLES 一致
     // V3-0：GL 无 fence，帧号由 beginFrame 推进（GL 路径 RenderSystem 每帧调用；
     // 遗留叠加路径的多次调用幂等无副作用）
     uint64_t _frameCount = 0;

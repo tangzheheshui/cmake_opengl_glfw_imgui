@@ -102,6 +102,7 @@ private:
     RenderTargetHandle _curRenderTarget;
     bool               _inPass         = false;
     bool               _formatMismatch = false;
+    uint32_t           _passSamples    = 1;
 };
 
 } // namespace rhi

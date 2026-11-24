@@ -622,7 +622,8 @@ void VulkanDevice::createSwapchainObjects() {
         setObjName(type, handle, name);
     };
     if (!_swapchain.create(_physicalDevice, _device, _surface, _size.width, _size.height,
-                           findSupportedDepthFormat(_physicalDevice), &_memAlloc, nameFn)) {
+                           findSupportedDepthFormat(_physicalDevice), _desc.msaaSamples,
+                           &_memAlloc, nameFn)) {
         ENGINE_LOG_ERROR("[VK] swapchain creation failed");
     }
 }
@@ -1655,6 +1656,7 @@ bool VulkanDevice::nativeHandles(NativeHandles& out) const {
     out.imageCount     = _swapchain.imageCount();
     out.colorFormat    = static_cast<uint32_t>(_swapchain.format());
     out.depthFormat    = static_cast<uint32_t>(_swapchain.depthFormat());
+    out.msaaSamples    = _swapchain.msaaSamples();
     return true;
 }
 

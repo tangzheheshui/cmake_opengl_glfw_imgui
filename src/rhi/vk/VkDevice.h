@@ -135,6 +135,11 @@ public:
     // B1：dynamic rendering 下由 command list 调用的布局屏障与附件视图
     VkImageView currentColorView() const;          // 当前 swapchain image view
     VkImageView depthImageView() const { return _swapchain.depthView(); }
+    // V3-15：主帧缓冲 MSAA
+    uint32_t    msaaSamples() const { return _swapchain.msaaSamples(); }
+    VkImageView msaaColorView() const { return _swapchain.msaaColorView(); }
+    VkImageView msaaDepthView() const { return _swapchain.msaaDepthView(); }
+    void recordMsaaBeginBarriers(VkCommandBuffer cb) { _swapchain.recordMsaaBeginBarriers(cb); }
     // beginRenderPass 前的图像布局屏障（color → COLOR_ATTACHMENT / depth 首帧转换）
     void recordBeginPassBarriers(VkCommandBuffer cb, bool clearColor, bool clearDepth);
     // B4：离屏 RT 的布局屏障（命令列表在 RT 分支调用）

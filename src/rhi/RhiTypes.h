@@ -84,6 +84,10 @@ struct DeviceDesc {
     std::string  shaderRootPath;      // 后端变体着色器根目录（以路径分隔符结尾）
     bool         enableValidation = true;   // 后端/构建允许时启用；环境变量可覆盖
     uint32_t     swapchainImageCount = 0;   // 0 = 后端默认
+    // MSAA 采样数（主帧缓冲）。1 = 关闭；4 是常用档。
+    // 所有渲染到主帧缓冲的管线必须声明相同 samples，否则该 Pass 报错并跳过绘制。
+    // OpenGL 端由上下文决定，创建时校验：与宿主实际采样数不一致会报错。
+    uint32_t     msaaSamples = 1;
 
     // ---- C1a 追加：帧缓冲尺寸 / Vulkan surface 接管 ----
     // 帧缓冲像素尺寸（不是窗口逻辑尺寸）。RHI 永不回查窗口系统：GL 后端
@@ -212,7 +216,7 @@ struct AttachmentLayout {
                                  Format::BGRA8_SRGB, Format::BGRA8_SRGB };
     uint32_t colorCount = 1;                     // 只实现 1；>1 后端显式报错（MRT 预留）
     Format   depthFormat = Format::Depth32F;     // 默认 = 交换链 sRGB + 深度
-    uint32_t samples     = 1;                    // 只实现 1；>1 后端显式报错（MSAA 留给 D6）
+    uint32_t samples     = 1;                    // 渲染到主帧缓冲时须等于 DeviceDesc.msaaSamples
 };
 
 enum class IndexFormat : int { UINT16, UINT32 };

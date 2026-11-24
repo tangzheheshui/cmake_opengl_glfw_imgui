@@ -116,6 +116,8 @@ struct VkPipelineRes {
     // V3-12：管线烘焙时声明的附件格式（beginRenderPass 校验实际附件用）
     Format colorFormat = Format::BGRA8_SRGB;
     Format depthFormat = Format::Depth32F;
+    // V3-15：管线声明的采样数（必须与 Pass 实际附件采样数一致）
+    uint32_t samples = 1;
 };
 
 // push constant 布局常量（与 res/shaders_vk/*.vert|.frag 中的 PC 块一致）

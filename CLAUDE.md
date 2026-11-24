@@ -184,6 +184,12 @@ device->endFrame();
   中文路径会坏），需要字符串时用 `engine::fs::utf8FromPath`
 - 部分历史代码注释为 GBK 编码，macOS 下显示乱码（编辑时用 ASCII 锚点匹配）
 
+## 宿主接 ImGui（Vulkan）注意
+
+`DeviceDesc.msaaSamples > 1` 时，宿主初始化 ImGui 必须设置
+`ImGui_ImplVulkan_InitInfo::MSAASamples`（值取 `nativeHandles().msaaSamples`），
+否则 ImGui 管线采样数与 MSAA 附件不匹配，每帧验证层报错。
+
 ## 已知限制
 
 - Vulkan 模式渲染 RHI 迁移内容（模型/天空盒/线/验证叠加）；阴影、拾取、文字等 GL Pass 尚未迁移

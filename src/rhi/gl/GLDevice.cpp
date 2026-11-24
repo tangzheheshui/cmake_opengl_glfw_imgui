@@ -65,6 +65,19 @@ GLDevice::GLDevice(const DeviceDesc& desc)
                          "(host owns window/swap, see docs ARCHITECTURE_INTERFACES §3.2)");
         return;   // _initialized 保持 false，工厂报错
     }
+    // V3-15：MSAA——GL 的默认帧缓冲采样数由上下文创建时决定，这里只做校验。
+    // 声明值与实际不一致时明确报错（不静默按实际采样数出图，避免"设置没生效"的错觉）。
+    _msaaSamples = desc.msaaSamples > 1 ? desc.msaaSamples : 1;
+    {
+        GLint actual = 0;
+        glGetIntegerv(GL_SAMPLES, &actual);
+        // 请求 1 时上下文没有多采样缓冲（0）是正常情况，只在请求多采样时校验
+        if (_msaaSamples > 1 && static_cast<uint32_t>(actual) != _msaaSamples) {
+            ENGINE_LOG_ERROR("[GL] MSAA mismatch: requested %u, context has %d "
+                             "(GL 的默认帧缓冲采样数由宿主/上下文创建决定)",
+                             _msaaSamples, actual);
+        }
+    }
     _initialized = true;
     // V3-13：句柄表槽位复用自检（分配→释放→再分配应复用同槽、旧句柄失效）
     if (!_buffers.debugSelfCheck()) {

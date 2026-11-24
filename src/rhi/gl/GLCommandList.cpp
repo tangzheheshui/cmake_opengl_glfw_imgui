@@ -79,6 +79,8 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
     _curRenderTarget = desc.renderTarget;
     _inPass          = true;
     _formatMismatch  = false;
+    // V3-15：主帧缓冲采样数来自设备；离屏 RT 暂不支持 MSAA（恒 1）
+    _passSamples     = desc.renderTarget.valid() ? 1 : _device->msaaSamples();
 
     // B4：离屏 RenderTarget（RHI 资源 FBO）优先于 v1 遗留 FBO 直通
     if (desc.renderTarget.valid()) {
@@ -168,6 +170,12 @@ void GLCommandList::bindPipeline(PipelineHandle pipeline) {
                              static_cast<int>(desc.attachment.colorFormats[0]),
                              static_cast<int>(colorTex.format));
         }
+    }
+    // MSAA：管线声明的采样数必须与 Pass 目标一致
+    if (desc.attachment.samples != _passSamples) {
+        _formatMismatch = true;
+        ENGINE_LOG_ERROR("[GL] pass samples mismatch: pipeline=%u pass=%u — draws skipped",
+                         desc.attachment.samples, _passSamples);
     }
 
     // 深度状态

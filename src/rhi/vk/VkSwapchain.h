@@ -24,9 +24,10 @@ public:
     using NameFn = std::function<void(VkObjectType, uint64_t, const char*)>;
 
     // 创建（已存在时先销毁再建）；失败返回 false，调用方按致命处理
+    // msaaSamples > 1 时额外创建多采样颜色/深度附件（渲染时 resolve 进交换链图）
     bool create(VkPhysicalDevice pd, VkDevice device, VkSurfaceKHR surface,
                 uint32_t fbWidth, uint32_t fbHeight, VkFormat depthFmt,
-                VkMemoryAllocator* alloc, NameFn nameFn);
+                uint32_t msaaSamples, VkMemoryAllocator* alloc, NameFn nameFn);
     void destroy();
 
     // 取下一张可渲染的 image。OUT_OF_DATE 时置重建标志并返回 false。
@@ -47,6 +48,11 @@ public:
         return i < _images.size() ? _images[i] : VK_NULL_HANDLE;
     }
     VkImageView depthView() const { return _depthView; }
+    uint32_t    msaaSamples() const { return _msaaSamples; }
+    VkImageView msaaColorView() const { return _msaaColorView; }
+    VkImageView msaaDepthView() const { return _msaaDepthView; }
+    // 多采样附件进入 Pass 前的布局/访问链屏障（每帧都要一条）
+    void recordMsaaBeginBarriers(VkCommandBuffer cb);
     VkSemaphore renderDoneSemaphore(uint32_t i) const {
         return i < _renderDone.size() ? _renderDone[i] : VK_NULL_HANDLE;
     }
@@ -79,6 +85,19 @@ private:
     VkMemAlloc     _depthMemAlloc;
     VkImageView    _depthView   = VK_NULL_HANDLE;
     VkImageLayout  _depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // MSAA（msaaSamples > 1 时有效）：多采样颜色/深度，渲染时 resolve 到交换链图
+    uint32_t       _msaaSamples = 1;
+    VkImage        _msaaColorImage = VK_NULL_HANDLE;
+    VkMemAlloc     _msaaColorMem;
+    VkImageView    _msaaColorView  = VK_NULL_HANDLE;
+    VkImageLayout  _msaaColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImage        _msaaDepthImage = VK_NULL_HANDLE;
+    VkMemAlloc     _msaaDepthMem;
+    VkImageView    _msaaDepthView  = VK_NULL_HANDLE;
+    VkImageLayout  _msaaDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    void destroyMsaa();
+    bool createMsaa();
 
     VkMemoryAllocator* _alloc = nullptr;
     NameFn _nameFn;

@@ -133,6 +133,9 @@ public:
         // 供宿主侧构建 PipelineRenderingCreateInfo / 兼容附件
         uint32_t colorFormat    = 0;   // swapchain 图像格式（VkFormat）
         uint32_t depthFormat    = 0;   // 深度附件格式（VkFormat）
+        // V3-15：主帧缓冲采样数。宿主接 ImGui 时必须把它填进
+        // ImGui_ImplVulkan_InitInfo::MSAASamples，否则每帧都会报采样数不匹配。
+        uint32_t msaaSamples    = 1;
     };
     virtual bool nativeHandles(NativeHandles& out) const { (void)out; return false; }
 

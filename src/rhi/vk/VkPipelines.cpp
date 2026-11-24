@@ -150,11 +150,18 @@ bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkPipelineRes& res) {
                          desc.attachment.colorCount);
         return false;
     }
-    if (desc.attachment.samples != 1) {
-        ENGINE_LOG_ERROR("[VK] createPipeline: MSAA not implemented (samples=%u)",
-                         desc.attachment.samples);
-        return false;
+    // MSAA：采样数必须是 2 的幂且设备支持（framebufferColorSampleCounts）
+    const uint32_t samples = desc.attachment.samples;
+    if (samples != 1) {
+        const bool pow2 = (samples == 2 || samples == 4 || samples == 8 ||
+                           samples == 16 || samples == 32 || samples == 64);
+        const VkSampleCountFlagBits bit = static_cast<VkSampleCountFlagBits>(samples);
+        if (!pow2 || (_caps->props.limits.framebufferColorSampleCounts & bit) == 0) {
+            ENGINE_LOG_ERROR("[VK] createPipeline: unsupported samples=%u", samples);
+            return false;
+        }
     }
+    res.samples = samples;
     const Format colorFormat = desc.attachment.colorFormats[0];
     const Format depthFormat = desc.attachment.depthFormat;
     const VkFormat colorFmt = static_cast<VkFormat>(FormatInfo::of(colorFormat).vkFormat());
@@ -273,7 +280,7 @@ bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkPipelineRes& res) {
     rs.depthBiasSlopeFactor    = desc.raster.depthBiasSlopeFactor;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = static_cast<VkSampleCountFlagBits>(samples);   // V3-15
 
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     // M4：render pass 已有深度附件，深度状态由管线描述符驱动

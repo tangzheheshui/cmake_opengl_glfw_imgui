@@ -9,7 +9,7 @@ namespace rhi {
 
 bool VkSwapchain::create(VkPhysicalDevice pd, VkDevice device, VkSurfaceKHR surface,
                          uint32_t fbWidth, uint32_t fbHeight, VkFormat depthFmt,
-                         VkMemoryAllocator* alloc, NameFn nameFn) {
+                         uint32_t msaaSamples, VkMemoryAllocator* alloc, NameFn nameFn) {
     destroy();
     _pd     = pd;
     _device = device;
@@ -182,12 +182,128 @@ bool VkSwapchain::create(VkPhysicalDevice pd, VkDevice device, VkSurfaceKHR surf
     _nameFn(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_depthImage), "RHI_DepthImage");
 
     _depthLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // ---- MSAA 附件（msaaSamples > 1 时）----
+    _msaaSamples = (msaaSamples > 1) ? msaaSamples : 1;
+    if (_msaaSamples > 1 && !createMsaa()) {
+        ENGINE_LOG_ERROR("[VK] MSAA attachments create failed (samples=%u)", _msaaSamples);
+        return false;
+    }
+
     _needsRecreate = false;
     return true;
 }
 
+// 多采样颜色/深度附件：大小与交换链一致，渲染时 resolve 进交换链图。
+bool VkSwapchain::createMsaa() {
+    VkSampleCountFlagBits samples = static_cast<VkSampleCountFlagBits>(_msaaSamples);
+
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.imageType     = VK_IMAGE_TYPE_2D;
+    ci.extent        = {_extent.width, _extent.height, 1};
+    ci.mipLevels     = 1;
+    ci.arrayLayers   = 1;
+    ci.samples       = samples;
+    ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    ci.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // 颜色
+    ci.format = _format;
+    ci.usage  = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (vkCreateImage(_device, &ci, nullptr, &_msaaColorImage) != VK_SUCCESS) return false;
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(_device, _msaaColorImage, &req);
+    _msaaColorMem = _alloc->alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (!_msaaColorMem.valid()) return false;
+    if (vkBindImageMemory(_device, _msaaColorImage, _msaaColorMem.memory,
+                          _msaaColorMem.offset) != VK_SUCCESS) return false;
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image    = _msaaColorImage;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format   = _format;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(_device, &vci, nullptr, &_msaaColorView) != VK_SUCCESS) return false;
+    _nameFn(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_msaaColorImage), "RHI_MsaaColor");
+
+    // 深度
+    ci.format = _depthFormat;
+    ci.usage  = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if (vkCreateImage(_device, &ci, nullptr, &_msaaDepthImage) != VK_SUCCESS) return false;
+    vkGetImageMemoryRequirements(_device, _msaaDepthImage, &req);
+    _msaaDepthMem = _alloc->alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (!_msaaDepthMem.valid()) return false;
+    if (vkBindImageMemory(_device, _msaaDepthImage, _msaaDepthMem.memory,
+                          _msaaDepthMem.offset) != VK_SUCCESS) return false;
+
+    vci.image  = _msaaDepthImage;
+    vci.format = _depthFormat;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(_device, &vci, nullptr, &_msaaDepthView) != VK_SUCCESS) return false;
+    _nameFn(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_msaaDepthImage), "RHI_MsaaDepth");
+
+    _msaaColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    _msaaDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ENGINE_LOG_INFO("[VK] MSAA attachments created (samples=%u, %ux%u)",
+                    _msaaSamples, _extent.width, _extent.height);
+    return true;
+}
+
+void VkSwapchain::destroyMsaa() {
+    if (_msaaColorView)  vkDestroyImageView(_device, _msaaColorView, nullptr);
+    if (_msaaColorImage) vkDestroyImage(_device, _msaaColorImage, nullptr);
+    if (_msaaColorMem.valid()) _alloc->free(_msaaColorMem);
+    if (_msaaDepthView)  vkDestroyImageView(_device, _msaaDepthView, nullptr);
+    if (_msaaDepthImage) vkDestroyImage(_device, _msaaDepthImage, nullptr);
+    if (_msaaDepthMem.valid()) _alloc->free(_msaaDepthMem);
+    _msaaColorView = VK_NULL_HANDLE; _msaaColorImage = VK_NULL_HANDLE;
+    _msaaDepthView = VK_NULL_HANDLE; _msaaDepthImage = VK_NULL_HANDLE;
+    _msaaColorMem = VkMemAlloc{}; _msaaDepthMem = VkMemAlloc{};
+    _msaaColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    _msaaDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+}
+
+// 每帧进 Pass 前建访问链：首帧从 UNDEFINED 转入附件布局，之后同布局链式访问。
+void VkSwapchain::recordMsaaBeginBarriers(VkCommandBuffer cb) {
+    if (_msaaColorImage == VK_NULL_HANDLE) return;
+
+    VkImageMemoryBarrier color{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    color.srcAccessMask = (_msaaColorLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                              ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    color.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    color.oldLayout = _msaaColorLayout;
+    color.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    color.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    color.image = _msaaColorImage;
+    color.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                         0, nullptr, 0, nullptr, 1, &color);
+    _msaaColorLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkImageMemoryBarrier depth{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    depth.srcAccessMask = (_msaaDepthLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                              ? 0 : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depth.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                        | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    depth.oldLayout = _msaaDepthLayout;
+    depth.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    depth.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    depth.image = _msaaDepthImage;
+    depth.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                         | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, 0,
+                         0, nullptr, 0, nullptr, 1, &depth);
+    _msaaDepthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+}
+
 void VkSwapchain::destroy() {
     if (_device == VK_NULL_HANDLE) return;
+    destroyMsaa();
     for (auto s : _renderDone) if (s) vkDestroySemaphore(_device, s, nullptr);
     _renderDone.clear();
     for (auto v : _views)      if (v) vkDestroyImageView(_device, v, nullptr);

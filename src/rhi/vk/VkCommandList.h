@@ -58,7 +58,8 @@ private:
     void applyPushConstants();
     void bindDescriptorState();   // set0（动态偏移）+ set1..4（纹理槽），带去重
     // V3-12：记录本 Pass 实际附件格式（beginRenderPass 时算一次，bindPipeline 比对）
-    void recordPassFormats(bool hasColor, Format colorFormat, bool hasDepth, Format depthFormat);
+    void recordPassFormats(bool hasColor, Format colorFormat, bool hasDepth, Format depthFormat,
+                           uint32_t samples);
 
     VulkanDevice* _device = nullptr;
 
@@ -102,6 +103,7 @@ private:
     bool   _passHasDepth = false;
     Format _passColorFormat = Format::BGRA8_SRGB;
     Format _passDepthFormat = Format::Depth32F;
+    uint32_t _passSamples   = 1;
     bool   _formatMismatch  = false;
 
     float _pushData[32] = {};   // 128B push constant 填充区
