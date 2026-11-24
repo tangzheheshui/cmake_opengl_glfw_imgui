@@ -84,7 +84,7 @@ public:
     VkTextureRes&       textureResMut(TextureHandle h) { return _textures[h.id - 1]; }
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
     VkDescriptorSetLayout texSetLayout() const { return _texSetLayout; }
-    VkDescriptorPool      texDescriptorPool() const { return _texDescriptorPool; }
+    VkDescriptorPool      texDescriptorPool() const { return _texDescriptorPools.empty() ? VK_NULL_HANDLE : _texDescriptorPools.back(); }
     VkPipelineLayout      pipelineLayout() const { return _pipelineLayout; }
 
     // B1：dynamic rendering 下由 command list 调用的布局屏障与附件视图
@@ -177,7 +177,13 @@ private:
 
     // 纹理描述符（M4）+ 绘制级 uniform UBO（M4.2）
     VkDescriptorSetLayout _texSetLayout      = VK_NULL_HANDLE;
-    VkDescriptorPool      _texDescriptorPool = VK_NULL_HANDLE;
+    // B6：描述符池按需扩容——耗尽即追加新池（旧池连同其上 set 存活到销毁），
+    // 取代固定 maxSets=32（31 mesh 即 abort 的规模上限）
+    std::vector<VkDescriptorPool> _texDescriptorPools;
+    uint32_t _poolCapSets    = 256;
+    uint32_t _poolCapSampler = 1024;
+    uint32_t _poolCapUniform = 256;
+    void growTexDescriptorPool();
     // A1: 验证层与调试工具
     bool                  _validationEnabled = false;
     bool                  _descriptorIndexing = false;

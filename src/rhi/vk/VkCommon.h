@@ -10,6 +10,7 @@
 #include "log/LogMacros.h"
 #include "VkMemoryAllocator.h"
 #include <cstdlib>
+#include <vector>
 
 namespace rhi {
 
@@ -74,6 +75,15 @@ struct VkUniformBlockRes {
     VkMemAlloc     memAlloc;   // E1
 };
 
+// B6：反射出的 push constant 成员（管线创建期从 SPIR-V 生成，
+// setUniform 按此表按名定位偏移——替换字符串→偏移硬编码约定）
+struct VkPipelineUniformInfo {
+    char     name[32];
+    uint32_t offset = 0;
+    uint32_t size   = 0;
+    bool     isMat4 = false;   // mat4 成员 setUniform 时做 Reversed-Z 修正
+};
+
 struct VkPipelineRes {
     VkPipeline       pipeline = VK_NULL_HANDLE;
     // v2 对象级销毁：destroyPipeline 后槽位保留（句柄 id 不复用），
@@ -83,6 +93,8 @@ struct VkPipelineRes {
     //  [0,64)  mat4 uMatrixMVP（顶点）
     //  [64,80) vec4 uColor   （片元，Vec3 写入时 alpha 填 1）
     float pushConstants[32] = {};
+    // B6：反射 uniform 表（名字命中即按 offset 写 push；空表回退旧映射）
+    std::vector<VkPipelineUniformInfo> uniformTable;
 };
 
 // push constant 布局常量（与 res/shaders_vk/*.vert|.frag 中的 PC 块一致）

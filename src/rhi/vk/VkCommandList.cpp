@@ -160,9 +160,34 @@ static void applyReversedZCorrection(float* m16) {
 }
 
 void VkCommandList::setUniform(const char* name, const UniformValue& value) {
-    // M3 固定映射（与 res/shaders_vk 的 push_constant 块一致）：
-    //   uMatrixMVP → offset 0（mat4）
-    //   uColor     → offset 64（vec4；Vec3 补 alpha=1）
+    // B6：优先查当前管线的反射表（创建期从 SPIR-V 反射出 名字→偏移/类型）。
+    // 命中即写，不再依赖字符串→偏移硬编码（漏配即静默丢失的坑由此消灭）。
+    if (_curPipeline.valid()) {
+        const auto& table = _device->pipelineRes(_curPipeline).uniformTable;
+        for (const auto& u : table) {
+            if (std::strcmp(u.name, name) != 0) continue;
+            float* dst = _pushData + u.offset / sizeof(float);
+            if (u.isMat4) {
+                std::memcpy(dst, value.data, 16 * sizeof(float));
+                // Reversed-Z 修正只作用于投影类矩阵（uProjMat 天空盒/uMatrixMVP/
+                // uViewProj）；纯视图矩阵（uViewMat）不做——名字含 "Proj" 判别
+                if (std::strstr(name, "Proj") != nullptr) {
+                    applyReversedZCorrection(dst);
+                }
+            } else if (value.type == UniformValue::Type::Vec3) {
+                // 与旧 uColor 语义一致：Vec3 写入补 alpha=1
+                std::memcpy(dst, value.data, 3 * sizeof(float));
+                dst[3] = 1.0f;
+            } else {
+                const uint32_t n = std::min<uint32_t>(u.size / sizeof(float), 4u);
+                std::memcpy(dst, value.data, n * sizeof(float));
+            }
+            _pushDirty = true;
+            return;
+        }
+    }
+
+    // ---- 回退：反射表为空时走旧约定映射（保底，勿删） ----
     if (std::strcmp(name, "uViewMat") == 0) {
         // 天空盒视图矩阵（offset 0）：不做 Reversed-Z 修正，见 applyReversedZCorrection 注释
         std::memcpy(_pushData + kPushMvpOffset / sizeof(float), value.data, 16 * sizeof(float));
@@ -187,6 +212,8 @@ void VkCommandList::setUniform(const char* name, const UniformValue& value) {
     } else if (std::strcmp(name, "uTex") == 0) {
         // GL 采样器 uniform 编号；VK 走 bindTexture 槽位，忽略
     } else {
+        // B6：反射表已命中的名字不会走到这里；未命中且表为空（无 PC 着色器）
+        // 或反射缺名时提示一次（不再吞掉所有未知名）
         static const char* lastName = nullptr;
         if (lastName != name) {
             ENGINE_LOG_WARN_ONCE("[VK] unknown uniform '%s' (ignored)", name);

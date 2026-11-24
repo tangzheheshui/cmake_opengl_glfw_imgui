@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <filesystem>
 #include "fs/FilePathUtil.h"
+#include "VkShaderReflect.h"
 
 namespace rhi {
 
@@ -154,7 +155,10 @@ VulkanDevice::~VulkanDevice() {
     }
     _pipelines.clear();
     if (_pipelineLayout)    vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
-    if (_texDescriptorPool) vkDestroyDescriptorPool(_device, _texDescriptorPool, nullptr);
+    for (auto pool : _texDescriptorPools) {
+        if (pool) vkDestroyDescriptorPool(_device, pool, nullptr);
+    }
+    _texDescriptorPools.clear();
     if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
     savePipelineCache();     // A3: 管线销毁后仍可导出缓存内容；在 destroy device 之前
     if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
@@ -1552,6 +1556,24 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
             ENGINE_LOG_ERROR("[VK] missing SPIR-V for pipeline");
             return {};
         }
+        // B6：反射 push constant 成员 → 管线 uniform 表（setUniform 按名定位）
+        {
+            auto refl = reflectSpirv(code.data(), code.size());
+            for (const auto& m : refl.pushMembers) {
+                if (m.name.empty()) continue;
+                auto dup = std::find_if(res.uniformTable.begin(), res.uniformTable.end(),
+                                        [&](const VkPipelineUniformInfo& u) {
+                                            return std::strcmp(u.name, m.name.c_str()) == 0;
+                                        });
+                if (dup != res.uniformTable.end()) continue;   // 两 stage 重复声明，取首个
+                VkPipelineUniformInfo ui{};
+                std::snprintf(ui.name, sizeof(ui.name), "%s", m.name.c_str());
+                ui.offset = m.offset;
+                ui.size   = m.size;
+                ui.isMat4 = m.isMat4;
+                res.uniformTable.push_back(ui);
+            }
+        }
         VkShaderModuleCreateInfo mci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         mci.codeSize = code.size();
         mci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
@@ -1783,6 +1805,30 @@ IRHICommandList* VulkanDevice::commandList() {
     return _commandList.get();
 }
 
+// B6：追加一个描述符池（容量翻倍）。旧池不销毁——其上的 set 全生命周期有效，
+// 借此解除固定 maxSets=32 的规模上限（31 mesh 即 abort）。
+void VulkanDevice::growTexDescriptorPool() {
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = _poolCapSampler;
+    poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = _poolCapUniform;
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    pi.maxSets       = _poolCapSets;
+    pi.poolSizeCount = 2;
+    pi.pPoolSizes    = poolSizes;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateDescriptorPool(_device, &pi, nullptr, &pool));
+    _texDescriptorPools.push_back(pool);
+    char name[48];
+    std::snprintf(name, sizeof(name), "RHI_TexDescriptorPool_%zu",
+                  _texDescriptorPools.size() - 1);
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, reinterpret_cast<uint64_t>(pool), name);
+    ENGINE_LOG_INFO("[VK] descriptor pool #%zu: sets=%u sampler=%u ubo=%u",
+                    _texDescriptorPools.size() - 1, _poolCapSets, _poolCapSampler, _poolCapUniform);
+}
+
 void VulkanDevice::createDescriptorObjects() {
     // set layout：binding0 = 绘制级 uniform UBO；bindings 1..4 = 采样器槽 0..3
     VkDescriptorSetLayoutBinding bindings[5];
@@ -1814,18 +1860,7 @@ void VulkanDevice::createDescriptorObjects() {
     li.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     VK_CHECK(vkCreateDescriptorSetLayout(_device, &li, nullptr, &_texSetLayout));
 
-    VkDescriptorPoolSize poolSizes[2]{};
-    poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 128;
-    poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = 32;
-    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    pi.maxSets       = 32;
-    pi.poolSizeCount = 2;
-    pi.pPoolSizes    = poolSizes;
-    VK_CHECK(vkCreateDescriptorPool(_device, &pi, nullptr, &_texDescriptorPool));
-    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, reinterpret_cast<uint64_t>(_texDescriptorPool), "RHI_TexDescriptorPool");
+    growTexDescriptorPool();   // B6：首个池（容量见成员默认值，耗尽自动翻倍追加）
     setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<uint64_t>(_texSetLayout), "RHI_TexSetLayout");
 
     // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用
@@ -1897,9 +1932,17 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     blk.mapped = blk.memAlloc.mapped;
     VK_CHECK(vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset));
 
-    // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器
+    // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器。
+    // B6：池耗尽（OUT_OF_POOL/ fragmentation）→ 扩容重试，无规模上限
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool     = _texDescriptorPool;
+    dai.descriptorPool     = _texDescriptorPools.back();
+    VkResult setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
+    if (setResult == VK_ERROR_OUT_OF_POOL_MEMORY || setResult == VK_ERROR_FRAGMENTED_POOL) {
+        growTexDescriptorPool();
+        dai.descriptorPool = _texDescriptorPools.back();
+        setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
+    }
+    VK_CHECK(setResult);
     dai.descriptorSetCount = 1;
     dai.pSetLayouts        = &_texSetLayout;
     VK_CHECK(vkAllocateDescriptorSets(_device, &dai, &blk.set));

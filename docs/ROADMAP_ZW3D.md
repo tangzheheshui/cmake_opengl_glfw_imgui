@@ -132,7 +132,7 @@
 | P1 | D2 | ~~拾取 Pass + 回读~~ | RHI 路径完成（2026-11-23，点击拾取 + 全图扫描验证）；多视口随 C2 | B4 ✅ | 可并行 | M |
 | P1 | D3/D4/D7/D8 | 透明 / SDF 文字 / 剖切 / 选中高亮 | D7 已完成；D3/D4/D8 待做 | B1/B4 | 大部分可并行 | M/S |
 | P2 | E1/E2 | VMA + 异步上传环 + Timeline + fif=2 | **E1 最小子分配器 ✅ 提前完成**（2026-11-24：8MB 页 first-fit 空闲链表 + ≥1MB 专用，双端回归全绿）；E2（上传环/Timeline/fif=2）维持 Phase 4 | A3 | E1→E2 串行 | M/L |
-| — | **B6**（新增，2026-11-23 评审） | **着色器反射 + 逐管线布局**：spvReflect/GL 反射 → ShaderReflection → PipelineLayoutDesc，替换全局 128B push 字符串约定 | 字符串约定是当前最大坏味道（uPickColor 漏映射即静默丢失） | 无 | **D5 前置** | M |
+| — | **B6**（新增，2026-11-23 评审） | ~~着色器反射（核心版）~~ ✅ 2026-11-24：自写 SPIR-V 最小反射器（VkShaderReflect，无新依赖），管线创建期生成 uniform 表，setUniform 按表定位偏移；描述符池按需扩容（解除 31 mesh abort 上限）| 逐管线 VkPipelineLayout 拆分（替换全局 128B 布局）留待 D5 一并做 | 无 | D5 前置 | M→S 已减 |
 | — | **B7**（新增，2026-11-23 评审） | **TextureView**：TextureViewDesc{mipRange, layerRange, aspect}，契约 v2.1 追加；解 B3c 的 sRGB 双纹理 hack，触发场景 = CSM/D8/烘焙到 mip | 完全缺失 | B0 | 随触发 | S–M |
 | P2 | E3/E5 | CPU 剔除 / LOD / 流式加载 | 未开始 | 无 / E1 | 可与 E1/E2 并行 | M |
 | P3 | F1 | headless 测试 + CI | 无 | B4 | 可并行 | S |
