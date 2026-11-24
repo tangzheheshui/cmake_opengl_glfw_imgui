@@ -17,6 +17,7 @@
 #include "../detail/DeletionQueue.h"
 #include "../detail/HandleTable.h"
 #include "VkDescriptors.h"
+#include "VkPipelines.h"
 #include "VkSwapchain.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
@@ -144,9 +145,6 @@ private:
     void destroySwapchainObjects();
     void createCommandObjects();
     void createSyncObjects();
-    // A3: Pipeline Cache 持久化（创建/加载/退出时保存；为优化项，失败不致命）
-    void createPipelineCache();
-    void savePipelineCache();
     void createDescriptorObjects();  // 描述符布局/池 + 帧 uniform 环（委托 VkDescriptors）
     // A1: Validation Layer + Debug Utils
     void setupDebugValidation(std::vector<const char*>& exts, std::vector<const char*>& layers);
@@ -186,12 +184,10 @@ private:
     VkCommandPool   _commandPool   = VK_NULL_HANDLE;
     VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
 
-    // A3: 物理设备能力（初始化时探测一次）+ Pipeline Cache 持久化状态
-    VkCaps         _caps;
-    VkPipelineCache _pipelineCache = VK_NULL_HANDLE;
-    std::string    _pipelineCachePath;
-    bool           _pipelineCacheFromDisk = false;   // 本次启动是否成功加载了旧缓存
-    size_t         _pipelineCacheLoadedBytes = 0;
+    // A3: 物理设备能力（初始化时探测一次）
+    VkCaps _caps;
+    // V3-3：管线创建 + 管线缓存归 VkPipelines
+    VkPipelines _pipes;
 
     // E1：内存子分配器（页内 first-fit + 大额专用），替换逐资源 vkAllocateMemory
     VkMemoryAllocator _memAlloc;
