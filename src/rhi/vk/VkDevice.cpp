@@ -149,6 +149,11 @@ VulkanDevice::VulkanDevice(const DeviceDesc& desc, std::string& outError)
         vkGetInstanceProcAddr(_instance, "vkSetDebugUtilsObjectNameEXT"));
     // V3-2：描述符布局/池先建（纹理创建时就要分配自己的描述符集），
     // 白兜底纹理随后创建（它同样走 createTexture，拿到的 set 供未绑定槽位使用）
+    // V3-13：句柄表槽位复用自检（分配→释放→再分配应复用同槽、旧句柄失效）
+    if (!_buffers.debugSelfCheck()) {
+        ENGINE_LOG_ERROR("[VK] HandleTable reuse self-check FAILED");
+    }
+
     createDescriptorObjects();
     // V3-3：管线创建器（含磁盘管线缓存加载）。需要描述符里的全局管线布局
     {
@@ -686,6 +691,8 @@ void VulkanDevice::drainDeferredGpuWork() {
     // 用独立一次性提交执行（不动主命令缓冲：此时它可能仍处于 pending 状态）
     for (auto& w : _deferredGpu) submitOneTime(std::move(w.record), std::move(w.onComplete));
     _deferredGpu.clear();
+    // 句柄占位已随回调执行完毕（回调自己持有 shared_ptr），向量可以清空
+    _deferredTexHandles.clear();
 }
 
 bool VulkanDevice::beginFrame() {
@@ -714,6 +721,7 @@ bool VulkanDevice::beginFrame() {
         for (auto& l : _extraLists) l->beginFrameSlot(_frames.index());
         multListSelfTest();
         commandListChurnTest();
+        textureSlotChurnTest();
     }
     return _frameActive;
 }
@@ -1395,9 +1403,13 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         void* mapped = stagingMem.mapped;
         std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(bytes));
 
+        // V3-13：槽位启用复用后不能再预测 id（原写法 = size()+1）。
+        // 用一个句柄占位对象：纹理分配完成后回填，延迟回调按句柄校验后再写布局。
+        auto texHandle = std::make_shared<TextureHandle>();
+        _deferredTexHandles.push_back(texHandle);
+
         deferGpuWork([this, t, staging, stagingMem, w = desc.width, h = desc.height,
-                      bpp, layerCount, mipLevels, generateMips,
-                      newTexId = static_cast<uint32_t>(_textures.size()) + 1](VkCommandBuffer cb) {
+                      bpp, layerCount, mipLevels, generateMips, texHandle](VkCommandBuffer cb) {
 
             VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             bar.srcAccessMask = 0;
@@ -1493,8 +1505,8 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
                                      0, nullptr, 0, nullptr, 1, &bar);
             }
             // B4：布局跟踪（上传完成的稳定布局；附件/回读转换以此为基）
-            if (newTexId <= _textures.size()) {
-                _textures.get(newTexId).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            if (texHandle->valid() && _textures.alive(*texHandle)) {
+                _textures.get(texHandle->id).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             }
         }, [this, staging, stagingMem]() {
             vkDestroyBuffer(_device, staging, nullptr);
@@ -1573,6 +1585,10 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
 
     RhiHandle base = _textures.alloc(std::move(t));
     TextureHandle h; h.id = base.id; h.gen = base.gen;
+    // 回填延迟上传回调里的句柄占位（槽位复用也安全：句柄带 gen）
+    if (!_deferredTexHandles.empty() && !_deferredTexHandles.back()->valid()) {
+        *_deferredTexHandles.back() = h;
+    }
     // 立即上传的纹理此时已处于 SHADER_READ_ONLY（见 uploadDeferred 注释）
     if (desc.initialData && bytes > 0 && !uploadDeferred) {
         _textures.get(h.id).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1698,6 +1714,45 @@ void VulkanDevice::destroyCommandList(IRHICommandList* list) {
         return;
     }
     ENGINE_LOG_WARN_ONCE("[VK] destroyCommandList: unknown list (ignored)");
+}
+
+// RHI_TEX_CHURN=<N>：验证纹理槽位复用——循环创建/销毁 N 次，槽位数不增长。
+// 用不带初始数据的纹理：不触发延迟上传，销毁是安全的；槽位复用本身与后端无关。
+void VulkanDevice::textureSlotChurnTest() {
+    static const char* env = std::getenv("RHI_TEX_CHURN");
+    static uint32_t left = env ? static_cast<uint32_t>(std::atoi(env)) : 0;
+    static size_t before = 0;
+    static bool started = false;
+    if (left == 0) return;
+    if (!started) {
+        if (_frameCount < 5) return;   // 等场景把自带纹理建完再取基线
+        // 预热一次：让空闲链表里先有一个可复用槽，基线才稳定
+        TextureDesc wd;
+        wd.width = 1; wd.height = 1; wd.usage = TEX_SAMPLED;
+        TextureHandle warm = createTexture(wd);
+        if (warm.valid()) destroyTexture(warm);
+        started = true;
+        before = _textures.size();
+    }
+
+    // 每帧 100 个：销毁走延迟队列，必须跨帧 flush，否则一帧内堆到设备
+    // 采样器上限（maxSamplerAllocationCount，常见 4000）之前就报错。
+    const uint32_t batch = left < 100 ? left : 100;
+    for (uint32_t i = 0; i < batch; ++i) {
+        TextureDesc d;
+        d.width  = 1;
+        d.height = 1;
+        d.usage  = TEX_SAMPLED;   // 无 initialData：不触发上传
+        TextureHandle h = createTexture(d);
+        if (!h.valid()) break;
+        destroyTexture(h);
+    }
+    left -= batch;
+    if (left == 0) {
+        ENGINE_LOG_INFO("[VK][churn] texture slots: before=%zu after=%zu (slots stable=%s)",
+                        before, _textures.size(),
+                        _textures.size() == before ? "yes" : "NO");
+    }
 }
 
 // RHI_CMDLIST_CHURN=<N>：验证"创建→录制→销毁"不会累积。

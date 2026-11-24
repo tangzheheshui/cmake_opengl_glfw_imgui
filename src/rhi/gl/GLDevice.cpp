@@ -66,6 +66,10 @@ GLDevice::GLDevice(const DeviceDesc& desc)
         return;   // _initialized 保持 false，工厂报错
     }
     _initialized = true;
+    // V3-13：句柄表槽位复用自检（分配→释放→再分配应复用同槽、旧句柄失效）
+    if (!_buffers.debugSelfCheck()) {
+        ENGINE_LOG_ERROR("[GL] HandleTable reuse self-check FAILED");
+    }
     _commandList = std::make_unique<GLCommandList>(this);
 }
 

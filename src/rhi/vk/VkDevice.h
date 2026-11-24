@@ -25,6 +25,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <memory>
 
 namespace rhi {
 
@@ -235,6 +236,9 @@ private:
 
     detail::HandleTable<VkBufferRes>   _buffers;
     detail::HandleTable<VkPipelineRes> _pipelines;
+    // V3-13：延迟纹理上传回调里的句柄占位（分配完成后回填，避免预测 id）
+    std::vector<std::shared_ptr<TextureHandle>> _deferredTexHandles;
+
     // 帧内请求的一次性 GPU 工作（纹理上传等）：render pass 活跃时提交会触发
     // DEVICE_LOST（MoltenVK），统一延迟到下一帧 beginFrame 执行
     struct DeferredGpuWork {
@@ -266,6 +270,7 @@ private:
     bool           _churnDone = false;
     void multListSelfTest();
     void commandListChurnTest();   // RHI_CMDLIST_CHURN=<N>：创建/录制/销毁压测
+    void textureSlotChurnTest();    // RHI_TEX_CHURN=<N>：纹理创建/销毁，验证槽位复用
     std::string _adapterName;
 };
 
