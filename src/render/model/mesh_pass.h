@@ -67,6 +67,7 @@ public:
     rhi::BufferHandle m_rhiIB;
     rhi::PipelineHandle m_rhiPipeline;
     rhi::PipelineHandle m_rhiPipelineBlend;   // D3：透明变体（blend+depthWrite off，惰性建）
+    rhi::PipelineHandle m_rhiPipelineWire;    // D5：线框变体（solid 着色器 + Line 模式，惰性建）
     rhi::GraphicsPipelineDesc _lastPipelineDesc;   // D3：blend 变体从 opaque desc 复制改状态
     rhi::UniformBlockHandle m_rhiUniformBlock;
     bool m_rhiBuilt = false;

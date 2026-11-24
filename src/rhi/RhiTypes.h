@@ -203,6 +203,16 @@ struct BlendState {
     bool blendEnable = false;   // true 时后端固定使用 srcAlpha/oneMinusSrcAlpha
 };
 
+// ---- D5：光栅化状态追加（默认值零改动兼容）----
+enum class PolygonMode : int { Fill, Line };   // Line = 线框（需 fillModeNonSolid）
+
+struct RasterState {
+    PolygonMode polygonMode = PolygonMode::Fill;
+    // 着色+边线模式的边线深度偏移（防止线框与表面 z-fighting）
+    float depthBiasConstantFactor = 0.0f;
+    float depthBiasSlopeFactor    = 0.0f;
+};
+
 struct GraphicsPipelineDesc {
     std::vector<ShaderFileDesc> shaders;
     VertexLayoutDesc vertexLayout;
@@ -210,6 +220,7 @@ struct GraphicsPipelineDesc {
     CullMode cull           = CullMode::Back;
     DepthState depth;
     BlendState blend;
+    RasterState raster;   // D5 追加
 };
 
 // ---- Buffer / Texture 描述 ----

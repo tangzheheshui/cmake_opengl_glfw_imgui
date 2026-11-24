@@ -43,6 +43,11 @@ bool MeshPass::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, 
     return true;
 }
 
+// D5：线框颜色（深灰蓝，CAD 常见边线观感；线性空间直出）
+static glm::vec4 wireColorOf() {
+    return glm::vec4(0.13f, 0.14f, 0.18f, 1.0f);
+}
+
 // D8：高亮 push/uniform 值（选中 = 淡蓝 × 强度；未选中 = 全零即关闭）
 static glm::vec4 highlightValueOf(uint32_t flags) {
     if (!(flags & DrawOption::DRAW_HIGHLIGHT)) {
@@ -174,14 +179,34 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
     }
     
     setup(matModel, flags);
-  
+
     // 绘制网格
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glBindVertexArray(_VAO);
+
+    // D5：显示模式（GL 遗留路径用 glPolygonMode；拾取/阴影 Pass 不受影响）
+    const int displayMode = RenderSystem::getInstance().settings().displayMode;
+    const bool wireOnly = (displayMode == 1) && !bDrawShadow && !bDrawPick;
+    if (wireOnly) {
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    }
     glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)m_mesh_data->indices.size(), GL_UNSIGNED_INT, 0,  (int)matModel.size());
+    if (wireOnly) {
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    }
+    else if ((displayMode == 2) && !bDrawShadow && !bDrawPick) {
+        // 着色+边线：第二遍线框（GL_POLYGON_OFFSET_LINE 深度偏移防 z-fighting）
+        glEnable(GL_POLYGON_OFFSET_LINE);
+        glPolygonOffset(2.0f, 2.0f);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)m_mesh_data->indices.size(), GL_UNSIGNED_INT, 0,  (int)matModel.size());
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glDisable(GL_POLYGON_OFFSET_LINE);
+        glPolygonOffset(0.0f, 0.0f);
+    }
     glBindVertexArray(0);
-    
+
     return true;
 }
 
@@ -353,6 +378,9 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
         return false;
     }
 
+    // D5：显示模式（着色 / 线框 / 着色+边线）
+    const int displayMode = rs.settings().displayMode;
+
     // D3：透明对象走 blend 变体（depthWrite 关 + srcAlpha 混合；管线惰性建，
     // 附件格式与 opaque 一致——B4 契约的 swapchain 兼容约束）
     const bool transparent = (opacity < 0.999f);
@@ -367,10 +395,50 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     }
     const rhi::PipelineHandle pipe = (transparent && m_rhiPipelineBlend.valid())
                                          ? m_rhiPipelineBlend : m_rhiPipeline;
+
+    // D5：线框管线（solid 着色器 + PolygonMode::Line，惰性建）
+    const bool wireNeeded = (displayMode != 0);
+    if (wireNeeded && !m_rhiPipelineWire.valid()) {
+        rhi::GraphicsPipelineDesc wdesc;
+        wdesc.shaders = {
+            { rhi::ShaderStage::Vertex,   "vert_wireframe_rhi" },
+            { rhi::ShaderStage::Fragment, "frag_wireframe_rhi" },
+        };
+        wdesc.vertexLayout = _lastPipelineDesc.vertexLayout;   // 复用模型 VB 布局
+        wdesc.primitive    = rhi::PrimitiveType::Triangles;
+        wdesc.cull         = rhi::CullMode::None;              // 线框不剔除
+        wdesc.depth        = { true, displayMode == 1 };       // 着色+边线：深度偏移写深度
+        wdesc.blend        = { false };
+        wdesc.raster.polygonMode           = rhi::PolygonMode::Line;
+        wdesc.raster.depthBiasConstantFactor = (displayMode == 2) ? 2.0f : 0.0f;
+        wdesc.raster.depthBiasSlopeFactor    = (displayMode == 2) ? 2.0f : 0.0f;
+        m_rhiPipelineWire = device->createPipeline(wdesc);
+        if (!m_rhiPipelineWire.valid()) {
+            ENGINE_LOG_WARN_ONCE("[RHI] wireframe pipeline creation failed; falls back to shaded");
+        }
+    }
+
+    glm::mat4 vp = Matrix::toMatrix(mtx);
+
+    if (displayMode == 1 && m_rhiPipelineWire.valid()) {
+        // ---- 纯线框 ----
+        cmd->bindPipeline(m_rhiPipelineWire);
+        cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
+        const glm::vec4 wc = wireColorOf();
+        cmd->setUniform("uColor", rhi::UniformValue::fromVec4(glm::value_ptr(wc)));
+        device->updateBuffer(m_rhiInstanceVB, matModel.data(),
+                             std::min<uint32_t>(static_cast<uint32_t>(matModel.size() * sizeof(Matrix)), 64 * 4));
+        cmd->bindVertexBuffer(m_rhiVB);
+        if (m_rhiInstanceVB.valid()) cmd->bindVertexBuffer(m_rhiInstanceVB, 1);
+        cmd->bindIndexBuffer(m_rhiIB);
+        cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
+                         static_cast<uint32_t>(matModel.size()));
+        return true;
+    }
+
     cmd->bindPipeline(pipe);
 
     // uViewProj → push constant offset 0
-    glm::mat4 vp = Matrix::toMatrix(mtx);
     cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
 
     // D7：剖切平面 → push constant offset 64
@@ -490,6 +558,20 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     cmd->bindIndexBuffer(m_rhiIB);
     cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
                      static_cast<uint32_t>(matModel.size()));
+
+    // D5：着色+边线 —— 第二遍线框（深度偏移已在管线里，防止 z-fighting）
+    if (displayMode == 2 && m_rhiPipelineWire.valid()) {
+        cmd->bindPipeline(m_rhiPipelineWire);
+        cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
+        const glm::vec4 wc = wireColorOf();
+        cmd->setUniform("uColor", rhi::UniformValue::fromVec4(glm::value_ptr(wc)));
+        // 实例缓冲已刷新，直接重画同 VB/IB
+        cmd->bindVertexBuffer(m_rhiVB);
+        if (m_rhiInstanceVB.valid()) cmd->bindVertexBuffer(m_rhiInstanceVB, 1);
+        cmd->bindIndexBuffer(m_rhiIB);
+        cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
+                         static_cast<uint32_t>(matModel.size()));
+    }
     return true;
 }
 

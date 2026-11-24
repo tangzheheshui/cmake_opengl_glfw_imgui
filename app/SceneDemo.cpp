@@ -127,6 +127,9 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         if (std::getenv("RHI_TEXT_RHI")) {   // GL 调试开关：强制文字走 RHI 路径
             RenderSystem::getInstance().settings().textUseRHI = true;
         }
+        if (const char* m = std::getenv("RHI_DISPLAY_MODE")) {   // D5 验证开关：0/1/2
+            RenderSystem::getInstance().settings().displayMode = std::atoi(m);
+        }
         auto fontMng = RenderSystem::getInstance().GetFontMng();
         auto objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
         objText->SetText("test");

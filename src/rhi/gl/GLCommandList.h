@@ -71,6 +71,9 @@ private:
         GLint     viewport[4] = {0, 0, 0, 0};   // C2：视口纳入 Pass 边界
         GLboolean scissorTest = GL_FALSE;       // C2：裁剪测试纳入 Pass 边界
         GLint     scissorBox[4] = {0, 0, 0, 0};
+        // D5：多边形模式 + 线偏移纳入 Pass 边界（线框模式不泄漏给遗留 GL 代码）
+        GLint     polygonMode[2] = {GL_FILL, GL_FILL};
+        GLboolean polyOffsetLine = GL_FALSE;
     };
     void saveState(GLStateSnapshot& s);
     void restoreState(const GLStateSnapshot& s);

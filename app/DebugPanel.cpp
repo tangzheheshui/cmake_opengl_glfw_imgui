@@ -76,6 +76,8 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
 
     // ---- CAD 显示（D7 剖切 / D8 选中高亮）----
     if (ImGui::CollapsingHeader("CAD 显示", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char* modes[] = { "着色", "线框", "着色+边线" };
+        ImGui::Combo("显示模式", &settings.displayMode, modes, 3);
         ImGui::Checkbox("剖切平面", &settings.clipPlaneEnabled);
         if (settings.clipPlaneEnabled) {
             ImGui::SliderFloat("剖切位置 X", &settings.clipPlaneDistance, -20.0f, 20.0f);

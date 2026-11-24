@@ -40,6 +40,8 @@ void GLCommandList::saveState(GLStateSnapshot& s) {
     glGetIntegerv(GL_VIEWPORT, s.viewport);                  // C2: 视口/裁剪纳入 Pass 边界
     s.scissorTest = glIsEnabled(GL_SCISSOR_TEST);
     glGetIntegerv(GL_SCISSOR_BOX, s.scissorBox);
+    glGetIntegerv(GL_POLYGON_MODE, s.polygonMode);           // D5: 多边形模式纳入 Pass 边界
+    s.polyOffsetLine = glIsEnabled(GL_POLYGON_OFFSET_LINE);  // D5: 线偏移纳入 Pass 边界
 }
 
 void GLCommandList::restoreState(const GLStateSnapshot& s) {
@@ -59,6 +61,10 @@ void GLCommandList::restoreState(const GLStateSnapshot& s) {
     } else {
         glDisable(GL_CULL_FACE);
     }
+    // D5：多边形模式/线偏移恢复（Pass 不向遗留 GL 代码泄漏线框状态）
+    glPolygonMode(GL_FRONT_AND_BACK, static_cast<GLenum>(s.polygonMode[0]));
+    if (s.polyOffsetLine) glEnable(GL_POLYGON_OFFSET_LINE); else glDisable(GL_POLYGON_OFFSET_LINE);
+    glPolygonOffset(0.0f, 0.0f);
 }
 
 void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
@@ -159,6 +165,17 @@ void GLCommandList::bindPipeline(PipelineHandle pipeline) {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     } else {
         glDisable(GL_BLEND);
+    }
+
+    // D5：多边形模式 + 边线深度偏移（线框显示模式）
+    glPolygonMode(GL_FRONT_AND_BACK,
+                  desc.raster.polygonMode == PolygonMode::Line ? GL_LINE : GL_FILL);
+    if (desc.raster.depthBiasConstantFactor != 0.0f || desc.raster.depthBiasSlopeFactor != 0.0f) {
+        glEnable(GL_POLYGON_OFFSET_LINE);
+        glPolygonOffset(desc.raster.depthBiasSlopeFactor, desc.raster.depthBiasConstantFactor);
+    } else {
+        glDisable(GL_POLYGON_OFFSET_LINE);
+        glPolygonOffset(0.0f, 0.0f);
     }
 }
 

@@ -28,6 +28,9 @@ struct RenderSettings {
     float clipPlaneNormal[3] = {1.0f, 0.0f, 0.0f};
     float clipPlaneDistance  = 0.0f;
 
+    // ---- CAD 显示模式（D5）：0=着色 1=线框 2=着色+边线 ----
+    int displayMode = 0;
+
     // ---- CAD 选中高亮（D8）----
     // selectedId = 拾取命中的对象 ID（BaseDraw::GetID，0 = 无选中）；
     // 高亮颜色固定淡蓝，强度面板可调（0 = 关）
