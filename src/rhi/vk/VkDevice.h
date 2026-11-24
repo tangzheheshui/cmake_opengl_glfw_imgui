@@ -17,6 +17,7 @@
 #include "../detail/DeletionQueue.h"
 #include "../detail/HandleTable.h"
 #include "VkDescriptors.h"
+#include "VkSwapchain.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
 #include <vector>
@@ -85,9 +86,9 @@ public:
     // 内部访问（VkCommandList 使用）
     const std::string& shaderRootPath() const { return _shaderRootPath; }
     ::VkDevice           vkDeviceHandle() const { return _device; }
-    VkExtent2D       swapchainExtent() const { return _swapchainExtent; }
-    VkFormat         swapchainFormat() const { return _swapchainFormat; }
-    VkFormat         depthFormat() const { return _depthFormat; }
+    VkExtent2D       swapchainExtent() const { return _swapchain.extent(); }
+    VkFormat         swapchainFormat() const { return _swapchain.format(); }
+    VkFormat         depthFormat() const { return _swapchain.depthFormat(); }
     bool             dynamicRendering() const { return _dynamicRendering; }
     PFN_vkCmdBeginRenderingKHR beginRenderingFn() const { return _vkBeginRendering; }
     PFN_vkCmdEndRenderingKHR   endRenderingFn() const { return _vkEndRendering; }
@@ -121,7 +122,7 @@ public:
 
     // B1：dynamic rendering 下由 command list 调用的布局屏障与附件视图
     VkImageView currentColorView() const;          // 当前 swapchain image view
-    VkImageView depthImageView() const { return _depthView; }
+    VkImageView depthImageView() const { return _swapchain.depthView(); }
     // beginRenderPass 前的图像布局屏障（color → COLOR_ATTACHMENT / depth 首帧转换）
     void recordBeginPassBarriers(VkCommandBuffer cb, bool clearColor, bool clearDepth);
     // B4：离屏 RT 的布局屏障（命令列表在 RT 分支调用）
@@ -179,22 +180,8 @@ private:
     uint32_t         _queueFamily    = 0;
     VkQueue          _queue          = VK_NULL_HANDLE;
 
-    VkSwapchainKHR             _swapchain      = VK_NULL_HANDLE;
-    VkFormat                   _swapchainFormat = VK_FORMAT_UNDEFINED;
-    VkColorSpaceKHR            _swapchainColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    VkExtent2D                 _swapchainExtent = {0, 0};
-    std::vector<VkImage>       _swapchainImages;
-    std::vector<VkImageView>   _swapchainViews;
-    // B1：dynamic rendering 取代 renderpass/framebuffer。
-    // 布局跟踪：dynamic rendering 不做附件布局自动转换，由后端逐帧记录屏障；
-    // color 每 image 一份（present 后 = PRESENT_SRC），depth 全局一份。
-    std::vector<VkImageLayout> _swapchainLayouts;   // 与 _swapchainImages 对齐
-    VkImageLayout              _depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkFormat                   _depthFormat = VK_FORMAT_UNDEFINED;
-    VkImage                    _depthImage  = VK_NULL_HANDLE;
-    VkDeviceMemory             _depthMemory = VK_NULL_HANDLE;
-    VkMemAlloc                 _depthMemAlloc;   // E1：深度附件子分配
-    VkImageView                _depthView   = VK_NULL_HANDLE;
+    // V3-3：交换链 + 深度附件 + per-image 信号量都归 VkSwapchain
+    VkSwapchain _swapchain;
 
     VkCommandPool   _commandPool   = VK_NULL_HANDLE;
     VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
@@ -227,15 +214,13 @@ private:
     UniformBlockHandle _defaultUniformBlock;   // 未显式持有 block 的绘制使用
 
     VkSemaphore _semImageAvailable = VK_NULL_HANDLE;
-    // 每个 swapchain image 一个 render-done semaphore：
-    // 单个 semaphore 在不同 image 间复用会触发 VUID-vkQueueSubmit-pSignalSemaphores-00067
-    std::vector<VkSemaphore> _semRenderDone;
+    // 每个 swapchain image 一个 render-done semaphore → 归 VkSwapchain
     VkFence     _fenceInFlight     = VK_NULL_HANDLE;
 
     uint32_t _imageIndex     = 0;
     bool     _frameActive    = false;
     bool     _frameSkipped   = false;
-    bool     _needsRecreate  = false;
+
     bool     _frameSubmitted = false;   // C1b 语义：endFrame 已提交，present 可执行
     // V3-0：帧号（非 swapchain image 下标）。延迟销毁队列的时基：
     // destroy* 登记 _frameCount + kLagFrames，beginFrame 在 fence 等待后 flush。
