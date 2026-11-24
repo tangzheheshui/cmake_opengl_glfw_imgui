@@ -28,6 +28,8 @@ public:
     bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit = 1, float opacity = 1.0f);
     bool DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID);
     void setBoneMat(std::shared_ptr<std::vector<glm::mat4>> mat) { m_pass->m_matBone = mat; }
+    // 几何共享（合批前置）：模型解析缓存取回 MeshData 用
+    std::shared_ptr<MeshData> meshData() const { return m_pass ? m_pass->m_mesh_data : nullptr; }
     // D2: RHI 拾取绘制经 MeshPass（pick 管线由调用方传入）
     bool DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
                      const Matrix& viewProj, const std::vector<Matrix>& matModel, uint16_t pickID) {

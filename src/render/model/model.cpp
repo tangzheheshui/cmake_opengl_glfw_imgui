@@ -16,18 +16,47 @@
 #include <filesystem>
 #include "core/math/math.h"
 
+// 合批前置：同文件模型解析缓存——Assimp 解析（CPU 最重的一段）每路径一次；
+// 命中后 MeshData/材质/节点全部浅共享（shared_ptr），Mesh/MeshPass 对象仍
+// 每模型独立（实例矩阵/骨骼状态/绘制 uniform 不受影响）。
+// 注意：含骨骼动画的模型不入缓存（节点 matCur 是动画状态，浅共享会串扰）。
+namespace {
+struct CachedModelData {
+    ModelData data;                                   // 材质/节点/动画/骨骼（浅共享）
+    std::vector<std::shared_ptr<MeshData>> meshDatas; // 各 mesh 几何
+};
+std::map<std::string, std::shared_ptr<CachedModelData>> s_modelParseCache;
+} // namespace
+
 void Model::LoadFile(const std::string &path) {
     if (!m_filepath.empty()) {
-        assert(0); // 不允许变更模型信�?
+        assert(0); // 不允许变更模型信息
         return;
     }
+    m_filepath = engine::fs::pathFromUtf8(path).parent_path();
+
+    // ---- 解析缓存命中：跳过 Assimp 解析，直接从共享数据重建 Mesh 对象 ----
+    {
+        auto it = s_modelParseCache.find(path);
+        if (it != s_modelParseCache.end()) {
+            const CachedModelData& c = *it->second;
+            m_model_data = c.data;   // 浅拷贝（内部全部 shared_ptr/vector）
+            for (const auto& md : c.meshDatas) {
+                m_mesh.push_back(std::make_shared<Mesh>(md, m_model_data.materials[md->index_material]));
+            }
+            m_clock = clock();
+            ENGINE_LOG_INFO("[MODEL] cache hit: %s (parse skipped, %zu meshes)", path.c_str(), c.meshDatas.size());
+            return;
+        }
+    }
+
     // Load the model file.
     // A4: 路径按 UTF-8 打开（Windows 宽字符），修复中文安装路径加载失败
     Assimp::Importer importer;
     importer.SetIOHandler(new engine::Utf8IOSystem());
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
     //import.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
-    
+
     // check for errors
     if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) // if is Not Zero
     {
@@ -35,19 +64,30 @@ void Model::LoadFile(const std::string &path) {
         assert(0);
         return;
     }
-    
-    // retrieve the directory path of the filepath
-    m_filepath = engine::fs::pathFromUtf8(path).parent_path();
+
     processTexture(scene);
-    
+
     // 解析材质
     processMaterial(scene);
-    
+
     // process ASSIMP's root node recursively
     processNode(scene->mRootNode, scene, nullptr);
-    
+
     // 解析动画
     processAnimation(scene);
+
+    // ---- 入缓存（静态模型；动画模型节点 matCur 是每模型状态，不能浅共享）----
+    if (m_model_data.animation.nodeAnims.empty()) {
+        auto cached = std::make_shared<CachedModelData>();
+        cached->data = m_model_data;
+        for (auto& mesh : m_mesh) {
+            if (auto md = mesh->meshData()) cached->meshDatas.push_back(md);
+        }
+        s_modelParseCache[path] = cached;
+        ENGINE_LOG_INFO("[MODEL] parsed & cached: %s (%zu meshes)", path.c_str(), cached->meshDatas.size());
+    } else {
+        ENGINE_LOG_INFO("[MODEL] parsed (animated, not cached): %s", path.c_str());
+    }
 }
 
 void Model::processTexture(const aiScene* scene) {

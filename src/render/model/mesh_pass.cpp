@@ -299,6 +299,36 @@ void MeshPass::setup(const std::vector<Matrix> &matModel, bool hasTexture, bool 
 void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     if (m_rhiBuilt) return;
 
+    // 合批前置：同 MeshData 的几何资源全局共享（VB/IB/管线/纹理）。
+    // 实例缓冲与绘制级 uniform block 是每对象状态，保持独立。
+    // 键 = MeshData 指针（解析缓存保证同文件模型的 MeshData 稳定共享）。
+    struct SharedRhiGeom {
+        rhi::BufferHandle vb, ib;
+        rhi::PipelineHandle pipeline;
+        rhi::GraphicsPipelineDesc desc;
+        bool valid = false;
+    };
+    static std::map<const MeshData*, SharedRhiGeom> s_geomCache;
+    static std::map<std::string, rhi::TextureHandle> s_texCache;   // 材质纹理按文件路径共享
+
+    auto it = s_geomCache.find(m_mesh_data.get());
+    if (it != s_geomCache.end() && it->second.valid) {
+        const SharedRhiGeom& g = it->second;
+        m_rhiVB = g.vb;
+        m_rhiIB = g.ib;
+        m_rhiPipeline = g.pipeline;
+        _lastPipelineDesc = g.desc;
+        m_rhiInstanceVB = device->createBuffer([] {
+            rhi::BufferDesc instDesc;
+            instDesc.size = 64 * 4;   // 初始 4 实例；每帧 updateBuffer 刷新
+            instDesc.usage = rhi::BUF_CPU_WRITE;
+            return instDesc;
+        }());
+        m_rhiUniformBlock = device->createUniformBlock(256);
+        m_rhiBuilt = true;
+        return;
+    }
+
     // 交错顶点数据：pos(3) + normal(3) + uv(2)
     const auto& md = m_mesh_data;
     const size_t vn = md->positions.size();
@@ -354,6 +384,13 @@ void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     m_rhiIB = device->createBuffer(ibDesc);
 
     m_rhiUniformBlock = device->createUniformBlock(256);
+
+    SharedRhiGeom& g = s_geomCache[m_mesh_data.get()];
+    g.vb = m_rhiVB;
+    g.ib = m_rhiIB;
+    g.pipeline = m_rhiPipeline;
+    g.desc = desc;
+    g.valid = true;
     m_rhiBuilt = true;
 }
 
@@ -502,8 +539,10 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
             continue;
         }
         rhi::TextureHandle th;
-        auto it = m_rhiTexCache.find(tex.filepath);
-        if (it != m_rhiTexCache.end()) {
+        // 合批前置：材质纹理按路径全局共享（同文件模型的纹理只建一次）
+        static std::map<std::string, rhi::TextureHandle> s_rhiTexShared;
+        auto it = s_rhiTexShared.find(tex.filepath);
+        if (it != s_rhiTexShared.end()) {
             th = it->second;
         } else {
             // 纹理数据源：优先材质自带数据；为空则取 TextureMng 预载数据
@@ -553,7 +592,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
                 td.format = colorTex ? rhi::Format::RGBA8_SRGB : rhi::Format::RGBA8_UNorm;
                 td.initialData = rgba.data();
                 th = device->createTexture(td);
-                m_rhiTexCache[tex.filepath] = th;
+                s_rhiTexShared[tex.filepath] = th;
             }
         }
         if (th.valid()) {
