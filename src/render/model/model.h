@@ -55,6 +55,10 @@ class Model : public BaseDraw {
 public:
     using BaseDraw::BaseDraw;
     void LoadFile(const std::string &path);
+    // E5 流式加载：后台线程预解析进缓存（VK 后端专用；GL 后端同步退化——
+    // BaseDraw 构造在 GL 模式需要 GL 上下文）。主线程随后的 LoadFile 命中
+    // 缓存/等待解析完成，解析与主循环并行。
+    static void prefetchAsync(const std::string &path);
     virtual bool draw(const Matrix &mtx) override;
     virtual bool drawShadow() override;
     virtual bool drawPick() override;
@@ -63,6 +67,10 @@ public:
     // E3：世界空间 AABB（局部盒 8 角 × 全部实例矩阵变换取并集；视锥剔除用）
     void getWorldAABB(float& minX, float& minY, float& minZ,
                       float& maxX, float& maxY, float& maxZ) const;
+    // E5：解析缓存提取用（Model 为解析内核载体）
+    const ModelData& getModelData() const { return m_model_data; }
+    const std::vector<std::shared_ptr<Mesh>>& getMeshes() const { return m_mesh; }
+    const AABB& getLocalAABB() const { return m_aabb; }
     // D2: RHI 拾取绘制（pick RT 内调用；调用方管理 pass 与回读）
     bool drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj);
     virtual void update() override;
@@ -77,6 +85,8 @@ public:
     void setRotateZ(int index, float angle);
     void setMultiViewportNum(int n) { m_nMultiViewport = n; }
 private:
+    // E5：解析内核（Assimp 解析体；无缓存逻辑；仅可后台跑于 VK 模式）
+    void loadFileInternal(const std::string &path);
     void processNode(aiNode* node, const aiScene* scene, std::shared_ptr<Node> nodeParent);
     std::shared_ptr<Mesh> processMesh(aiMesh *mesh, const aiScene *scene);
     void processBoneWeightForVertices(aiMesh *mesh, std::shared_ptr<MeshData> meshData);

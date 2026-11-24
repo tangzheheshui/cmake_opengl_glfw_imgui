@@ -9,18 +9,20 @@
 #define BaseDraw_h
 
 #include <glad/glad.h>
+#include <atomic>
 #include <vector>
 #include <glm/glm.hpp>
 #include "RenderSystem.h"
 #include "rhi/IRHIDevice.h"
 #include "../core/math/matrix.h"
 
-inline static uint16_t _staticID = 0;
+// E5：后台解析线程也会构造 Model（BaseDraw 子类），ID 分配需原子
+inline static std::atomic<uint16_t> _staticID{0};
 
 class BaseDraw {
 public:
     BaseDraw() {
-        _ID = _staticID++;
+        _ID = _staticID.fetch_add(1, std::memory_order_relaxed);
         // 引擎原则：构造函数禁止在非 GL 后端触碰 GL（Vulkan 模式无 GL 上下文，
         // glad 函数指针为空，任何 gl* 调用都会跳空地址）
         auto* device = RenderSystem::getInstance().rhiDevice();

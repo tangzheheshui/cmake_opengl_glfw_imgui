@@ -26,6 +26,13 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     auto pScene = RenderSystem::getInstance().GetCurScene();
     if (!pScene) return;
 
+    // E5 流式加载：后台预解析模型文件（必须先于首个 LoadFile——
+    // 解析与主循环组装并行，LoadFile 汇合等待；VK 后端）
+    if (std::getenv("RHI_ASYNC_DEMO")) {
+        Model::prefetchAsync(engine::fs::utf8FromPath(
+            engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+    }
+
     // 坐标轴
     std::vector<unsigned int> indices = {0, 1};
     const float len = 15;

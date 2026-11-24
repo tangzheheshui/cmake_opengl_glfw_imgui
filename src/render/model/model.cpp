@@ -12,20 +12,45 @@
 #include "core/taskQueue.h"
 #include "fs/FilePathUtil.h"
 #include "Utf8IOSystem.h"
+#include <chrono>
+#include <future>
 #include <iostream>
 #include <filesystem>
+#include <map>
+#include <mutex>
+#include <thread>
 #include "core/math/math.h"
 
 // 合批前置：同文件模型解析缓存——Assimp 解析（CPU 最重的一段）每路径一次；
 // 命中后 MeshData/材质/节点全部浅共享（shared_ptr），Mesh/MeshPass 对象仍
 // 每模型独立（实例矩阵/骨骼状态/绘制 uniform 不受影响）。
 // 注意：含骨骼动画的模型不入缓存（节点 matCur 是动画状态，浅共享会串扰）。
+// E5：缓存值改为 shared_future——prefetchAsync 后台解析与主线程 LoadFile
+// 经同一 future 汇合（先到先解析、后到等待）。
 namespace {
 struct CachedModelData {
     ModelData data;                                   // 材质/节点/动画/骨骼（浅共享）
     std::vector<std::shared_ptr<MeshData>> meshDatas; // 各 mesh 几何
+    AABB localAabb;                                   // 局部包围盒（E3 剔除用，解析期算出）
 };
-std::map<std::string, std::shared_ptr<CachedModelData>> s_modelParseCache;
+std::mutex s_parseCacheMutex;
+std::map<std::string, std::shared_future<std::shared_ptr<CachedModelData>>> s_parseFutures;
+
+// 从一个解析完成的 Model 提取缓存内容
+std::shared_ptr<CachedModelData> extractCache(const Model& parser) {
+    auto cached = std::make_shared<CachedModelData>();
+    cached->data = parser.getModelData();
+    for (const auto& mesh : parser.getMeshes()) {
+        if (auto md = mesh->meshData()) cached->meshDatas.push_back(md);
+    }
+    cached->localAabb = parser.getLocalAABB();
+    return cached;
+}
+
+// 动画模型不能进缓存（节点 matCur 是每模型可变状态，浅共享会串扰）
+bool isCachable(const CachedModelData& c) {
+    return c.data.animation.nodeAnims.empty();
+}
 } // namespace
 
 void Model::LoadFile(const std::string &path) {
@@ -35,30 +60,110 @@ void Model::LoadFile(const std::string &path) {
     }
     m_filepath = engine::fs::pathFromUtf8(path).parent_path();
 
-    // ---- 解析缓存命中：跳过 Assimp 解析，直接从共享数据重建 Mesh 对象 ----
+    // E5：从缓存/future 获取解析结果（prefetchAsync 预解析在此汇合——
+    // 若后台解析未完成则短暂等待，已完成则立即返回）
+    std::shared_ptr<CachedModelData> cached;
+    std::shared_future<std::shared_ptr<CachedModelData>> pending;
     {
-        auto it = s_modelParseCache.find(path);
-        if (it != s_modelParseCache.end()) {
-            const CachedModelData& c = *it->second;
-            m_model_data = c.data;   // 浅拷贝（内部全部 shared_ptr/vector）
-            for (const auto& md : c.meshDatas) {
-                m_mesh.push_back(std::make_shared<Mesh>(md, m_model_data.materials[md->index_material]));
+        std::lock_guard<std::mutex> lk(s_parseCacheMutex);
+        auto it = s_parseFutures.find(path);
+        if (it != s_parseFutures.end()) pending = it->second;
+    }
+    if (pending.valid()) {
+        const auto t0 = std::chrono::steady_clock::now();
+        cached = pending.get();   // 锁外等待后台解析（不阻塞其他路径的加载）
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        const bool cachable = isCachable(*cached);
+        {
+            std::lock_guard<std::mutex> lk(s_parseCacheMutex);
+            auto it = s_parseFutures.find(path);
+            if (it != s_parseFutures.end()) {
+                if (cachable) {
+                    // 放回 ready future（后续 LoadFile 直接命中，不重复解析）
+                    std::promise<std::shared_ptr<CachedModelData>> readyPr;
+                    readyPr.set_value(cached);
+                    it->second = readyPr.get_future().share();
+                } else {
+                    s_parseFutures.erase(it);   // 动画模型：仅本次使用，后续重解析
+                }
             }
-            m_clock = clock();
-            ENGINE_LOG_INFO("[MODEL] cache hit: %s (parse skipped, %zu meshes)", path.c_str(), c.meshDatas.size());
-            return;
+        }
+        ENGINE_LOG_INFO("[MODEL] parse joined: %s (waited %lld ms, %zu meshes%s)",
+                        path.c_str(), static_cast<long long>(ms), cached->meshDatas.size(),
+                        cachable ? "" : ", animated not cached");
+    }
+    if (!cached) {
+        // 同步解析路径（未预取）：解析；静态模型入缓存（ready future，供并发复用）
+        auto parser = std::make_shared<Model>();
+        parser->loadFileInternal(path);
+        cached = extractCache(*parser);
+        if (isCachable(*cached)) {
+            std::lock_guard<std::mutex> lk(s_parseCacheMutex);
+            std::promise<std::shared_ptr<CachedModelData>> readyPr;
+            readyPr.set_value(cached);
+            s_parseFutures[path] = readyPr.get_future().share();
+            ENGINE_LOG_INFO("[MODEL] parsed sync & cached: %s (%zu meshes)",
+                            path.c_str(), cached->meshDatas.size());
+        } else {
+            ENGINE_LOG_INFO("[MODEL] parsed sync (animated, not cached): %s", path.c_str());
         }
     }
 
-    // Load the model file.
-    // A4: 路径按 UTF-8 打开（Windows 宽字符），修复中文安装路径加载失败
+    m_model_data = cached->data;   // 浅拷贝（内部全部 shared_ptr/vector）
+    m_aabb = cached->localAabb;    // E3 剔除依赖：缓存/异步路径同样带回包围盒
+    for (const auto& md : cached->meshDatas) {
+        m_mesh.push_back(std::make_shared<Mesh>(md, m_model_data.materials[md->index_material]));
+    }
+    m_clock = clock();
+}
+
+// E5：后台预解析（VK 后端专用；GL 后端同步退化——BaseDraw 构造在 GL 模式
+// 需要 GL 上下文，后台线程不允许触碰）。解析体 = 局部 Model 实例跑解析内核，
+// 完成后经 future 交给主线程 LoadFile 汇合。
+void Model::prefetchAsync(const std::string &path) {
+    auto* dev = RenderSystem::getInstance().rhiDevice();
+    if (!dev || dev->backend() != rhi::Backend::Vulkan) {
+        return;   // GL：保持同步加载（注释见上）
+    }
+    {
+        std::lock_guard<std::mutex> lk(s_parseCacheMutex);
+        if (s_parseFutures.count(path)) return;   // 已在队列
+        std::promise<std::shared_ptr<CachedModelData>> pr;
+        s_parseFutures[path] = pr.get_future().share();
+        std::thread([path, pr = std::move(pr)]() mutable {
+            const auto t0 = std::chrono::steady_clock::now();
+            auto parser = std::make_shared<Model>();
+            parser->loadFileInternal(path);
+            auto cached = extractCache(*parser);
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            const bool cachable = isCachable(*cached);
+            ENGINE_LOG_INFO("[MODEL][async] parsed on background thread: %s (%lld ms, %zu meshes%s)",
+                            path.c_str(), static_cast<long long>(ms), cached->meshDatas.size(),
+                            cachable ? "" : ", animated not cached");
+            pr.set_value(std::move(cached));
+            if (!cachable) {
+                // 动画模型：主线程若尚未取走也只会拿不到 future 而同步重解析，
+                // 不会误共享（保证不入缓存）
+                std::lock_guard<std::mutex> lk(s_parseCacheMutex);
+                s_parseFutures.erase(path);
+            }
+        }).detach();
+        ENGINE_LOG_INFO("[MODEL][async] prefetch queued: %s", path.c_str());
+    }
+}
+
+// E5：解析内核（原 LoadFile 解析体；无缓存逻辑、不动 m_clock——
+// 后台线程只允许 CPU 解析，Mesh/MeshPass 构造无 GL 调用，VK 模式安全）
+void Model::loadFileInternal(const std::string &path) {
+    // 材质纹理的相对路径基于模型文件目录（纯路径运算，后台线程安全）
+    m_filepath = engine::fs::pathFromUtf8(path).parent_path();
     Assimp::Importer importer;
     importer.SetIOHandler(new engine::Utf8IOSystem());
     const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
-    //import.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
 
-    // check for errors
-    if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) // if is Not Zero
+    if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
     {
         ENGINE_LOG_ERROR("ASSIMP: %s", importer.GetErrorString());
         assert(0);
@@ -66,28 +171,9 @@ void Model::LoadFile(const std::string &path) {
     }
 
     processTexture(scene);
-
-    // 解析材质
     processMaterial(scene);
-
-    // process ASSIMP's root node recursively
     processNode(scene->mRootNode, scene, nullptr);
-
-    // 解析动画
     processAnimation(scene);
-
-    // ---- 入缓存（静态模型；动画模型节点 matCur 是每模型状态，不能浅共享）----
-    if (m_model_data.animation.nodeAnims.empty()) {
-        auto cached = std::make_shared<CachedModelData>();
-        cached->data = m_model_data;
-        for (auto& mesh : m_mesh) {
-            if (auto md = mesh->meshData()) cached->meshDatas.push_back(md);
-        }
-        s_modelParseCache[path] = cached;
-        ENGINE_LOG_INFO("[MODEL] parsed & cached: %s (%zu meshes)", path.c_str(), cached->meshDatas.size());
-    } else {
-        ENGINE_LOG_INFO("[MODEL] parsed (animated, not cached): %s", path.c_str());
-    }
 }
 
 void Model::processTexture(const aiScene* scene) {

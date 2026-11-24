@@ -23,7 +23,9 @@ run() {   # run <label> <bin> <env...>
         echo "SKIP: $label（$bin 不存在）"; return
     fi
     local log; log=$(mktemp)
-    if env "$@" "$bin" > "$log" 2>&1; then
+    # DYLD 显式传给 env：部分环境（沙箱/硬化运行时）会在 exec /usr/bin/env 时
+    # 剥掉继承的 DYLD_*，导致 MoltenVK loader 找不到 ICD（vkCreateInstance -6）
+    if env DYLD_LIBRARY_PATH="$DYLD_LIBRARY_PATH" "$@" "$bin" > "$log" 2>&1; then
         # VK：验证层 error 视为失败（WARN 不拦）
         if [[ "$*" == *RHI_BACKEND=vulkan* ]] && grep -qE "\[VK-VAL\].*ERROR|ERROR.*\[VK-VAL\]" "$log"; then
             echo "FAIL: $label（验证层 error，见 $log）"; FAIL=1; return
