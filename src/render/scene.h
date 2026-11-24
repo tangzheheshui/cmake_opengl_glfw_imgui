@@ -37,9 +37,14 @@ public:
     void AddObj(std::shared_ptr<BaseDraw> obj);
     // D3：透明排序绘制列表——不透明对象按加入顺序在前，透明对象（alpha < 1）
     // 按到相机距离降序（远 → 近）在后。两端绘制路径共用，保证 GL/VK 画序一致。
-    std::vector<std::shared_ptr<BaseDraw>> getSortedDrawList(const glm::vec3& camPos) const;
+    // E3：vp 非空时做视锥剔除（RenderSettings::frustumCull 开关），统计在
+    // lastCulledCount()；vp 传 nullptr = 不剔除（调试对比）。
+    std::vector<std::shared_ptr<BaseDraw>> getSortedDrawList(const glm::vec3& camPos,
+                                                             const void* vpFloat16 = nullptr) const;
     // D3/X-ray：透明分相谓词（X-ray 开启时模型整体视为透明），各绘制路径共用
     static bool isTransparentDraw(const std::shared_ptr<BaseDraw>& obj);
+    // E3：最近一次 getSortedDrawList 剔除统计（调试面板/日志）
+    uint32_t lastCulledCount() const { return _lastCulled; }
 private:
     // camera
     std::shared_ptr<Camera> mCameraActive;
@@ -49,6 +54,8 @@ private:
     // 渲染对象
     std::vector<std::shared_ptr<BaseDraw>> m_vec_drawobj;
     std::vector<std::shared_ptr<BaseDraw>> m_vec_drawobj_blend;
+    // E3：上次剔除计数（mutable：getSortedDrawList 是 const）
+    mutable uint32_t _lastCulled = 0;
     // 光源矩阵
     inline static Matrix _lightVPMatrix;
 };

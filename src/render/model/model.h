@@ -60,6 +60,9 @@ public:
     virtual bool drawPick() override;
     // D3：透明排序深度键 = 第一个实例的平移（多实例取代表；CAD 单件常用）
     glm::vec3 worldCenter() const override;
+    // E3：世界空间 AABB（局部盒 8 角 × 全部实例矩阵变换取并集；视锥剔除用）
+    void getWorldAABB(float& minX, float& minY, float& minZ,
+                      float& maxX, float& maxY, float& maxZ) const;
     // D2: RHI 拾取绘制（pick RT 内调用；调用方管理 pass 与回读）
     bool drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj);
     virtual void update() override;

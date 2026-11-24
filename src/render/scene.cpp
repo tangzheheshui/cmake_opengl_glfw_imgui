@@ -8,10 +8,10 @@
 #include "scene.h"
 #include "RenderSystem.h"
 #include "model/model.h"
+#include "math/Frustum.h"
 #include <algorithm>
 #include <glm/glm.hpp>
 #include <vector>
-#include "model/model.h"
 #include "object/Line.h"
 #include "object/Sky.h"
 #include "image.h"
@@ -60,11 +60,38 @@ bool Scene::isTransparentDraw(const std::shared_ptr<BaseDraw>& obj) {
 
 // D3：透明排序——不透明按加入顺序先画；透明（alpha < 1）按到相机距离
 // 降序（远 → 近）后画。稳定排序保证同深度时画序确定（两端一致的前提）。
-std::vector<std::shared_ptr<BaseDraw>> Scene::getSortedDrawList(const glm::vec3& camPos) const {
+// E3：vp 非空 + frustumCull 开启时做视锥剔除（模型级，AABB 保守测试）。
+std::vector<std::shared_ptr<BaseDraw>> Scene::getSortedDrawList(const glm::vec3& camPos,
+                                                                const void* vpFloat16) const {
     std::vector<std::shared_ptr<BaseDraw>> opaque;
     std::vector<std::shared_ptr<BaseDraw>> transparent;
     opaque.reserve(m_vec_drawobj.size());
+    _lastCulled = 0;
+
+    // E3：视锥剔除（仅 Model——线/文字有各自的空间语义，暂不参与）
+    engine::Frustum frustum;
+    bool cullActive = false;
+    if (vpFloat16 && RenderSystem::getInstance().settings().frustumCull) {
+        frustum = engine::Frustum::fromVP(static_cast<const float*>(vpFloat16));
+        cullActive = true;
+    }
+
     for (const auto& obj : m_vec_drawobj) {
+        if (cullActive) {
+            if (auto model = std::dynamic_pointer_cast<Model>(obj)) {
+                float x0, y0, z0, x1, y1, z1;
+                model->getWorldAABB(x0, y0, z0, x1, y1, z1);
+                if (!frustum.intersectsAABB(x0, y0, z0, x1, y1, z1)) {
+                    ++_lastCulled;
+                    static int dbg = 0;
+                    if (++dbg <= 5) {
+                        ENGINE_LOG_INFO("[CULL][probe] culled id=%u aabb=(%.2f,%.2f,%.2f)-(%.2f,%.2f,%.2f)",
+                                        obj->GetID(), x0, y0, z0, x1, y1, z1);
+                    }
+                    continue;   // 视锥外：整对象跳过（含全部实例）
+                }
+            }
+        }
         if (isTransparentDraw(obj)) transparent.push_back(obj);
         else                        opaque.push_back(obj);
     }

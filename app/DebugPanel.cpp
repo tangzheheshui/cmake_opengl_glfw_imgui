@@ -99,6 +99,8 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
         if (settings.xrayEnabled) {
             ImGui::SliderFloat("透视不透明度", &settings.xrayOpacity, 0.05f, 0.9f, "%.2f");
         }
+        ImGui::Checkbox("CPU 视锥剔除", &settings.frustumCull);
+        ImGui::TextDisabled("模型级 AABB 保守测试；关闭对比性能");
     }
 
     // ---- 全局 ----

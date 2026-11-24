@@ -390,6 +390,31 @@ glm::vec3 Model::worldCenter() const {
     return glm::vec3(m[12], m[13], m[14]);
 }
 
+// E3：世界空间 AABB——局部盒 8 角经每个实例矩阵变换后取并集。
+// 实例数多时开销 O(8×N)（纯 CPU 乘加，剔除收益远大于此）。
+void Model::getWorldAABB(float& minX, float& minY, float& minZ,
+                         float& maxX, float& maxY, float& maxZ) const {
+    minX = minY = minZ = 1e30f;
+    maxX = maxY = maxZ = -1e30f;
+    const float lo[3] = { m_aabb.getMinX(), m_aabb.getMinY(), m_aabb.getMinZ() };
+    const float hi[3] = { m_aabb.getMaxX(), m_aabb.getMaxY(), m_aabb.getMaxZ() };
+    for (const auto& mat : m_vec_modelMat) {
+        const float* m = mat.buffer();
+        for (int corner = 0; corner < 8; ++corner) {
+            const float lx = (corner & 1) ? hi[0] : lo[0];
+            const float ly = (corner & 2) ? hi[1] : lo[1];
+            const float lz = (corner & 4) ? hi[2] : lo[2];
+            // 列主序：世界 = M * 局部；仿射假设（模型矩阵无透视）
+            const float wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+            const float wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+            const float wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+            minX = std::min(minX, wx); maxX = std::max(maxX, wx);
+            minY = std::min(minY, wy); maxY = std::max(maxY, wy);
+            minZ = std::min(minZ, wz); maxZ = std::max(maxZ, wz);
+        }
+    }
+}
+
 // D2: RHI 拾取绘制——所有网格经 pick 管线直出本对象 ID 色
 bool Model::drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj) {
     Matrix mtx;

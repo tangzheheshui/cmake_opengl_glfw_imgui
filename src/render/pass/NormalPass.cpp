@@ -30,8 +30,9 @@ void CNormalPass::draw(Scene* pScene) {
     // D3/D4：本 Pass 只画不透明非 overlay 对象（overlay/透明在 CSkyPass
     // 的天空之后画——天空盒深度测试会覆盖不写深度的像素，
     // 顺序契约 = 不透明 → 天空 → overlay/透明）
+    // E3：VP 传入做 CPU 视锥剔除（与 VK 路径同一开关与统计）
     const auto camPos = pScene->GetActiveCamera()->getPossition();
-    for (auto& obj : pScene->getSortedDrawList(camPos)) {
+    for (auto& obj : pScene->getSortedDrawList(camPos, mpMatrix.buffer())) {
         if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) continue;
         obj->draw(mpMatrix);
     }

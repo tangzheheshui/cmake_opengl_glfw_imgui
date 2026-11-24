@@ -35,6 +35,9 @@ struct RenderSettings {
     bool  xrayEnabled = false;
     float xrayOpacity = 0.35f;
 
+    // ---- E3：CPU 视锥剔除（模型级 AABB 保守测试；像素结果不变，只省 draw）----
+    bool frustumCull = true;
+
     // ---- CAD 选中高亮（D8）----
     // selectedId = 拾取命中的对象 ID（BaseDraw::GetID，0 = 无选中）；
     // 高亮颜色固定淡蓝，强度面板可调（0 = 关）

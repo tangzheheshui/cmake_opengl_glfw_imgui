@@ -230,6 +230,16 @@ void RenderSystem::renderFrame() {
 
     m_rhiDevice->endFrame();
     m_rhiDevice->present();   // GL: 宿主 swapBuffers 回调 / VK: vkQueuePresentKHR
+
+    // E3：剔除统计（每 120 帧一次，低频观测；RHI_CULL_STATS=1 才输出）
+    {
+        static int s_cullLogFrame = 0;
+        if (mCurScene && std::getenv("RHI_CULL_STATS") && ++s_cullLogFrame % 120 == 0) {
+            ENGINE_LOG_INFO("[CULL] culled=%u (frustumCull=%d)",
+                            mCurScene->lastCulledCount(),
+                            m_settings.frustumCull ? 1 : 0);
+        }
+    }
 }
 
 // 过渡别名：保留一个迭代（旧主循环入口），内部转调统一帧流程
@@ -273,7 +283,10 @@ void RenderSystem::drawRhiSceneContents() {
             int fw = static_cast<int>(fb.width), fh = static_cast<int>(fb.height);
 
             // D3：透明排序绘制列表（两端共用同一排序；每帧算一次）
-            const auto drawList = mCurScene->getSortedDrawList(cam->getPossition());
+            // E3：传入 VP 做 CPU 视锥剔除（frustumCull 开关；剔除只影响不可见
+            // 对象，像素结果不变）
+            const auto drawList = mCurScene->getSortedDrawList(cam->getPossition(),
+                                                               vp.buffer());
             static bool sortLogged = false;
             if (!sortLogged && std::getenv("RHI_ALPHA_DEMO")) {
                 sortLogged = true;

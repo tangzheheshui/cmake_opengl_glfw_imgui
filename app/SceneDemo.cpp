@@ -147,6 +147,19 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         if (std::getenv("RHI_HOVER_OFF")) {   // 悬停拾取关闭（压测/对比用）
             RenderSystem::getInstance().settings().hoverEnabled = false;
         }
+        if (std::getenv("RHI_CULL_OFF")) {    // E3：关闭视锥剔除（性能对比）
+            RenderSystem::getInstance().settings().frustumCull = false;
+        }
+        if (std::getenv("RHI_CULL_DEMO") && !std::getenv("RHI_CULL_OFF")) {
+            // off 基线不加载幕后鸭（几何差异二分：剔除空对象 vs 不加载）
+            auto objBehind = std::make_shared<Model>();
+            objBehind->LoadFile(engine::fs::utf8FromPath(
+                engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+            objBehind->setCount(1);
+            objBehind->setPosition(0, {0, 0, 50});   // 相机 (0,0,40) 看 -z，z=50 在背后
+            objBehind->setScale(0, 0.01);
+            pScene->AddObj(objBehind);
+        }
         auto fontMng = RenderSystem::getInstance().GetFontMng();
         auto objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
         objText->SetText("test");
