@@ -126,6 +126,7 @@ void RenderSystem::init(const std::string& rootPath) {
         if (m_rhiDevice) {
             createSmokeTriangle();
             createTexturedQuad();
+            runResourceChurnTest();   // V3-0 验证设施（RHI_CHURN=N）
             // 无 UI 环境（如 Vulkan 模式早期验证）可强制显示验证内容
             if (std::getenv("RHI_SMOKE")) {
                 m_settings.rhiSmokeTriangle = true;
@@ -294,6 +295,31 @@ void RenderSystem::draw() {
     selfTestAB();   // M4.2 验证设施：同帧 A/B 逐像素对比（调试用）
     runRenderTargetReadbackTest();   // B4 验证设施（GL 即时语义，渲染/回读可同帧）
     runPickPass();                   // D2 拾取（GL 即时语义）
+}
+
+// ---- V3-0 验证设施（RHI_CHURN=N）：连续创建/销毁 N 组纹理 + uniform block ----
+// 目的：验证内存分配器（E1）与 DeletionQueue 的批量释放/描述符集归还；
+// 配合 RHI_VK_VALIDATION=1 + RHI_EXIT_AFTER 检查泄漏。
+void RenderSystem::runResourceChurnTest() {
+    if (!m_rhiDevice) return;
+    const char* e = std::getenv("RHI_CHURN");
+    if (!e) return;
+    const int n = std::atoi(e);
+    if (n <= 0) return;
+
+    for (int i = 0; i < n; ++i) {
+        rhi::TextureDesc td;
+        td.width  = 16;
+        td.height = 16;
+        td.format = rhi::Format::RGBA8_UNorm;
+        td.usage  = rhi::TEX_SAMPLED;
+        rhi::TextureHandle tex = m_rhiDevice->createTexture(td);
+        rhi::UniformBlockHandle ub = m_rhiDevice->createUniformBlock(256);
+        // VK：destroy 只摘句柄 + 入队，endFrame 到期批量释放
+        if (tex.valid()) m_rhiDevice->destroyTexture(tex);
+        if (ub.valid())  m_rhiDevice->destroyUniformBlock(ub);
+    }
+    ENGINE_LOG_INFO("[CHURN] %d textures + %d uniform blocks created/destroyed", n, n);
 }
 
 // M4.2 验证设施：同帧 A/B 对比（调试用）

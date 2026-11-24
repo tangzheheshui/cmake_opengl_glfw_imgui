@@ -84,6 +84,7 @@ private:
 	void drawRhiScene();            // Vulkan 后端：RHI 场景绘制
 	std::function<void(rhi::IRHICommandList*)> m_overlayFn;
 	void selfTestAB();              // M4.2 验证设施：同帧 A/B 逐像素对比
+	void runResourceChurnTest();    // V3-0 验证设施（RHI_CHURN=N）：连续创建/销毁资源
 	// B4 验证设施（RHI_RT_TEST=1）：离屏 RT 渲染冒烟三角形 → 回读中心/角落像素。
 	// 两阶段状态机：第 N 帧渲染、第 N+1 帧回读（VK 上一帧已提交完成）
 	void runRenderTargetReadbackTest();
