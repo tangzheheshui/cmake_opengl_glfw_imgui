@@ -128,6 +128,8 @@ VulkanDevice::~VulkanDevice() {
     // E1：排空帧内延迟的 GPU 工作（如最后帧的纹理 staging）——此前退出路径
     // 不 drain，其 staging 的释放回调永远不执行（分配器统计暴露的既有泄漏）
     drainDeferredGpuWork();
+    // V3-0：GPU 已 idle，执行延迟销毁队列（必须在资源表/描述符池销毁之前）
+    _deletionQueue.flush();
     destroySwapchainObjects();
     if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
     if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
@@ -825,6 +827,8 @@ bool VulkanDevice::beginFrame() {
 }
 
 void VulkanDevice::endFrame() {
+    // V3-0：推进延迟销毁队列（即使本帧被跳过也要推进，否则资源永不释放）
+    _deletionQueue.tick();
     if (!_frameActive) { _frameSkipped = false; return; }
     _frameActive = false;
 
@@ -1026,20 +1030,30 @@ void VulkanDevice::destroyBuffer(BufferHandle h) {
     if (!h.valid() || h.id > _buffers.size()) return;
     VkBufferRes& b = _buffers[h.id - 1];
     if (!b.buffer) return;
-    vkDestroyBuffer(_device, b.buffer, nullptr);
-    _memAlloc.free(b.memAlloc);   // E1：free 隐含 unmap（页/专用）
-    b = VkBufferRes{};
+    const VkBuffer   buf = b.buffer;
+    const VkMemAlloc mem = b.memAlloc;
+    b = VkBufferRes{};   // 立即摘句柄，后续 draw 不再能看到它
+    _deletionQueue.enqueue([this, buf, mem]() {
+        vkDestroyBuffer(_device, buf, nullptr);
+        _memAlloc.free(mem);   // E1：free 隐含 unmap（页/专用）
+    });
 }
 
 void VulkanDevice::destroyTexture(TextureHandle h) {
     if (!h.valid() || h.id > _textures.size()) return;
     VkTextureRes& t = _textures[h.id - 1];
     if (!t.image) return;
-    if (t.sampler) vkDestroySampler(_device, t.sampler, nullptr);
-    if (t.view)    vkDestroyImageView(_device, t.view, nullptr);
-    vkDestroyImage(_device, t.image, nullptr);
-    _memAlloc.free(t.memAlloc);   // E1
+    const VkSampler   sampler = t.sampler;
+    const VkImageView view    = t.view;
+    const VkImage     image   = t.image;
+    const VkMemAlloc  mem     = t.memAlloc;
     t = VkTextureRes{};
+    _deletionQueue.enqueue([this, sampler, view, image, mem]() {
+        if (sampler) vkDestroySampler(_device, sampler, nullptr);
+        if (view)    vkDestroyImageView(_device, view, nullptr);
+        if (image)   vkDestroyImage(_device, image, nullptr);
+        _memAlloc.free(mem);   // E1
+    });
 }
 
 void VulkanDevice::destroyPipeline(PipelineHandle h) {
@@ -1058,9 +1072,17 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
     }
     VkUniformBlockRes& b = _uniformBlocks[h.id - 1];
     if (!b.buffer) return;
-    vkDestroyBuffer(_device, b.buffer, nullptr);
-    _memAlloc.free(b.memAlloc);   // E1（池已开 FREE_BIT；set 实际归还需 DeletionQueue，V3-0 第 7 项）
+    const VkBuffer         buf  = b.buffer;
+    const VkMemAlloc       mem  = b.memAlloc;
+    const VkDescriptorSet  set  = b.set;
+    const VkDescriptorPool pool = b.pool;
     b = VkUniformBlockRes{};
+    _deletionQueue.enqueue([this, buf, mem, set, pool]() {
+        if (buf) vkDestroyBuffer(_device, buf, nullptr);
+        _memAlloc.free(mem);   // E1
+        // V3-0：池已开 FREE_BIT，到期归还描述符集（与 buffer 生命周期一致）
+        if (set && pool) vkFreeDescriptorSets(_device, pool, 1, &set);
+    });
 }
 
 // ---- B4：离屏渲染目标 ----
@@ -1148,12 +1170,18 @@ void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
     if (!h.valid() || h.id > _renderTargets.size()) return;
     VkRenderTargetRes& rt = _renderTargets[h.id - 1];
     if (!rt.alive && !rt.colorTex.valid()) return;
-    destroyTexture(rt.colorTex);
-    if (rt.depthView)   vkDestroyImageView(_device, rt.depthView, nullptr);
-    if (rt.depthImage)  vkDestroyImage(_device, rt.depthImage, nullptr);
-    _memAlloc.free(rt.depthMemAlloc);   // E1
+    const TextureHandle colorTex    = rt.colorTex;
+    const VkImageView   depthView   = rt.depthView;
+    const VkImage       depthImage  = rt.depthImage;
+    const VkMemAlloc    depthMem    = rt.depthMemAlloc;
     rt = VkRenderTargetRes{};
     rt.alive = false;   // 槽位保留（id 不复用）
+    if (colorTex.valid()) destroyTexture(colorTex);   // 内部同样延迟
+    _deletionQueue.enqueue([this, depthView, depthImage, depthMem]() {
+        if (depthView)   vkDestroyImageView(_device, depthView, nullptr);
+        if (depthImage)  vkDestroyImage(_device, depthImage, nullptr);
+        if (depthMem.valid()) _memAlloc.free(depthMem);   // E1
+    });
 }
 
 TextureHandle VulkanDevice::renderTargetColorTexture(RenderTargetHandle h) const {
@@ -1988,6 +2016,7 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
         _memAlloc.free(blk.memAlloc);
         return {};
     }
+    blk.pool = dai.descriptorPool;   // V3-0：延迟归还描述符集需要归属池
 
     VkDescriptorBufferInfo bufInfo{blk.buffer, 0, size};
     VkWriteDescriptorSet writes[5]{};

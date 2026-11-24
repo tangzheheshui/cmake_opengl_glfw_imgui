@@ -67,12 +67,13 @@ struct VkRenderTargetRes {
 
 // 绘制级 uniform 块（M4.2）：独立 UBO + 独立描述符集（避免共享 UBO 逐帧覆盖）
 struct VkUniformBlockRes {
-    VkBuffer       buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    void*          mapped = nullptr;
-    VkDescriptorSet set   = VK_NULL_HANDLE;
-    uint32_t       size   = 0;
-    VkMemAlloc     memAlloc;   // E1
+    VkBuffer         buffer = VK_NULL_HANDLE;
+    VkDeviceMemory   memory = VK_NULL_HANDLE;
+    void*            mapped = nullptr;
+    VkDescriptorSet  set    = VK_NULL_HANDLE;
+    VkDescriptorPool pool   = VK_NULL_HANDLE;   // V3-0：set 的归属池（延迟归还用）
+    uint32_t         size   = 0;
+    VkMemAlloc       memAlloc;   // E1
 };
 
 // B6：反射出的 push constant 成员（管线创建期从 SPIR-V 生成，

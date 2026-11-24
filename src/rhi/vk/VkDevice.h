@@ -14,6 +14,7 @@
 #define VkDevice_h
 
 #include "../IRHIDevice.h"
+#include "../detail/DeletionQueue.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
 #include <vector>
@@ -210,6 +211,8 @@ private:
     bool     _frameSkipped   = false;
     bool     _needsRecreate  = false;
 
+    // V3-0：延迟销毁队列（destroy* 摘句柄 + 登记，endFrame 到期释放）
+    DeletionQueue _deletionQueue;
     std::vector<VkBufferRes>   _buffers;
     std::vector<VkPipelineRes> _pipelines;
     // 帧内请求的一次性 GPU 工作（纹理上传等）：render pass 活跃时提交会触发
