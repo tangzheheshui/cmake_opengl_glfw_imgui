@@ -16,6 +16,9 @@
 #include "../IRHIDevice.h"
 #include "../detail/DeletionQueue.h"
 #include "../detail/HandleTable.h"
+#include "VkDescriptors.h"
+#include "VkPipelines.h"
+#include "VkSwapchain.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
 #include <vector>
@@ -76,15 +79,17 @@ public:
     void present() override;   // vkQueuePresentKHR（离屏 no-op）
 
     IRHICommandList* commandList() override;
-    uint64_t nativeHandle(RhiHandle handle) const override;
+    uint64_t nativeBuffer(BufferHandle h)   const override;
+    uint64_t nativeTexture(TextureHandle h) const override;
+    uint64_t nativePipeline(PipelineHandle h) const override;
     bool nativeHandles(NativeHandles& out) const override;
 
     // 内部访问（VkCommandList 使用）
     const std::string& shaderRootPath() const { return _shaderRootPath; }
     ::VkDevice           vkDeviceHandle() const { return _device; }
-    VkExtent2D       swapchainExtent() const { return _swapchainExtent; }
-    VkFormat         swapchainFormat() const { return _swapchainFormat; }
-    VkFormat         depthFormat() const { return _depthFormat; }
+    VkExtent2D       swapchainExtent() const { return _swapchain.extent(); }
+    VkFormat         swapchainFormat() const { return _swapchain.format(); }
+    VkFormat         depthFormat() const { return _swapchain.depthFormat(); }
     bool             dynamicRendering() const { return _dynamicRendering; }
     PFN_vkCmdBeginRenderingKHR beginRenderingFn() const { return _vkBeginRendering; }
     PFN_vkCmdEndRenderingKHR   endRenderingFn() const { return _vkEndRendering; }
@@ -97,13 +102,28 @@ public:
     const VkRenderTargetRes& renderTargetRes(RenderTargetHandle h) const { return _renderTargets.get(h.id); }
     VkTextureRes&       textureResMut(TextureHandle h) { return _textures.get(h.id); }
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
-    VkDescriptorSetLayout texSetLayout() const { return _texSetLayout; }
-    VkDescriptorPool      texDescriptorPool() const { return _texDescriptorPools.empty() ? VK_NULL_HANDLE : _texDescriptorPools.back(); }
-    VkPipelineLayout      pipelineLayout() const { return _pipelineLayout; }
+    VkPipelineLayout   pipelineLayout() const { return _descs.pipelineLayout(); }
+
+    // ---- V3-2 绑定层：命令列表用的内部接口（实现在 VkDescriptors）----
+    VkDescriptorSet frameUniformSet() const { return _descs.frameSet(); }
+    uint32_t        defaultUniformOffset() const { return _descs.defaultUniformOffset(); }
+    uint32_t        allocDrawUniforms(const void* data, uint32_t size) {
+        return _descs.allocDrawUniforms(data, size);
+    }
+    VkDescriptorSet fallbackTextureSet(uint32_t slot) const { return _descs.fallbackSet(slot); }
+    // 纹理的采样描述符集。上传还没执行（帧内创建 → 延迟到下一帧，布局仍是
+    // UNDEFINED）时返回空，让命令列表退到白纹理兜底——否则会拿未转换布局的
+    // image 出图（VUID-vkCmdDraw-None-09600，画面也是未定义内容）。
+    VkDescriptorSet textureSet(TextureHandle h) const {
+        if (!_textures.alive(h)) return VK_NULL_HANDLE;
+        const VkTextureRes& t = _textures.get(h.id);
+        if (t.layout == VK_IMAGE_LAYOUT_UNDEFINED) return VK_NULL_HANDLE;
+        return t.set;
+    }
 
     // B1：dynamic rendering 下由 command list 调用的布局屏障与附件视图
     VkImageView currentColorView() const;          // 当前 swapchain image view
-    VkImageView depthImageView() const { return _depthView; }
+    VkImageView depthImageView() const { return _swapchain.depthView(); }
     // beginRenderPass 前的图像布局屏障（color → COLOR_ATTACHMENT / depth 首帧转换）
     void recordBeginPassBarriers(VkCommandBuffer cb, bool clearColor, bool clearDepth);
     // B4：离屏 RT 的布局屏障（命令列表在 RT 分支调用）
@@ -125,10 +145,7 @@ private:
     void destroySwapchainObjects();
     void createCommandObjects();
     void createSyncObjects();
-    // A3: Pipeline Cache 持久化（创建/加载/退出时保存；为优化项，失败不致命）
-    void createPipelineCache();
-    void savePipelineCache();
-    void createDescriptorObjects();  // 纹理描述符池 + set layout（M4）
+    void createDescriptorObjects();  // 描述符布局/池 + 帧 uniform 环（委托 VkDescriptors）
     // A1: Validation Layer + Debug Utils
     void setupDebugValidation(std::vector<const char*>& exts, std::vector<const char*>& layers);
     void createDebugMessenger();
@@ -161,48 +178,22 @@ private:
     uint32_t         _queueFamily    = 0;
     VkQueue          _queue          = VK_NULL_HANDLE;
 
-    VkSwapchainKHR             _swapchain      = VK_NULL_HANDLE;
-    VkFormat                   _swapchainFormat = VK_FORMAT_UNDEFINED;
-    VkColorSpaceKHR            _swapchainColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    VkExtent2D                 _swapchainExtent = {0, 0};
-    std::vector<VkImage>       _swapchainImages;
-    std::vector<VkImageView>   _swapchainViews;
-    // B1：dynamic rendering 取代 renderpass/framebuffer。
-    // 布局跟踪：dynamic rendering 不做附件布局自动转换，由后端逐帧记录屏障；
-    // color 每 image 一份（present 后 = PRESENT_SRC），depth 全局一份。
-    std::vector<VkImageLayout> _swapchainLayouts;   // 与 _swapchainImages 对齐
-    VkImageLayout              _depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkFormat                   _depthFormat = VK_FORMAT_UNDEFINED;
-    VkImage                    _depthImage  = VK_NULL_HANDLE;
-    VkDeviceMemory             _depthMemory = VK_NULL_HANDLE;
-    VkMemAlloc                 _depthMemAlloc;   // E1：深度附件子分配
-    VkImageView                _depthView   = VK_NULL_HANDLE;
+    // V3-3：交换链 + 深度附件 + per-image 信号量都归 VkSwapchain
+    VkSwapchain _swapchain;
 
     VkCommandPool   _commandPool   = VK_NULL_HANDLE;
     VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
 
-    // A3: 全部管线共用的 pipeline layout（固定 push constant 布局，创建一次）
-    VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;
-
-    // A3: 物理设备能力（初始化时探测一次）+ Pipeline Cache 持久化状态
-    VkCaps         _caps;
-    VkPipelineCache _pipelineCache = VK_NULL_HANDLE;
-    std::string    _pipelineCachePath;
-    bool           _pipelineCacheFromDisk = false;   // 本次启动是否成功加载了旧缓存
-    size_t         _pipelineCacheLoadedBytes = 0;
+    // A3: 物理设备能力（初始化时探测一次）
+    VkCaps _caps;
+    // V3-3：管线创建 + 管线缓存归 VkPipelines
+    VkPipelines _pipes;
 
     // E1：内存子分配器（页内 first-fit + 大额专用），替换逐资源 vkAllocateMemory
     VkMemoryAllocator _memAlloc;
 
-    // 纹理描述符（M4）+ 绘制级 uniform UBO（M4.2）
-    VkDescriptorSetLayout _texSetLayout      = VK_NULL_HANDLE;
-    // B6：描述符池按需扩容——耗尽即追加新池（旧池连同其上 set 存活到销毁），
-    // 取代固定 maxSets=32（31 mesh 即 abort 的规模上限）
-    std::vector<VkDescriptorPool> _texDescriptorPools;
-    uint32_t _poolCapSets    = 256;
-    uint32_t _poolCapSampler = 1024;
-    uint32_t _poolCapUniform = 256;
-    void growTexDescriptorPool();
+    // V3-3：描述符与绑定资源（布局/池/帧 uniform 环）归 VkDescriptors
+    VkDescriptors _descs;
     // A1: 验证层与调试工具
     bool                  _validationEnabled = false;
     bool                  _descriptorIndexing = false;
@@ -219,15 +210,13 @@ private:
     UniformBlockHandle _defaultUniformBlock;   // 未显式持有 block 的绘制使用
 
     VkSemaphore _semImageAvailable = VK_NULL_HANDLE;
-    // 每个 swapchain image 一个 render-done semaphore：
-    // 单个 semaphore 在不同 image 间复用会触发 VUID-vkQueueSubmit-pSignalSemaphores-00067
-    std::vector<VkSemaphore> _semRenderDone;
+    // 每个 swapchain image 一个 render-done semaphore → 归 VkSwapchain
     VkFence     _fenceInFlight     = VK_NULL_HANDLE;
 
     uint32_t _imageIndex     = 0;
     bool     _frameActive    = false;
     bool     _frameSkipped   = false;
-    bool     _needsRecreate  = false;
+
     bool     _frameSubmitted = false;   // C1b 语义：endFrame 已提交，present 可执行
     // V3-0：帧号（非 swapchain image 下标）。延迟销毁队列的时基：
     // destroy* 登记 _frameCount + kLagFrames，beginFrame 在 fence 等待后 flush。

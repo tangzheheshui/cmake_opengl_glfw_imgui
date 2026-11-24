@@ -153,7 +153,8 @@ device->endFrame();
 | 事项 | GL | Vulkan |
 |------|----|--------|
 | 着色器 | res/shaders/（GLSL 直编） | res/shaders_vk/（GLSL→SPIR-V 构建期） |
-| uniform | glUniform 按名 | push constant 固定布局（MVP@0 mat4 / color@64 vec4） |
+| uniform | glUniform 按名 | push constant 固定布局（MVP@0 mat4 / color@64 vec4）+ 绘制数据走 set0 帧内环 |
+| 纹理/描述符 | 绑纹理单元 | 每张纹理自带描述符集（set1..4 各一个槽），绘制期不更新描述符 |
 | 颜色空间 | 默认帧缓冲 `GL_FRAMEBUFFER_SRGB` + 颜色纹理 `GL_SRGB8_ALPHA8` | sRGB 交换链 + `Format::RGBA8_SRGB` 颜色纹理 |
 | Pass 边界状态 | 保存/恢复（GLCommandList） | 天然隔离 |
 | 遗留 GL Pass | 全部可用 | 跳过（M4 迁移） |

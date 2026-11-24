@@ -124,7 +124,10 @@ public:
 
     IRHICommandList* commandList() override;
 
-    uint64_t nativeHandle(RhiHandle handle) const override;
+    uint64_t nativeBuffer(BufferHandle h)   const override;
+    uint64_t nativeTexture(TextureHandle h) const override;
+    uint64_t nativeSampler(SamplerHandle h) const override;
+    uint64_t nativePipeline(PipelineHandle h) const override;
 
     // 内部访问（GLCommandList 使用）
     const GLBuffer&   buffer(BufferHandle h) const;

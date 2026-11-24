@@ -14,7 +14,7 @@ RHI 是引擎内部统一两个后端的图形接口层。这份写它有哪些�
 | 采样器 | SamplerHandle | 贴图怎么采样 |
 | 管线 | PipelineHandle | 着色器加渲染状态，创建时一次定死 |
 | 离屏目标 | RenderTargetHandle | 渲染到纹理而不是屏幕 |
-| 数据块 | UniformBlockHandle | 每帧每个对象传的小数据 |
+| 数据块 | UniformBlockHandle | 每帧每个对象传的小数据（只记尺寸，不占显存） |
 
 ## 保证什么
 

@@ -14,9 +14,9 @@ layout(set = 0, binding = 0) uniform FrameData {
     vec4 misc;             // D3：x=opacity（与 DrawUniforms.h 布局同步，176B）
 } fd;
 
-layout(set = 0, binding = 1) uniform sampler2D texture_diffuse0;
-layout(set = 0, binding = 2) uniform sampler2D texture_specular0;
-layout(set = 0, binding = 3) uniform sampler2D texture_normal0;
+layout(set = 1, binding = 0) uniform sampler2D texture_diffuse0;
+layout(set = 2, binding = 0) uniform sampler2D texture_specular0;
+layout(set = 3, binding = 0) uniform sampler2D texture_normal0;
 
 // D8：高亮经 push constant offset 80（布局与 vert_model 的 PC 块一致：
 // mat4@0 + vec4@64 + vec4@80；前两项此着色器不消费，仅占位对齐）

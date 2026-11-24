@@ -75,15 +75,6 @@ static const char* kRequiredDeviceExts[] = {
 
 // ---- 工具：读取 SPIR-V 文件 ----
 // A4: 路径按 UTF-8 解释（Windows 上宽字符打开，中文安装路径可用）
-static std::vector<char> readSpirvFile(const std::string& path) {
-    std::vector<unsigned char> data;
-    if (!engine::fs::readFileBinary(engine::fs::pathFromUtf8(path), data)) {
-        ENGINE_LOG_ERROR("[VK] cannot open SPIR-V: %s", path.c_str());
-        return {};
-    }
-    return std::vector<char>(data.begin(), data.end());
-}
-
 // 深度附件格式：按支持度依次尝试
 static VkFormat findSupportedDepthFormat(VkPhysicalDevice pd) {
     const VkFormat candidates[] = {
@@ -150,19 +141,26 @@ VulkanDevice::VulkanDevice(const DeviceDesc& desc, std::string& outError)
     _caps.log();
     createLogicalDevice();
     _memAlloc.init(_physicalDevice, _device);   // E1：先于任何资源创建
-    createPipelineCache();   // A3: 需在逻辑设备之后、创建任何管线之前
     createSwapchainObjects();
     createCommandObjects();
     createSyncObjects();
     // A1: 加载对象命名函数指针（debug_utils 扩展启用后可用）
     _setNameFn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
         vkGetInstanceProcAddr(_instance, "vkSetDebugUtilsObjectNameEXT"));
-    createWhiteFallbackTexture();   // 先于描述符对象：默认 uniform block 需引用白纹理
+    // V3-2：描述符布局/池先建（纹理创建时就要分配自己的描述符集），
+    // 白兜底纹理随后创建（它同样走 createTexture，拿到的 set 供未绑定槽位使用）
     createDescriptorObjects();
-    // B4：命令列表必须在默认 uniform block 之后创建——VkCommandList 构造函数
-    // 取 defaultUniformBlock() 作为 _curUniformBlock 初值（此前命令列表在前，
-    // 初值为无效句柄；所有真实绘制都先调 setDrawUniforms 掩盖了这个潜伏缺陷，
-    // RT 内首个未设 block 的 draw 触发越界）
+    // V3-3：管线创建器（含磁盘管线缓存加载）。需要描述符里的全局管线布局
+    {
+        VkPipelines::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
+            setObjName(type, handle, name);
+        };
+        _pipes.init(_device, &_caps, _shaderRootPath, _descs.pipelineLayout(), nameFn);
+    }
+    createWhiteFallbackTexture();
+    // 白纹理创建完才知道它们的描述符集，这里交给 VkDescriptors 做兜底
+    _descs.setFallbackSets(_textures.get(_whiteTex.id).set,
+                           _textures.get(_whiteCubeTex.id).set);
     _commandList = std::make_unique<VkCommandList>(this);
     _initialized = true;
 }
@@ -181,7 +179,6 @@ VulkanDevice::~VulkanDevice() {
     destroySwapchainObjects();
     if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
     if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
-    // _semRenderDone 为 per-image，随 swapchain 销毁（destroySwapchainObjects）
     if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
     // E1：先走子分配器统计/告警，资源对象内存在随行销毁
     _buffers.forEach([&](VkBufferRes& b) {
@@ -194,11 +191,6 @@ VulkanDevice::~VulkanDevice() {
         if (t.image)   vkDestroyImage(_device, t.image, nullptr);
         _memAlloc.free(t.memAlloc);   // E1
     });
-    _uniformBlocks.forEach([&](VkUniformBlockRes& b) {
-        if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
-        _memAlloc.free(b.memAlloc);   // E1
-        // 描述符集随 pool 销毁
-    });
     // V3-0：离屏 RT 的深度附件兜底回收（宿主未调 destroyRenderTarget 的槽位；
     // 颜色附件是 VkTextureRes，已在上方 _textures 循环销毁）
     _renderTargets.forEach([&](VkRenderTargetRes& rt) {
@@ -210,14 +202,9 @@ VulkanDevice::~VulkanDevice() {
     _pipelines.forEach([&](VkPipelineRes& p) {
         if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
     });
-    if (_pipelineLayout)    vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
-    for (auto pool : _texDescriptorPools) {
-        if (pool) vkDestroyDescriptorPool(_device, pool, nullptr);
-    }
-    _texDescriptorPools.clear();
-    if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
-    savePipelineCache();     // A3: 管线销毁后仍可导出缓存内容；在 destroy device 之前
-    if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
+    // V3-3：布局/池/帧 uniform 环归 VkDescriptors 回收
+    _descs.shutdown();
+    _pipes.saveAndDestroy();   // 导出管线缓存并销毁缓存对象（须在 destroy device 之前）
     _memAlloc.shutdown();    // E1：设备销毁前回收页/专用分配（泄漏在此告警）
     if (_device)   vkDestroyDevice(_device, nullptr);
     // C1a 所有权约定：externalSurface 归宿主；createSurface 回调/平台自建归 RHI
@@ -615,173 +602,18 @@ void VulkanDevice::createLogicalDevice() {
 }
 
 void VulkanDevice::createSwapchainObjects() {
-    // C1a：RHI 不回查窗口系统——尺寸来自 DeviceDesc/onResize（宿主推送）
-    const uint32_t fbW = _size.width;
-    const uint32_t fbH = _size.height;
-
-    // surface 能力
-    VkSurfaceCapabilitiesKHR caps;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physicalDevice, _surface, &caps);
-    _swapchainExtent = caps.currentExtent;
-    if (_swapchainExtent.width == UINT32_MAX) {
-        _swapchainExtent.width  = std::clamp(fbW, caps.minImageExtent.width,  caps.maxImageExtent.width);
-        _swapchainExtent.height = std::clamp(fbH, caps.minImageExtent.height, caps.maxImageExtent.height);
-    }
-
-    // surface 格式（B3c）：优先 sRGB 交换链（线性工作流的编码端）。
-    // 优先级：BGRA8_SRGB > RGBA8_SRGB > BGRA8_UNORM > RGBA8_UNORM > 驱动首选项。
-    uint32_t fmtCount = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, &fmtCount, nullptr);
-    std::vector<VkSurfaceFormatKHR> formats(fmtCount);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(_physicalDevice, _surface, &fmtCount, formats.data());
-    if (formats.empty()) {
-        ENGINE_LOG_ERROR("[VK] surface exposes no formats");
-        std::abort();
-    }
-    auto formatRank = [](VkFormat f) {
-        switch (f) {
-            case VK_FORMAT_B8G8R8A8_SRGB:  return 4;
-            case VK_FORMAT_R8G8B8A8_SRGB:  return 3;
-            case VK_FORMAT_B8G8R8A8_UNORM: return 2;
-            case VK_FORMAT_R8G8B8A8_UNORM: return 1;
-            default: return 0;
-        }
+    // V3-3：交换链/深度/信号量都交给 VkSwapchain（见 VkSwapchain.cpp）
+    VkSwapchain::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
+        setObjName(type, handle, name);
     };
-    // SRGB_NONLINEAR 是显示器的标准编码空间；只在它提供的格式对里挑选，
-    // 没有任何匹配时退回驱动首选项（format/colorSpace 始终成对取自 surface 列表）。
-    bool haveStandard = false;
-    int bestRank = 0;
-    for (const auto& f : formats) {
-        if (f.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) continue;
-        const int r = formatRank(f.format);
-        if (!haveStandard || r > bestRank) {
-            bestRank             = r;
-            _swapchainFormat     = f.format;
-            _swapchainColorSpace = f.colorSpace;
-            haveStandard         = true;
-        }
+    if (!_swapchain.create(_physicalDevice, _device, _surface, _size.width, _size.height,
+                           findSupportedDepthFormat(_physicalDevice), &_memAlloc, nameFn)) {
+        ENGINE_LOG_ERROR("[VK] swapchain creation failed");
     }
-    if (!haveStandard) {
-        _swapchainFormat     = formats[0].format;
-        _swapchainColorSpace = formats[0].colorSpace;
-    }
-    const bool swapchainSrgb = (_swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB ||
-                                _swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB);
-    ENGINE_LOG_INFO("[VK] swapchain format=%d colorSpace=%d sRGB=%d",
-                    static_cast<int>(_swapchainFormat),
-                    static_cast<int>(_swapchainColorSpace), swapchainSrgb ? 1 : 0);
-    if (!swapchainSrgb) {
-        ENGINE_LOG_WARN("[VK] no sRGB surface format; linear workflow will look different from GL");
-    }
-
-    uint32_t imageCount = std::max(2u, caps.minImageCount);
-    if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
-
-    VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
-    sci.surface          = _surface;
-    sci.minImageCount    = imageCount;
-    sci.imageFormat      = _swapchainFormat;
-    sci.imageColorSpace  = _swapchainColorSpace;
-    sci.imageExtent      = _swapchainExtent;
-    sci.imageArrayLayers = 1;
-    sci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;  // TRANSFER_SRC 供 RHI_PROBE 回读验证
-    sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    sci.preTransform     = caps.currentTransform;
-    sci.compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    sci.presentMode      = VK_PRESENT_MODE_FIFO_KHR;   // vsync（M3 固定）
-    sci.clipped          = VK_TRUE;
-    VK_CHECK(vkCreateSwapchainKHR(_device, &sci, nullptr, &_swapchain));
-    setObjName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(_swapchain), "RHI_Swapchain");
-
-    // image views
-    uint32_t n = 0;
-    vkGetSwapchainImagesKHR(_device, _swapchain, &n, nullptr);
-    _swapchainImages.resize(n);
-    vkGetSwapchainImagesKHR(_device, _swapchain, &n, _swapchainImages.data());
-    _swapchainViews.resize(n);
-    for (uint32_t i = 0; i < n; ++i) {
-        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vci.image    = _swapchainImages[i];
-        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format   = _swapchainFormat;
-        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &_swapchainViews[i]));
-        char name[64];
-        std::snprintf(name, sizeof(name), "RHI_SwapchainImage_%u", i);
-        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_swapchainImages[i]), name);
-        std::snprintf(name, sizeof(name), "RHI_SwapchainView_%u", i);
-        setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(_swapchainViews[i]), name);
-    }
-
-    // per-image render-done semaphores（随 swapchain 生命周期重建）
-    _semRenderDone.resize(n, VK_NULL_HANDLE);
-    VkSemaphoreCreateInfo rsci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (uint32_t i = 0; i < n; ++i) {
-        VK_CHECK(vkCreateSemaphore(_device, &rsci, nullptr, &_semRenderDone[i]));
-        char name[64];
-        std::snprintf(name, sizeof(name), "RHI_RenderDone_%u", i);
-        setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semRenderDone[i]), name);
-    }
-
-    // B1：dynamic rendering 取代 renderpass + framebuffers。
-    // 布局跟踪初始化：acquire 后首帧为 UNDEFINED，present 后由 recordPresentBarrier 置回 PRESENT_SRC
-    _swapchainLayouts.assign(n, VK_IMAGE_LAYOUT_UNDEFINED);
-
-    _depthFormat = findSupportedDepthFormat(_physicalDevice);
-
-    // 深度图像（单一深度缓冲，frame-in-flight=1 下共享合法）
-    {
-        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ici.imageType     = VK_IMAGE_TYPE_2D;
-        ici.format        = _depthFormat;
-        ici.extent        = {_swapchainExtent.width, _swapchainExtent.height, 1};
-        ici.mipLevels     = 1;
-        ici.arrayLayers   = 1;
-        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
-        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
-        ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
-        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VK_CHECK(vkCreateImage(_device, &ici, nullptr, &_depthImage));
-        VkMemoryRequirements req;
-        vkGetImageMemoryRequirements(_device, _depthImage, &req);
-        _depthMemAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);   // E1
-        if (!_depthMemAlloc.valid()) {
-            ENGINE_LOG_ERROR("[VK] depth memory alloc failed");
-            std::abort();
-        }
-        _depthMemory = _depthMemAlloc.memory;
-        VK_CHECK(vkBindImageMemory(_device, _depthImage, _depthMemory, _depthMemAlloc.offset));
-
-        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vci.image    = _depthImage;
-        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format   = _depthFormat;
-        vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &_depthView));
-        setObjName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(_depthView), "RHI_DepthView");
-        setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(_depthImage), "RHI_DepthImage");
-    }
-    _depthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    _needsRecreate = false;
 }
 
 void VulkanDevice::destroySwapchainObjects() {
-    for (auto s : _semRenderDone)   if (s)              vkDestroySemaphore(_device, s, nullptr);
-    _semRenderDone.clear();
-    for (auto v : _swapchainViews)  if (v)              vkDestroyImageView(_device, v, nullptr);
-    if (_depthView)   vkDestroyImageView(_device, _depthView, nullptr);
-    if (_depthImage)  vkDestroyImage(_device, _depthImage, nullptr);
-    if (_depthMemory) {
-        _memAlloc.free(_depthMemAlloc);   // E1：分配器负责 vkFreeMemory（专用分配）
-        _depthMemory = VK_NULL_HANDLE;
-    }
-    _depthView = VK_NULL_HANDLE; _depthImage = VK_NULL_HANDLE; _depthMemory = VK_NULL_HANDLE;
-    if (_swapchain)  vkDestroySwapchainKHR(_device, _swapchain, nullptr);
-    _swapchainLayouts.clear();
-    _swapchainViews.clear();
-    _swapchainImages.clear();
-    _swapchain = VK_NULL_HANDLE;
+    _swapchain.destroy();
 }
 
 void VulkanDevice::createCommandObjects() {
@@ -807,7 +639,6 @@ void VulkanDevice::createSyncObjects() {
     fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;   // 首帧可直接等待
     VK_CHECK(vkCreateFence(_device, &fci, nullptr, &_fenceInFlight));
     setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semImageAvailable), "RHI_ImageAvailable");
-    // _semRenderDone 为 per-image，在 createSwapchainObjects 中创建
     setObjName(VK_OBJECT_TYPE_FENCE, reinterpret_cast<uint64_t>(_fenceInFlight), "RHI_InFlightFence");
 }
 
@@ -816,121 +647,14 @@ void VulkanDevice::createSyncObjects() {
 // ============================================================
 // 缓存文件头校验：跨驱动/跨设备的缓存可能不兼容。规范要求驱动忽略不兼容数据，
 // 但主动校验可避免验证层告警，也能在日志里说明"为什么没加速"。
-static bool pipelineCacheHeaderMatches(const std::vector<char>& data,
-                                       const VkPhysicalDeviceProperties& props) {
-    if (data.size() < sizeof(VkPipelineCacheHeaderVersionOne)) return false;
-    VkPipelineCacheHeaderVersionOne h{};
-    std::memcpy(&h, data.data(), sizeof(h));
-    return h.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE
-        && h.vendorID == props.vendorID
-        && h.deviceID == props.deviceID
-        && std::memcmp(h.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
-}
-
-void VulkanDevice::createPipelineCache() {
-    const char* env = std::getenv("RHI_VK_PIPELINE_CACHE");
-    if (env && std::strcmp(env, "0") == 0) {
-        ENGINE_LOG_INFO("[VK] pipeline cache disabled (RHI_VK_PIPELINE_CACHE=0)");
-        return;
-    }
-    _pipelineCachePath = (env && *env) ? std::string(env)
-                                       : _shaderRootPath + "pipeline_cache.bin";
-
-    std::vector<char> initial;
-    {
-        // A4: UTF-8 路径（fstream 接 path 对象，Windows 宽字符安全）
-        std::ifstream f(engine::fs::pathFromUtf8(_pipelineCachePath), std::ios::binary | std::ios::ate);
-        if (f.is_open()) {
-            const size_t size = static_cast<size_t>(f.tellg());
-            initial.resize(size);
-            f.seekg(0);
-            f.read(initial.data(), static_cast<std::streamsize>(size));
-            if (!pipelineCacheHeaderMatches(initial, _caps.props)) {
-                ENGINE_LOG_INFO("[VK] pipeline cache ignored (driver/device mismatch): %s",
-                                _pipelineCachePath.c_str());
-                initial.clear();
-            }
-        }
-    }
-
-    VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-    ci.initialDataSize = initial.size();
-    ci.pInitialData    = initial.empty() ? nullptr : initial.data();
-    VkResult r = vkCreatePipelineCache(_device, &ci, nullptr, &_pipelineCache);
-    if (r != VK_SUCCESS && !initial.empty()) {
-        // 文件损坏或驱动拒绝：丢弃后重试（缓存只是优化，不应阻塞启动）
-        ENGINE_LOG_WARN("[VK] pipeline cache load failed (%d), recreating empty", static_cast<int>(r));
-        initial.clear();
-        ci.initialDataSize = 0;
-        ci.pInitialData    = nullptr;
-        r = vkCreatePipelineCache(_device, &ci, nullptr, &_pipelineCache);
-    }
-    if (r != VK_SUCCESS) {
-        ENGINE_LOG_WARN("[VK] pipeline cache unavailable (%d), pipelines compile uncached", static_cast<int>(r));
-        _pipelineCache = VK_NULL_HANDLE;
-        return;
-    }
-    setObjName(VK_OBJECT_TYPE_PIPELINE_CACHE, reinterpret_cast<uint64_t>(_pipelineCache), "RHI_PipelineCache");
-    _pipelineCacheFromDisk = !initial.empty();
-    _pipelineCacheLoadedBytes = initial.size();
-    ENGINE_LOG_INFO("[VK] pipeline cache %s: %zu bytes (%s)",
-                    _pipelineCacheFromDisk ? "loaded" : "empty",
-                    _pipelineCacheLoadedBytes, _pipelineCachePath.c_str());
-}
-
-void VulkanDevice::savePipelineCache() {
-    if (!_pipelineCache || _pipelineCachePath.empty()) return;
-
-    size_t size = 0;
-    if (vkGetPipelineCacheData(_device, _pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0) {
-        return;   // 本进程没有新建管线（全部命中缓存）时通常为空
-    }
-    std::vector<char> data(size);
-    if (vkGetPipelineCacheData(_device, _pipelineCache, &size, data.data()) != VK_SUCCESS) return;
-    data.resize(size);
-
-    // A4: _pipelineCachePath 是 UTF-8 串，构造宽 path 后做临时文件+改名
-    const std::filesystem::path cachePath = engine::fs::pathFromUtf8(_pipelineCachePath);
-    std::filesystem::path tmpPath = cachePath;
-    tmpPath += ".tmp";
-    {
-        std::error_code ec;
-        auto parent = cachePath.parent_path();
-        if (!parent.empty()) std::filesystem::create_directories(parent, ec);
-        std::ofstream f(tmpPath, std::ios::binary | std::ios::trunc);
-        if (!f.is_open()) {
-            ENGINE_LOG_WARN("[VK] cannot write pipeline cache: %s", _pipelineCachePath.c_str());
-            return;
-        }
-        f.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!f) {
-            ENGINE_LOG_WARN("[VK] pipeline cache write failed: %s", _pipelineCachePath.c_str());
-            return;
-        }
-    }
-    std::error_code ec;
-    std::filesystem::rename(tmpPath, cachePath, ec);   // 先写临时文件再改名，避免崩溃留下半截缓存
-    if (ec) {
-        ENGINE_LOG_WARN("[VK] pipeline cache rename failed: %s", ec.message().c_str());
-        return;
-    }
-    ENGINE_LOG_INFO("[VK] pipeline cache saved: %zu bytes -> %s", data.size(), _pipelineCachePath.c_str());
-}
-
 // ============================================================
 // 帧循环
 // ============================================================
 bool VulkanDevice::beginFrameInternal() {
     VK_CHECK(vkWaitForFences(_device, 1, &_fenceInFlight, VK_TRUE, UINT64_MAX));
 
-    VkResult r = vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX,
-                                       _semImageAvailable, VK_NULL_HANDLE, &_imageIndex);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) {
-        _needsRecreate = true;
-        return false;
-    }
-    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
-        VK_CHECK(r);
+    if (!_swapchain.acquire(_semImageAvailable, _imageIndex)) {
+        return false;   // OUT_OF_DATE 等：本帧跳过，beginFrame 下一轮重建
     }
 
     VK_CHECK(vkResetFences(_device, 1, &_fenceInFlight));
@@ -957,7 +681,7 @@ void VulkanDevice::drainDeferredGpuWork() {
 
 bool VulkanDevice::beginFrame() {
     drainDeferredGpuWork();   // 上一帧帧内延迟的纹理上传：现在帧外安全执行
-    if (_needsRecreate) {
+    if (_swapchain.needsRecreate()) {
         vkDeviceWaitIdle(_device);
         destroySwapchainObjects();
         createSwapchainObjects();
@@ -971,6 +695,12 @@ bool VulkanDevice::beginFrame() {
         // 帧号先 flush 再递增（登记 base = 已完成的最近帧）。
         _delQueue.flush(_frameCount);
         ++_frameCount;
+
+        // V3-2：帧内 uniform 环归零。上一帧命令已执行完（fence 已等待），
+        // 现在整块复用是安全的；offset 0 留给"没调 setDrawUniforms 的绘制"。
+        _descs.beginFrame();
+
+        if (_commandList) _commandList->onFrameBegin();
     }
     return _frameActive;
 }
@@ -984,13 +714,13 @@ void VulkanDevice::endFrame() {
     recordPresentBarrier(_commandBuffer);
     VK_CHECK(vkEndCommandBuffer(_commandBuffer));
 
-    if (_imageIndex >= _semRenderDone.size()) {
+    // 每个 swapchain image 使用独立的 render-done semaphore：
+    // presentation 完成前不能复用同一个 binary semaphore（VUID-...-00067）
+    VkSemaphore renderDone = _swapchain.renderDoneSemaphore(_imageIndex);
+    if (renderDone == VK_NULL_HANDLE) {
         ENGINE_LOG_ERROR("[VK] missing render-done semaphore for image %u", _imageIndex);
         return;
     }
-    // 每个 swapchain image 使用独立的 render-done semaphore：
-    // presentation 完成前不能复用同一个 binary semaphore（VUID-...-00067）
-    VkSemaphore renderDone = _semRenderDone[_imageIndex];
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -1013,7 +743,8 @@ void VulkanDevice::endFrame() {
         vkQueueWaitIdle(_queue);   // 主提交完成；图像处于 PRESENT_SRC，仍 acquired
         VkBuffer readback;
         VkMemAlloc readbackMem;   // E1：子分配 + 页持久映射
-        VkDeviceSize bufSize = _swapchainExtent.width * _swapchainExtent.height * 4;
+        const VkExtent2D scExtent = _swapchain.extent();
+        VkDeviceSize bufSize = scExtent.width * scExtent.height * 4;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size  = bufSize;
         bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -1037,15 +768,15 @@ void VulkanDevice::endFrame() {
         toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         toTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toTransfer.image = _swapchainImages[_imageIndex];
+        toTransfer.image = _swapchain.image(_imageIndex);
         toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                              0, nullptr, 0, nullptr, 1, &toTransfer);
         VkBufferImageCopy region{};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {_swapchainExtent.width, _swapchainExtent.height, 1};
-        vkCmdCopyImageToBuffer(cb, _swapchainImages[_imageIndex],
+        region.imageExtent = {scExtent.width, scExtent.height, 1};
+        vkCmdCopyImageToBuffer(cb, _swapchain.image(_imageIndex),
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &region);
         // 拷贝后必须恢复 PRESENT_SRC，才能交给 present
         VkImageMemoryBarrier toPresent{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -1055,7 +786,7 @@ void VulkanDevice::endFrame() {
         toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
         toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toPresent.image = _swapchainImages[_imageIndex];
+        toPresent.image = _swapchain.image(_imageIndex);
         toPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
@@ -1069,11 +800,11 @@ void VulkanDevice::endFrame() {
 
         // E1：页持久映射，直接取指针
         const uint8_t* px = static_cast<const uint8_t*>(readbackMem.mapped);
-        uint32_t cx = _swapchainExtent.width / 2, cy = _swapchainExtent.height * 2 / 5;
-        const size_t off = (static_cast<size_t>(cy) * _swapchainExtent.width + cx) * 4;
+        uint32_t cx = scExtent.width / 2, cy = scExtent.height * 2 / 5;
+        const size_t off = (static_cast<size_t>(cy) * scExtent.width + cx) * 4;
         // swapchain 格式可能是 BGRA：打印原始字节 + 两种解释
         ENGINE_LOG_INFO("[VKPROBE] center bytes = %d,%d,%d,%d (format=%d)",
-                    px[off], px[off+1], px[off+2], px[off+3], (int)_swapchainFormat);
+                    px[off], px[off+1], px[off+2], px[off+3], (int)_swapchain.format());
         std::fflush(stdout);
         if (std::getenv("RHI_DUMP")) {   // 正式调试设施：导出整帧 PPM（跨平台临时目录）
             std::error_code ec;
@@ -1082,11 +813,11 @@ void VulkanDevice::endFrame() {
             // A4: 保持 path 对象直接打开（临时目录可能含中文用户名，Windows ACP fopen 会失败）
             FILE* fp = engine::fs::openWrite(tmpDir / "frame_vk.ppm");
             if (fp) {
-                std::fprintf(fp, "P6\n%u %u\n255\n", _swapchainExtent.width, _swapchainExtent.height);
+                std::fprintf(fp, "P6\n%u %u\n255\n", scExtent.width, scExtent.height);
                 // B3a 完成后 3D 内容已是正立，按屏幕行序直接导出
-                for (uint32_t y = 0; y < _swapchainExtent.height; ++y) {
-                    const uint8_t* row = px + static_cast<size_t>(y) * _swapchainExtent.width * 4;
-                    for (uint32_t x = 0; x < _swapchainExtent.width; ++x) {
+                for (uint32_t y = 0; y < scExtent.height; ++y) {
+                    const uint8_t* row = px + static_cast<size_t>(y) * scExtent.width * 4;
+                    for (uint32_t x = 0; x < scExtent.width; ++x) {
                         const uint8_t* px4 = row + static_cast<size_t>(x) * 4;
                         const uint8_t rgb[3] = { px4[2], px4[1], px4[0] };   // BGRA → RGB 真色
                         fwrite(rgb, 1, 3, fp);
@@ -1107,19 +838,9 @@ void VulkanDevice::endFrame() {
 void VulkanDevice::present() {
     if (!_frameSubmitted) return;   // 帧跳过/未提交：无可呈现图像
     _frameSubmitted = false;
-    if (_imageIndex >= _semRenderDone.size() || _swapchain == VK_NULL_HANDLE) return;
-
-    VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-    VkSemaphore renderDone = _semRenderDone[_imageIndex];
-    pi.waitSemaphoreCount = 1;
-    pi.pWaitSemaphores    = &renderDone;
-    pi.swapchainCount     = 1;
-    pi.pSwapchains        = &_swapchain;
-    pi.pImageIndices      = &_imageIndex;
-    VkResult r = vkQueuePresentKHR(_queue, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
-        _needsRecreate = true;
-    }
+    VkSemaphore renderDone = _swapchain.renderDoneSemaphore(_imageIndex);
+    if (!renderDone) return;
+    _swapchain.present(_queue, _imageIndex, renderDone);
 }
 
 void VulkanDevice::onResize(int width, int height) {
@@ -1131,9 +852,9 @@ void VulkanDevice::onResize(int width, int height) {
     // 尺寸未变则忽略（应用启动时 onWindowSizeChanged 传来的尺寸与创建时一致，
     // 若此时重建 swapchain，会销毁管线引用的 renderPass 导致绘制崩溃）
     if (width > 0 && height > 0 &&
-        (static_cast<uint32_t>(width)  != _swapchainExtent.width ||
-         static_cast<uint32_t>(height) != _swapchainExtent.height)) {
-        _needsRecreate = true;
+        (static_cast<uint32_t>(width)  != _swapchain.extent().width ||
+         static_cast<uint32_t>(height) != _swapchain.extent().height)) {
+        _swapchain.requestRecreate();
     }
 }
 
@@ -1247,17 +968,8 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
         ENGINE_LOG_WARN_ONCE("[VK] destroyUniformBlock: device default block is device-owned, ignored");
         return;
     }
-    VkUniformBlockRes& b = _uniformBlocks.get(h.id);
-    if (!b.buffer) return;
-    VkBuffer buf = b.buffer;
-    VkMemAlloc mem = b.memAlloc;
+    // V3-2：block 没有 GPU 资源，释放槽位即可
     _uniformBlocks.free(h.id);
-    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
-                   [this, buf, mem] {
-                       vkDestroyBuffer(_device, buf, nullptr);
-                       _memAlloc.free(mem);
-                   });
-    // 描述符集随 pool 回收（无 FREE_DESCRIPTOR_SET_BIT），无需单独销毁
 }
 
 // ---- B4：离屏渲染目标 ----
@@ -1601,6 +1313,11 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
     // 开头执行；数据由 lambda 持有（调用方的 initialData 生命周期未知）
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height * bpp * layerCount;
+    // V3-2：记录上传是不是延迟到下一帧。延迟时布局在上传 lambda 里回写；
+    // 立即执行（帧外创建，submitOneTime 已等待完成）时下面 alloc 之后直接置位——
+    // 上传 lambda 里的回写在"立即"路径下看不到槽位（alloc 尚未发生），
+    // 早先靠描述符不读布局掩盖着，接入绑定层后必须显式区分。
+    const bool uploadDeferred = _frameActive;
     if (desc.initialData && bytes > 0) {
         auto dataCopy = std::make_shared<std::vector<unsigned char>>(
             static_cast<const unsigned char*>(desc.initialData),
@@ -1807,8 +1524,25 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         return {};
     }
 
+    // V3-2：纹理自带描述符集（写一次）。绘制期只绑 set，不再 vkUpdateDescriptorSets。
+    {
+        VkDescriptorSet texSet = VK_NULL_HANDLE;
+        if (!_descs.createTextureSet(t.sampler, t.view, texSet)) {
+            vkDestroySampler(_device, t.sampler, nullptr);
+            vkDestroyImageView(_device, t.view, nullptr);
+            vkDestroyImage(_device, t.image, nullptr);
+            _memAlloc.free(t.memAlloc);
+            return {};
+        }
+        t.set = texSet;
+    }
+
     RhiHandle base = _textures.alloc(std::move(t));
     TextureHandle h; h.id = base.id; h.gen = base.gen;
+    // 立即上传的纹理此时已处于 SHADER_READ_ONLY（见 uploadDeferred 注释）
+    if (desc.initialData && bytes > 0 && !uploadDeferred) {
+        _textures.get(h.id).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     char tname[48];
     std::snprintf(tname, sizeof(tname), "RHI_Texture_%u", h.id);
     setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(t.image), tname);
@@ -1817,209 +1551,11 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     return h;
 }
 
-PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
-    VkPipelineRes res;
-
-    // ---- 着色器模块：从 shaders_vk/ 读取 <name>.spv ----
-    std::vector<VkPipelineShaderStageCreateInfo> stages;
-    std::vector<VkShaderModule> modules;
-    for (const auto& s : desc.shaders) {
-        const std::string path = _shaderRootPath + s.path + ".spv";
-        std::vector<char> code = readSpirvFile(path);
-        if (code.empty()) {
-            ENGINE_LOG_ERROR("[VK] missing SPIR-V for pipeline");
-            return {};
-        }
-        // B6：反射 push constant 成员 → 管线 uniform 表（setUniform 按名定位）
-        {
-            auto refl = reflectSpirv(code.data(), code.size());
-            for (const auto& m : refl.pushMembers) {
-                if (m.name.empty()) continue;
-                auto dup = std::find_if(res.uniformTable.begin(), res.uniformTable.end(),
-                                        [&](const VkPipelineUniformInfo& u) {
-                                            return std::strcmp(u.name, m.name.c_str()) == 0;
-                                        });
-                if (dup != res.uniformTable.end()) continue;   // 两 stage 重复声明，取首个
-                VkPipelineUniformInfo ui{};
-                std::snprintf(ui.name, sizeof(ui.name), "%s", m.name.c_str());
-                ui.offset = m.offset;
-                ui.size   = m.size;
-                ui.isMat4 = m.isMat4;
-                res.uniformTable.push_back(ui);
-            }
-        }
-        VkShaderModuleCreateInfo mci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        mci.codeSize = code.size();
-        mci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule mod;
-        if (vkCreateShaderModule(_device, &mci, nullptr, &mod) != VK_SUCCESS) {
-            ENGINE_LOG_ERROR("[VK] vkCreateShaderModule failed for %s", path.c_str());
-            for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
-            return {};
-        }
-        modules.push_back(mod);
-
-        VkPipelineShaderStageCreateInfo st{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        st.stage  = (s.stage == ShaderStage::Vertex) ? VK_SHADER_STAGE_VERTEX_BIT
-                                                     : VK_SHADER_STAGE_FRAGMENT_BIT;
-        st.module = mod;
-        st.pName  = "main";
-        stages.push_back(st);
-    }
-
-    // ---- 顶点输入 ----
-    // ---- 顶点输入：binding0 = 顶点率，binding1 = 实例率（有实例化属性时）----
-    bool hasInstanced = false;
-    for (const auto& a : desc.vertexLayout.attributes) hasInstanced |= a.instanced;
-    VkVertexInputBindingDescription binds[2] = {};
-    binds[0] = {0, desc.vertexLayout.stride, VK_VERTEX_INPUT_RATE_VERTEX};
-    binds[1] = {1, desc.vertexLayout.instanceStride, VK_VERTEX_INPUT_RATE_INSTANCE};
-    std::vector<VkVertexInputAttributeDescription> attrs;
-    for (const auto& a : desc.vertexLayout.attributes) {
-        VkVertexInputAttributeDescription va{};
-        va.location = a.location;
-        va.binding  = a.instanced ? 1 : 0;
-        va.offset   = a.offset;
-        switch (a.format) {
-            case VertexFormat::Float1: va.format = VK_FORMAT_R32_SFLOAT; break;
-            case VertexFormat::Float2: va.format = VK_FORMAT_R32G32_SFLOAT; break;
-            case VertexFormat::Float3: va.format = VK_FORMAT_R32G32B32_SFLOAT; break;
-            case VertexFormat::Float4: va.format = VK_FORMAT_R32G32B32A32_SFLOAT; break;
-        }
-        attrs.push_back(va);
-    }
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount   = hasInstanced ? 2 : 1;
-    vi.pVertexBindingDescriptions      = binds;
-    vi.vertexAttributeDescriptionCount = static_cast<uint32_t>(attrs.size());
-    vi.pVertexAttributeDescriptions    = attrs.data();
-
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    switch (desc.primitive) {
-        case PrimitiveType::Triangles:     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; break;
-        case PrimitiveType::Lines:         ia.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; break;
-        case PrimitiveType::TriangleStrip: ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP; break;
-    }
-
-    // ---- 动态 viewport/scissor ----
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    vp.viewportCount = 1;
-    vp.scissorCount  = 1;
-
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    // D5：线框显示模式（GraphicsPipelineDesc::raster.polygonMode，B0 只加不改）
-    rs.polygonMode = (desc.raster.polygonMode == PolygonMode::Line)
-                         ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
-    if (desc.raster.polygonMode == PolygonMode::Line && !_caps.features.fillModeNonSolid) {
-        ENGINE_LOG_WARN_ONCE("[VK] fillModeNonSolid unsupported; wireframe falls back to fill");
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-    }
-    rs.cullMode    = (desc.cull == CullMode::Back) ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
-    // B3a：负高度 viewport 把 NDC y 镜像到屏幕，绕序相对 GL 约定翻转；
-    // GL 网格（CCW 正面）在此后端声明 CLOCKWISE 才能正确剔除背面
-    rs.frontFace   = VK_FRONT_FACE_CLOCKWISE;
-    rs.lineWidth   = 1.0f;
-    // D5：边线深度偏移（着色+边线模式防止线框与表面 z-fighting）
-    rs.depthBiasEnable         = (desc.raster.depthBiasConstantFactor != 0.0f
-                                  || desc.raster.depthBiasSlopeFactor != 0.0f) ? VK_TRUE : VK_FALSE;
-    rs.depthBiasConstantFactor = desc.raster.depthBiasConstantFactor;
-    rs.depthBiasSlopeFactor    = desc.raster.depthBiasSlopeFactor;
-
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    // M4：render pass 已有深度附件，深度状态由管线描述符驱动
-    ds.depthTestEnable  = desc.depth.depthTest  ? VK_TRUE : VK_FALSE;
-    ds.depthWriteEnable = desc.depth.depthWrite ? VK_TRUE : VK_FALSE;
-    // B3b Reversed-Z：深度语义反转（近=1/远=0，清屏 0，见 VkCommandList::setUniform），
-    // 比较算子相应改为 GREATER 族；depthLessEqual（天空盒远景）映射 GREATER_OR_EQUAL
-    ds.depthCompareOp   = desc.depth.depthLessEqual ? VK_COMPARE_OP_GREATER_OR_EQUAL
-                                                    : VK_COMPARE_OP_GREATER;
-
-    VkPipelineColorBlendAttachmentState att{};
-    att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                       | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    if (desc.blend.blendEnable) {
-        att.blendEnable    = VK_TRUE;
-        att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        att.colorBlendOp        = VK_BLEND_OP_ADD;
-        att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-    }
-    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1;
-    cb.pAttachments    = &att;
-
-    VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyn.dynamicStateCount = 2;
-    dyn.pDynamicStates    = dynamics;
-
-    // ---- pipeline layout：固定 push constant 布局（与 shaders_vk GLSL 一致）----
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.offset     = 0;
-    pushRange.size       = kPushTotalSize;
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.pushConstantRangeCount = 1;
-    plci.pPushConstantRanges    = &pushRange;
-    plci.setLayoutCount         = 1;
-    plci.pSetLayouts            = &_texSetLayout;
-    // 固定布局只创建一次，所有管线共用（此前每管线创建一个 layout 且从未销毁 → 泄漏）
-    if (_pipelineLayout == VK_NULL_HANDLE) {
-        VK_CHECK(vkCreatePipelineLayout(_device, &plci, nullptr, &_pipelineLayout));
-        setObjName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, reinterpret_cast<uint64_t>(_pipelineLayout), "RHI_PipelineLayout");
-    }
-
-    VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gpi.stageCount          = static_cast<uint32_t>(stages.size());
-    gpi.pStages             = stages.data();
-    gpi.pVertexInputState   = &vi;
-    gpi.pInputAssemblyState = &ia;
-    gpi.pViewportState      = &vp;
-    gpi.pRasterizationState = &rs;
-    gpi.pMultisampleState   = &ms;
-    gpi.pDepthStencilState  = &ds;
-    gpi.pColorBlendState    = &cb;
-    gpi.pDynamicState       = &dyn;
-    gpi.layout              = _pipelineLayout;
-    // B1：dynamic rendering —— 管线经 PipelineRenderingCreateInfo 绑定附件格式，
-    // 不再引用 VkRenderPass → swapchain 重建无需重建 PSO
-    VkPipelineRenderingCreateInfo prci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    prci.colorAttachmentCount    = 1;
-    prci.pColorAttachmentFormats = &_swapchainFormat;
-    prci.depthAttachmentFormat   = _depthFormat;
-    gpi.pNext               = &prci;
-    gpi.renderPass          = VK_NULL_HANDLE;
-    gpi.subpass             = 0;
-    // V3-0：管线创建失败返回空句柄（不 abort）；着色器模块已销毁
-    if (vkCreateGraphicsPipelines(_device, _pipelineCache, 1, &gpi, nullptr, &res.pipeline) != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] vkCreateGraphicsPipelines failed at %s:%d", __FILE__, __LINE__);
-        for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
-        return {};
-    }
-    {
-        char pname[48];
-        std::snprintf(pname, sizeof(pname), "RHI_Pipeline_%u", static_cast<uint32_t>(_pipelines.size() + 1));
-        setObjName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(res.pipeline), pname);
-    }
-
-    for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
-
-    RhiHandle base = _pipelines.alloc(std::move(res));
-    PipelineHandle h; h.id = base.id; h.gen = base.gen;
-    return h;
-}
-
 // ============================================================
 // 查询 / 其他
 // ============================================================
 VkImageView VulkanDevice::currentColorView() const {
-    if (_imageIndex < _swapchainViews.size()) return _swapchainViews[_imageIndex];
-    return VK_NULL_HANDLE;
+    return _swapchain.colorView(_imageIndex);
 }
 
 // B1：beginRenderPass 前的附件布局屏障。
@@ -2027,63 +1563,15 @@ VkImageView VulkanDevice::currentColorView() const {
 // depth：UNDEFINED（首帧，loadOp CLEAR 丢弃旧内容）→ DEPTH_ATTACHMENT_OPTIMAL，
 // 之后保持不变，每帧补一条同布局的访问链屏障（前帧写 → 本帧读写）。
 void VulkanDevice::recordBeginPassBarriers(VkCommandBuffer cb, bool clearColor, bool clearDepth) {
-    if (_imageIndex >= _swapchainLayouts.size()) return;
-    VkImageLayout colorOld = _swapchainLayouts[_imageIndex];
-    if (colorOld != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-        VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        bar.srcAccessMask = 0;   // PRESENT/UNDEFINED 无需 flush
-        bar.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        bar.oldLayout = colorOld;
-        bar.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.image = _swapchainImages[_imageIndex];
-        bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &bar);
-        _swapchainLayouts[_imageIndex] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
-    if (_depthLayout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL || clearDepth) {
-        VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        bar.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        bar.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
-                          | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        bar.oldLayout = _depthLayout;   // UNDEFINED 首帧 → 一次性转换；之后同布局访问链
-        bar.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        bar.image = _depthImage;
-        bar.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &bar);
-        _depthLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    }
+    _swapchain.recordBeginPassBarriers(cb, _imageIndex, clearColor, clearDepth);
 }
+
 
 // B1：present 前把当前 image 转回 PRESENT_SRC（仅当本帧渲染过）。
 // V3-0：本帧未渲染（acquire 后跳过，layout 仍 UNDEFINED，如 CHURN 压测的
 // 帧外 beginFrame/endFrame 循环）也必须转换——present 要求 PRESENT_SRC。
 void VulkanDevice::recordPresentBarrier(VkCommandBuffer cb) {
-    if (_imageIndex >= _swapchainLayouts.size()) return;
-    const VkImageLayout cur = _swapchainLayouts[_imageIndex];
-    if (cur != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-        && cur != VK_IMAGE_LAYOUT_UNDEFINED) return;
-    VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    bar.srcAccessMask = (cur == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                            ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : 0;
-    bar.dstAccessMask = 0;
-    bar.oldLayout = cur;
-    bar.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bar.image = _swapchainImages[_imageIndex];
-    bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
-                         0, nullptr, 0, nullptr, 1, &bar);
-    _swapchainLayouts[_imageIndex] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    _swapchain.recordPresentBarrier(cb, _imageIndex);
 }
 
 bool VulkanDevice::nativeHandles(NativeHandles& out) const {
@@ -2094,9 +1582,9 @@ bool VulkanDevice::nativeHandles(NativeHandles& out) const {
     out.renderPass     = 0;   // B1：dynamic rendering，无 renderpass（ImGui 走 UseDynamicRendering）
     out.queueFamily    = _queueFamily;
     out.minImageCount  = 2;
-    out.imageCount     = static_cast<uint32_t>(_swapchainImages.size());
-    out.colorFormat    = static_cast<uint32_t>(_swapchainFormat);
-    out.depthFormat    = static_cast<uint32_t>(_depthFormat);
+    out.imageCount     = _swapchain.imageCount();
+    out.colorFormat    = static_cast<uint32_t>(_swapchain.format());
+    out.depthFormat    = static_cast<uint32_t>(_swapchain.depthFormat());
     return true;
 }
 
@@ -2104,65 +1592,29 @@ IRHICommandList* VulkanDevice::commandList() {
     return _commandList.get();
 }
 
-// B6：追加一个描述符池（容量翻倍）。旧池不销毁——其上的 set 全生命周期有效，
-// 借此解除固定 maxSets=32 的规模上限（31 mesh 即 abort）。
-void VulkanDevice::growTexDescriptorPool() {
-    VkDescriptorPoolSize poolSizes[2]{};
-    poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = _poolCapSampler;
-    poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = _poolCapUniform;
-    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    pi.maxSets       = _poolCapSets;
-    pi.poolSizeCount = 2;
-    pi.pPoolSizes    = poolSizes;
-    VkDescriptorPool pool = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateDescriptorPool(_device, &pi, nullptr, &pool));
-    _texDescriptorPools.push_back(pool);
-    char name[48];
-    std::snprintf(name, sizeof(name), "RHI_TexDescriptorPool_%zu",
-                  _texDescriptorPools.size() - 1);
-    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, reinterpret_cast<uint64_t>(pool), name);
-    ENGINE_LOG_INFO("[VK] descriptor pool #%zu: sets=%u sampler=%u ubo=%u",
-                    _texDescriptorPools.size() - 1, _poolCapSets, _poolCapSampler, _poolCapUniform);
+// V3-3：管线创建/缓存交给 VkPipelines；设备只保留句柄表
+PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
+    VkPipelineRes res;
+    if (!_pipes.create(desc, _swapchain.format(), _swapchain.depthFormat(), res)) {
+        return {};
+    }
+    RhiHandle base = _pipelines.alloc(std::move(res));
+    PipelineHandle h; h.id = base.id; h.gen = base.gen;
+    return h;
 }
 
+// V3-3：描述符/绑定资源统一交给 VkDescriptors（布局、池、帧 uniform 环）
 void VulkanDevice::createDescriptorObjects() {
-    // set layout：binding0 = 绘制级 uniform UBO；bindings 1..4 = 采样器槽 0..3
-    VkDescriptorSetLayoutBinding bindings[5];
-    bindings[0] = {};
-    bindings[0].binding         = 0;
-    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (uint32_t i = 0; i < 4; ++i) {
-        bindings[i + 1] = {};
-        bindings[i + 1].binding         = i + 1;
-        bindings[i + 1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i + 1].descriptorCount = 1;
-        bindings[i + 1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    const uint32_t minAlign = static_cast<uint32_t>(
+        std::max<VkDeviceSize>(256, _caps.props.limits.minUniformBufferOffsetAlignment));
+    VkDescriptors::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
+        setObjName(type, handle, name);
+    };
+    if (!_descs.init(_device, minAlign, &_memAlloc, nameFn)) {
+        ENGINE_LOG_ERROR("[VK] descriptor objects init failed");
     }
-    // bindings 1..4 允许 update-after-bind（draw 期间更新纹理槽位）
-    VkDescriptorBindingFlags bindFlags[5]{};
-    for (uint32_t i = 1; i < 5; ++i) bindFlags[i] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-
-    VkDescriptorSetLayoutBindingFlagsCreateInfo bfi{
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    bfi.bindingCount  = 5;
-    bfi.pBindingFlags = bindFlags;
-
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = 5;
-    li.pBindings    = bindings;
-    li.pNext        = &bfi;
-    li.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    VK_CHECK(vkCreateDescriptorSetLayout(_device, &li, nullptr, &_texSetLayout));
-
-    growTexDescriptorPool();   // B6：首个池（容量见成员默认值，耗尽自动翻倍追加）
-    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<uint64_t>(_texSetLayout), "RHI_TexSetLayout");
-
-    // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用
+    // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用。
+    // V3-2 起只是身份与尺寸记录，没有 GPU 资源。
     _defaultUniformBlock = createUniformBlock(kDrawUniformsSize);
 }
 
@@ -2209,83 +1661,11 @@ void VulkanDevice::submitOneTime(std::function<void(VkCommandBuffer)> record, st
 }
 
 UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
+    // V3-2：不再分配 UBO/描述符集。数据统一进帧内环（见 allocDrawUniforms），
+    // 句柄只保留"这是一次绘制数据块"的身份和尺寸，业务侧调用方式不变。
     VkUniformBlockRes blk;
     blk.size = size;
-
-    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size  = size;
-    bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(_device, &bi, nullptr, &blk.buffer) != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] uniform block vkCreateBuffer failed (%u bytes)", size);
-        return {};
-    }
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(_device, blk.buffer, &req);
-    // E1：HOST_VISIBLE 子分配（页持久映射）
-    blk.memAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                                       | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (!blk.memAlloc.valid()) {
-        ENGINE_LOG_ERROR("[VK] uniform block alloc failed (%u bytes)", size);
-        vkDestroyBuffer(_device, blk.buffer, nullptr);
-        return {};
-    }
-    blk.memory = blk.memAlloc.memory;
-    blk.mapped = blk.memAlloc.mapped;
-    if (vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset) != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] uniform block vkBindBufferMemory failed at %s:%d", __FILE__, __LINE__);
-        vkDestroyBuffer(_device, blk.buffer, nullptr);
-        _memAlloc.free(blk.memAlloc);
-        return {};
-    }
-
-    // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器。
-    // B6：池耗尽（OUT_OF_POOL/ fragmentation）→ 扩容重试，无规模上限
-    // V3-0：descriptorSetCount/pSetLayouts 必须先于首次分配填写——
-    // 此前首次调用以 count=0 发出，验证层报 "descriptorSetCount must be
-    // greater than 0"（每次 createUniformBlock 一条）
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool     = _texDescriptorPools.back();
-    dai.descriptorSetCount = 1;
-    dai.pSetLayouts        = &_texSetLayout;
-    VkResult setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
-    if (setResult == VK_ERROR_OUT_OF_POOL_MEMORY || setResult == VK_ERROR_FRAGMENTED_POOL) {
-        growTexDescriptorPool();
-        dai.descriptorPool = _texDescriptorPools.back();
-        setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
-    }
-    VK_CHECK(setResult);
-
-    VkDescriptorBufferInfo bufInfo{blk.buffer, 0, size};
-    VkWriteDescriptorSet writes[5]{};
-    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writes[0].dstSet = blk.set;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].descriptorCount = 1;
-    writes[0].pBufferInfo = &bufInfo;
-
-    const VkTextureRes& white = _textures.get(_whiteTex.id);
-    const VkTextureRes& whiteCube = _textures.get(_whiteCubeTex.id);
-    VkDescriptorImageInfo imgInfos[4];
-    for (uint32_t i = 0; i < 4; ++i) {
-        const bool isCubeSlot = (i == 3);   // 槽 3 = cubemap（天空盒）
-        const VkTextureRes& fill = isCubeSlot ? whiteCube : white;
-        imgInfos[i] = { fill.sampler, fill.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        writes[i + 1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[i + 1].dstSet = blk.set;
-        writes[i + 1].dstBinding = i + 1;
-        writes[i + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i + 1].descriptorCount = 1;
-        writes[i + 1].pImageInfo = &imgInfos[i];
-    }
-    vkUpdateDescriptorSets(_device, 5, writes, 0, nullptr);
-    char ubname[48];
-    std::snprintf(ubname, sizeof(ubname), "RHI_UniformBlock_%u", static_cast<uint32_t>(_uniformBlocks.size() + 1));
-    setObjName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(blk.buffer), ubname);
-    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(blk.set), ubname);
-
-    RhiHandle base = _uniformBlocks.alloc(std::move(blk));
+    RhiHandle base = _uniformBlocks.alloc(blk);
     UniformBlockHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }
@@ -2297,11 +1677,14 @@ void VulkanDevice::bindInstanceVertexBuffer(VkCommandBuffer cb, BufferHandle h) 
     vkCmdBindVertexBuffers(cb, 1, 1, &vb, &offset);   // binding1 = 实例率
 }
 
-uint64_t VulkanDevice::nativeHandle(RhiHandle handle) const {
-    if (_buffers.alive(handle)) {
-        return reinterpret_cast<uint64_t>(_buffers.get(handle.id).buffer);
-    }
-    return 0;
+uint64_t VulkanDevice::nativeBuffer(BufferHandle h) const {
+    return _buffers.alive(h) ? reinterpret_cast<uint64_t>(_buffers.get(h.id).buffer) : 0;
+}
+uint64_t VulkanDevice::nativeTexture(TextureHandle h) const {
+    return _textures.alive(h) ? reinterpret_cast<uint64_t>(_textures.get(h.id).image) : 0;
+}
+uint64_t VulkanDevice::nativePipeline(PipelineHandle h) const {
+    return _pipelines.alive(h) ? reinterpret_cast<uint64_t>(_pipelines.get(h.id).pipeline) : 0;
 }
 
 // V3-1：句柄有效性（id 范围 + gen 代际校验）
@@ -2353,11 +1736,11 @@ DeviceCapabilities VulkanDevice::capabilities() const {
     caps.details = _caps.toCapabilities();
     caps.details.push_back({"验证层", _validationEnabled ? "enabled" : "disabled"});
     caps.details.push_back({"debug_utils", _debugUtilsEnabled ? "enabled" : "disabled"});
-    if (_pipelineCache) {
+    if (_pipes.cacheActive()) {
         char buf[96];
         std::snprintf(buf, sizeof(buf), "%s, 启动时 %zu B",
-                      _pipelineCacheFromDisk ? "loaded" : "new",
-                      _pipelineCacheLoadedBytes);
+                      _pipes.cacheFromDisk() ? "loaded" : "new",
+                      _pipes.cacheBytes());
         caps.details.push_back({"pipeline cache", buf});
     } else {
         caps.details.push_back({"pipeline cache", "disabled"});

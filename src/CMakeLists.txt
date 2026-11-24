@@ -30,12 +30,16 @@ file(GLOB_RECURSE ENGINE_HEADERS "${SRC_ENGINE_ROOT}/*.h")
 # ---- Vulkan 可选后端（探测结果由顶层 CMakeLists 提供：ENGINE_HAS_VULKAN）----
 if(ENGINE_HAS_VULKAN)
     file(GLOB SRC_RHI_VK "${SRC_ENGINE_ROOT}/rhi/vk/*.cpp")
+    # detail/ 目前只有 Vulkan 专用的帧内 uniform 环（GL-only 构建不能编）
+    file(GLOB SRC_RHI_DETAIL "${SRC_ENGINE_ROOT}/rhi/detail/*.cpp")
 else()
     set(SRC_RHI_VK "")
+    set(SRC_RHI_DETAIL "")
 endif()
 
 add_library(engine STATIC
     ${SRC_RHI}
+    ${SRC_RHI_DETAIL}
     ${SRC_RHI_GL}
     ${SRC_RHI_VK}
     ${SRC_RENDER}

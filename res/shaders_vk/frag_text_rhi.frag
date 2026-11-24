@@ -2,7 +2,7 @@
 // Vulkan 变体：SDF 文字 片元着色器。
 // 注意设备描述符布局固定：binding0 = 绘制级 UBO（文字不消费），采样器从 1 起
 // ——图集绑在 binding1（bindTexture 槽 0 的固定位置）
-layout(set = 0, binding = 1) uniform sampler2D uAtlas;
+layout(set = 1, binding = 0) uniform sampler2D uAtlas;
 
 layout(push_constant) uniform PC {
     mat4 uMatrixMVP;   // 占位（顶点消费，保持布局一致）
