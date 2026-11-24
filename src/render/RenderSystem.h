@@ -106,16 +106,21 @@ private:
 	// D2: RHI 拾取（ID 渲染 + 回读）。requestPick 记录点击点，第 N 帧渲染 ID 图、
 	// 第 N+1 帧回读 1px 解码对象 ID。RHI_PICK_TEST=1 启动后自动在屏幕中心拾取一次。
 	void ensurePickResources();
-	void requestPick(double x, double y);
+	void requestPick(double x, double y, bool isHover = false);
 	void runPickPass();
 	rhi::PipelineHandle m_pickPipeline;
 	rhi::RenderTargetHandle m_pickRT;
 	struct PickRequest {
 		bool  pending = false;   // 已请求、待渲染
 		bool  rendered = false;  // 渲染完成、待回读
+		bool  isHover = false;   // 悬停拾取（命中写 hoverId 而非 selectedId）
 		uint32_t x = 0, y = 0;   // 回读点（RT 像素坐标）
 	};
 	PickRequest m_pickReq;
+	// 悬停拾取节流（D8 扩展）：光标移动 ≥ 阈值且间隔 ≥ 帧数才请求，
+	// 避免每次 mousemove 都渲染整幅 ID 图
+	double   m_hoverLastX = -1e9, m_hoverLastY = -1e9;
+	int      m_hoverCooldown = 0;
 	void loadTexture(const std::filesystem::path& dirPath);
 	// V3-0 验证设施（RHI_CHURN=<N>）：N 轮创建/销毁纹理，压测延迟销毁队列
 	// 与内存分配器账目（VK 配合验证层观察 0 error / 退出 live=0）

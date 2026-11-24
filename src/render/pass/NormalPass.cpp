@@ -32,7 +32,7 @@ void CNormalPass::draw(Scene* pScene) {
     // 顺序契约 = 不透明 → 天空 → overlay/透明）
     const auto camPos = pScene->GetActiveCamera()->getPossition();
     for (auto& obj : pScene->getSortedDrawList(camPos)) {
-        if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) continue;
+        if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) continue;
         obj->draw(mpMatrix);
     }
 }

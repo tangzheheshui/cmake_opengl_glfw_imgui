@@ -35,6 +35,7 @@ uniform Materail uMaterail;
 uniform Light uLight;
 uniform vec3 uCameraPos;
 uniform vec4 uHighlight;   // D8：选中高亮 rgb 颜色 + a 强度（0 = 关）
+uniform vec4 uHover;       // 悬停高亮（更弱的提示色，不覆盖选中）
 uniform float uOpacity;    // D3：不透明度（1 = 不透明；<1 走 blend 管线）
 uniform sampler2D texture_diffuse0;
 uniform sampler2D texture_specular0;
@@ -79,6 +80,7 @@ void main()
 
     // D8：选中高亮混合（uHighlight.a = 0 时无效果）
     result = mix(result, uHighlight.rgb, uHighlight.a);
+    result = mix(result, uHover.rgb, uHover.a);   // 悬停提示（选中优先级更高）
 
     FragColor = vec4(result, uOpacity);   // D3：材质不透明度
 }

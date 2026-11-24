@@ -6,6 +6,9 @@
 //
 
 #include "scene.h"
+#include "RenderSystem.h"
+#include "model/model.h"
+#include <algorithm>
 #include <glm/glm.hpp>
 #include <vector>
 #include "model/model.h"
@@ -46,6 +49,15 @@ void Scene::AddObj(std::shared_ptr<BaseDraw> obj) {
     m_vec_drawobj.push_back(obj);
 }
 
+// D3/X-ray：透明分相谓词（X-ray 开启时模型整体视为透明），各绘制路径共用
+bool Scene::isTransparentDraw(const std::shared_ptr<BaseDraw>& obj) {
+    if (obj->getAlpha() < 0.999f) return true;
+    if (RenderSystem::getInstance().settings().xrayEnabled) {
+        return std::dynamic_pointer_cast<Model>(obj) != nullptr;
+    }
+    return false;
+}
+
 // D3：透明排序——不透明按加入顺序先画；透明（alpha < 1）按到相机距离
 // 降序（远 → 近）后画。稳定排序保证同深度时画序确定（两端一致的前提）。
 std::vector<std::shared_ptr<BaseDraw>> Scene::getSortedDrawList(const glm::vec3& camPos) const {
@@ -53,8 +65,8 @@ std::vector<std::shared_ptr<BaseDraw>> Scene::getSortedDrawList(const glm::vec3&
     std::vector<std::shared_ptr<BaseDraw>> transparent;
     opaque.reserve(m_vec_drawobj.size());
     for (const auto& obj : m_vec_drawobj) {
-        if (obj->getAlpha() < 0.999f) transparent.push_back(obj);
-        else                          opaque.push_back(obj);
+        if (isTransparentDraw(obj)) transparent.push_back(obj);
+        else                        opaque.push_back(obj);
     }
     std::stable_sort(transparent.begin(), transparent.end(),
                      [&camPos](const std::shared_ptr<BaseDraw>& a,

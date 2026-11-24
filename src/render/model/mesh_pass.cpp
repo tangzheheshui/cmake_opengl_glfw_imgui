@@ -48,6 +48,15 @@ static glm::vec4 wireColorOf() {
     return glm::vec4(0.13f, 0.14f, 0.18f, 1.0f);
 }
 
+// 悬停提示值（淡白蓝；选中对象不叠加悬停色）
+static glm::vec4 hoverValueOf(uint32_t flags) {
+    if (!(flags & DrawOption::DRAW_HOVER) || (flags & DrawOption::DRAW_HIGHLIGHT)) {
+        return glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    const float strength = RenderSystem::getInstance().settings().hoverStrength;
+    return glm::vec4(0.60f, 0.75f, 0.95f, strength);
+}
+
 // D8：高亮 push/uniform 值（选中 = 淡蓝 × 强度；未选中 = 全零即关闭）
 static glm::vec4 highlightValueOf(uint32_t flags) {
     if (!(flags & DrawOption::DRAW_HIGHLIGHT)) {
@@ -91,6 +100,10 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
     {
         const glm::vec4 hl = highlightValueOf(flags);
         shader->setFloat4("uHighlight", hl.x, hl.y, hl.z, hl.w);
+    }
+    {
+        const glm::vec4 hv = hoverValueOf(flags);
+        shader->setFloat4("uHover", hv.x, hv.y, hv.z, hv.w);
     }
 
     // D3：不透明度（GL 遗留路径的 blend 开关在 Model::draw，避免逐网格切状态）
@@ -455,6 +468,10 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     {
         const glm::vec4 hl = highlightValueOf(flags);
         cmd->setUniform("uHighlight", rhi::UniformValue::fromVec4(glm::value_ptr(hl)));
+    }
+    {
+        const glm::vec4 hv = hoverValueOf(flags);
+        cmd->setUniform("uHover", rhi::UniformValue::fromVec4(glm::value_ptr(hv)));
     }
 
     // 绘制级 uniform（灯光/材质/相机）

@@ -292,7 +292,7 @@ void RenderSystem::drawRhiSceneContents() {
                 // 透明与 overlay 不写深度，天空若在其后绘制会因深度测试覆盖
                 // 它们的输出（透明被覆盖 = 混合结果丢失；overlay 被覆盖 = 全消失）。
                 for (auto& obj : drawList) {
-                    if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) continue;
+                    if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) continue;
                     obj->draw(vp);
                 }
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
@@ -302,7 +302,7 @@ void RenderSystem::drawRhiSceneContents() {
                     }
                 }
                 for (auto& obj : drawList) {
-                    if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) {
+                    if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) {
                         obj->draw(vp);
                     }
                 }
@@ -585,7 +585,7 @@ void RenderSystem::ensurePickResources() {
     }
 }
 
-void RenderSystem::requestPick(double x, double y) {
+void RenderSystem::requestPick(double x, double y, bool isHover) {
     if (!m_rhiDevice) return;
     // 窗口逻辑坐标 → framebuffer 像素坐标（Retina 下两者不同；比例来自
     // InitDesc 的 windowWidth/windowHeight，C1b 起引擎不查询窗口系统）
@@ -594,6 +594,7 @@ void RenderSystem::requestPick(double x, double y) {
     const double sy = static_cast<double>(m_frameH) / m_windowH;
     m_pickReq.pending  = true;
     m_pickReq.rendered = false;
+    m_pickReq.isHover  = isHover;
     m_pickReq.x = static_cast<uint32_t>(x * sx);
     m_pickReq.y = static_cast<uint32_t>(y * sy);
 }
@@ -609,6 +610,19 @@ void RenderSystem::runPickPass() {
     // requestPick 入参 = 窗口逻辑坐标（内部按 InitDesc 比例换算 framebuffer 像素）
     if (selfTest && !m_pickReq.pending && !m_pickReq.rendered && ++selfTestFrame == 40) {
         requestPick(m_windowW / 2.0, m_windowH * 0.55);   // 鸭子群中心附近
+    }
+    // D8 悬停拾取（节流）：光标移动 ≥ 3px、冷却 ≥ 6 帧、无待处理拾取时请求
+    if (m_settings.hoverEnabled && !m_pickReq.pending && !m_pickReq.rendered
+        && m_hoverLastX > -1e8 && --m_hoverCooldown <= 0) {
+        static double s_lastHoverX = -1e9, s_lastHoverY = -1e9;
+        const double dx = m_hoverLastX - s_lastHoverX;
+        const double dy = m_hoverLastY - s_lastHoverY;
+        if (dx * dx + dy * dy > 9.0) {
+            s_lastHoverX = m_hoverLastX;
+            s_lastHoverY = m_hoverLastY;
+            m_hoverCooldown = 6;
+            requestPick(m_hoverLastX, m_hoverLastY, /*isHover=*/true);
+        }
     }
     if (!m_pickReq.pending && !m_pickReq.rendered) return;
 
@@ -723,11 +737,20 @@ void RenderSystem::runPickPass() {
         return;
     }
     if (px[3] < 128) {
-        ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", rb.x, rb.y);
+        if (!m_pickReq.isHover) {
+            ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", rb.x, rb.y);
+        }
+        if (m_pickReq.isHover) {
+            m_settings.hoverId = 0;   // 悬停落空 → 清除提示
+        }
         return;
     }
     // BGRA 序：R=px[2]（ID 低字节） G=px[1]（ID 高字节）
     const uint16_t hitId = static_cast<uint16_t>(px[2] | (px[1] << 8));
+    if (m_pickReq.isHover) {
+        m_settings.hoverId = hitId;   // 悬停命中 → 提示色（不改变选中）
+        return;
+    }
     // 解析对象：遍历场景 Model，匹配 GetID()；命中即选中（D8 高亮）
     for (auto& obj : mCurScene->GetObjs()) {
         auto model = std::dynamic_pointer_cast<Model>(obj);
@@ -961,6 +984,9 @@ void RenderSystem::onMouseMiddleDown(double x, double y) {
 }
 
 void RenderSystem::onMouseMove(double x, double y) {
+    // D8 悬停：光标移动 ≥ 3px 记为悬停候选（每帧节流判断；拖拽中不悬停拾取）
+    m_hoverLastX = x;
+    m_hoverLastY = y;
     if (!mMouseState.isMouseLeftPressed) {
         return;
     }

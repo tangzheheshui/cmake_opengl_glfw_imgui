@@ -137,6 +137,16 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         if (const char* m = std::getenv("RHI_DISPLAY_MODE")) {   // D5 验证开关：0/1/2
             RenderSystem::getInstance().settings().displayMode = std::atoi(m);
         }
+        if (std::getenv("RHI_XRAY")) {   // X-ray 验证开关
+            auto& st = RenderSystem::getInstance().settings();
+            st.xrayEnabled = true;
+            if (const char* o = std::getenv("RHI_XRAY_OPACITY")) {
+                st.xrayOpacity = static_cast<float>(std::atof(o));
+            }
+        }
+        if (std::getenv("RHI_HOVER_OFF")) {   // 悬停拾取关闭（压测/对比用）
+            RenderSystem::getInstance().settings().hoverEnabled = false;
+        }
         auto fontMng = RenderSystem::getInstance().GetFontMng();
         auto objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
         objText->SetText("test");

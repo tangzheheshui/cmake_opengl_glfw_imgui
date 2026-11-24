@@ -92,7 +92,13 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
                 settings.selectedId = 0;
             }
         }
+        ImGui::Checkbox("悬停提示", &settings.hoverEnabled);
         ImGui::TextDisabled("点击模型即选中（拾取）；点空白不清除，用按钮取消");
+        ImGui::Separator();
+        ImGui::Checkbox("X-ray 透视", &settings.xrayEnabled);
+        if (settings.xrayEnabled) {
+            ImGui::SliderFloat("透视不透明度", &settings.xrayOpacity, 0.05f, 0.9f, "%.2f");
+        }
     }
 
     // ---- 全局 ----
