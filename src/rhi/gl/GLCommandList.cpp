@@ -338,6 +338,7 @@ void GLCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, 
     pipe.program->setFloat("uMaterail.shininess_strength", u->materialParams.y);
     pipe.program->setBool("uMaterail.has_normal_tex", u->materialParams.z > 0.5f);
     pipe.program->setBool("uMaterail.has_specular_tex", u->materialParams.w > 0.5f);
+    pipe.program->setFloat("uOpacity", u->misc.x);   // D3：不透明度
 }
 
 void GLCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {

@@ -34,6 +34,8 @@ struct Light {
 uniform Materail uMaterail;
 uniform Light uLight;
 uniform vec3 uCameraPos;
+uniform vec4 uHighlight;   // D8：选中高亮 rgb 颜色 + a 强度（0 = 关）
+uniform float uOpacity;    // D3：不透明度（1 = 不透明；<1 走 blend 管线）
 uniform sampler2D texture_diffuse0;
 uniform sampler2D texture_specular0;
 uniform sampler2D texture_normal0;
@@ -74,6 +76,9 @@ void main()
             result += specular;
         }
     }
-    
-    FragColor = vec4(result, 1.0);
+
+    // D8：选中高亮混合（uHighlight.a = 0 时无效果）
+    result = mix(result, uHighlight.rgb, uHighlight.a);
+
+    FragColor = vec4(result, uOpacity);   // D3：材质不透明度
 }

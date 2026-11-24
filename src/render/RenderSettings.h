@@ -4,6 +4,8 @@
 //
 //  原则：只放"渲染管线级"开关。业务层（相机/光照）参数下一阶段再接入。
 //
+#include <cstdint>
+
 #ifndef RenderSettings_h
 #define RenderSettings_h
 
@@ -13,6 +15,7 @@ struct RenderSettings {
     bool rhiTexQuad = false;        // RHI 贴图四边形（M4：验证纹理采样 + 描述符链路）
     bool lineUseRHI = false;        // Line 走 RHI 绘制（M2 迁移验证，已通过逐像素等价性对比）
     bool modelUseRHI = false;       // 模型走 RHI 绘制（M4.2 迁移，GL 模式下可切换对比）
+    bool textUseRHI = false;        // 文字走 RHI 绘制（D4 SDF；VK 后端强制走 RHI）
 
     // ---- 帧级 Pass 开关 ----
     bool drawShadowPass = true;
@@ -24,6 +27,12 @@ struct RenderSettings {
     bool  clipPlaneEnabled  = false;
     float clipPlaneNormal[3] = {1.0f, 0.0f, 0.0f};
     float clipPlaneDistance  = 0.0f;
+
+    // ---- CAD 选中高亮（D8）----
+    // selectedId = 拾取命中的对象 ID（BaseDraw::GetID，0 = 无选中）；
+    // 高亮颜色固定淡蓝，强度面板可调（0 = 关）
+    uint16_t selectedId        = 0;
+    float    highlightStrength = 0.40f;
 
     // ---- 全局 ----
     bool vsync          = true;

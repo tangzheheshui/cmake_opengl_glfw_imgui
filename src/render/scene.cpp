@@ -46,3 +46,24 @@ void Scene::AddObj(std::shared_ptr<BaseDraw> obj) {
     m_vec_drawobj.push_back(obj);
 }
 
+// D3：透明排序——不透明按加入顺序先画；透明（alpha < 1）按到相机距离
+// 降序（远 → 近）后画。稳定排序保证同深度时画序确定（两端一致的前提）。
+std::vector<std::shared_ptr<BaseDraw>> Scene::getSortedDrawList(const glm::vec3& camPos) const {
+    std::vector<std::shared_ptr<BaseDraw>> opaque;
+    std::vector<std::shared_ptr<BaseDraw>> transparent;
+    opaque.reserve(m_vec_drawobj.size());
+    for (const auto& obj : m_vec_drawobj) {
+        if (obj->getAlpha() < 0.999f) transparent.push_back(obj);
+        else                          opaque.push_back(obj);
+    }
+    std::stable_sort(transparent.begin(), transparent.end(),
+                     [&camPos](const std::shared_ptr<BaseDraw>& a,
+                               const std::shared_ptr<BaseDraw>& b) {
+                         const float da = glm::length(a->worldCenter() - camPos);
+                         const float db = glm::length(b->worldCenter() - camPos);
+                         return da > db;   // 远的先画
+                     });
+    opaque.insert(opaque.end(), transparent.begin(), transparent.end());
+    return opaque;
+}
+

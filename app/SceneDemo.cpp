@@ -4,6 +4,7 @@
 #include "SceneDemo.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 
@@ -106,8 +107,26 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     pScene->AddObj(line_z);
     pScene->SetSkyBox(objSky);
 
-    // 文字（GL 专属：字形纹理为 GL 实现，VK 文字渲染待迁移）
-    if (!useVulkan) {
+    // D3 验证开关：RHI_ALPHA_DEMO=1 加一只透明鸭子（默认关，不影响像素门禁；
+    // RHI_ALPHA=<0..1> 覆盖透明度，1.0 用于隔离几何/混合问题）
+    if (std::getenv("RHI_ALPHA_DEMO")) {
+        auto objAlpha = std::make_shared<Model>();
+        objAlpha->LoadFile(engine::fs::utf8FromPath(
+            engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+        objAlpha->setCount(1);
+        objAlpha->setPosition(0, {-4, 0, 2});
+        objAlpha->setScale(0, 0.01);
+        const float a = std::getenv("RHI_ALPHA") ? static_cast<float>(std::atof(std::getenv("RHI_ALPHA")))
+                                                 : 0.45f;
+        objAlpha->setAlpha(a);
+        pScene->AddObj(objAlpha);
+    }
+
+    // 文字（D4：两端走 SDF RHI 图集路径；GL 可经 textUseRHI 切回 legacy 逐字形）
+    {
+        if (std::getenv("RHI_TEXT_RHI")) {   // GL 调试开关：强制文字走 RHI 路径
+            RenderSystem::getInstance().settings().textUseRHI = true;
+        }
         auto fontMng = RenderSystem::getInstance().GetFontMng();
         auto objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
         objText->SetText("test");

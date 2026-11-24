@@ -26,8 +26,13 @@ void CNormalPass::draw(Scene* pScene) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     // 矩阵
     auto mpMatrix = pScene->GetActiveCamera()->GetVPMatrix();
-    
-    for (auto obj : pScene->GetObjs()) {
+
+    // D3/D4：本 Pass 只画不透明非 overlay 对象（overlay/透明在 CSkyPass
+    // 的天空之后画——天空盒深度测试会覆盖不写深度的像素，
+    // 顺序契约 = 不透明 → 天空 → overlay/透明）
+    const auto camPos = pScene->GetActiveCamera()->getPossition();
+    for (auto& obj : pScene->getSortedDrawList(camPos)) {
+        if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) continue;
         obj->draw(mpMatrix);
     }
 }

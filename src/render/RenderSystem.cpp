@@ -272,14 +272,38 @@ void RenderSystem::drawRhiSceneContents() {
             const auto fb = m_rhiDevice->framebufferSize();   // C1b：设备尺寸，不查窗口
             int fw = static_cast<int>(fb.width), fh = static_cast<int>(fb.height);
 
+            // D3：透明排序绘制列表（两端共用同一排序；每帧算一次）
+            const auto drawList = mCurScene->getSortedDrawList(cam->getPossition());
+            static bool sortLogged = false;
+            if (!sortLogged && std::getenv("RHI_ALPHA_DEMO")) {
+                sortLogged = true;
+                for (size_t i = 0; i < drawList.size(); ++i) {
+                    auto model = std::dynamic_pointer_cast<Model>(drawList[i]);
+                    if (model && model->getAlpha() < 0.999f) {
+                        const glm::vec3 c = model->worldCenter();
+                        ENGINE_LOG_INFO("[SORT] idx=%zu model id=%u alpha=%.2f center=(%.1f,%.1f,%.1f)",
+                                        i, model->GetID(), model->getAlpha(), c.x, c.y, c.z);
+                    }
+                }
+            }
+
             auto drawSceneContent = [&]() {
-                for (auto& obj : mCurScene->GetObjs()) {
+                // D3/D4 顺序契约：不透明 → 天空盒 → overlay/透明（视深排序）。
+                // 透明与 overlay 不写深度，天空若在其后绘制会因深度测试覆盖
+                // 它们的输出（透明被覆盖 = 混合结果丢失；overlay 被覆盖 = 全消失）。
+                for (auto& obj : drawList) {
+                    if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) continue;
                     obj->draw(vp);
                 }
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
                 if (m_settings.drawSkyPass) {
                     if (auto sky = mCurScene->GetSkyBox()) {
                         sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
+                    }
+                }
+                for (auto& obj : drawList) {
+                    if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) {
+                        obj->draw(vp);
                     }
                 }
             };
@@ -658,6 +682,13 @@ void RenderSystem::runPickPass() {
         for (const auto& kv : idCount) {
             ENGINE_LOG_INFO("[PICK][selftest] id=%u pixels=%zu", kv.first, kv.second);
         }
+        // D8 门禁：自测自动选中命中集合中最小 ID 的对象，高亮帧可经
+        // RHI_DUMP 目视；点击空白不改变选中
+        if (!idCount.empty()) {
+            m_settings.selectedId = idCount.begin()->first;
+            ENGINE_LOG_INFO("[HIGHLIGHT] auto-selected id=%u (strength=%.2f)",
+                            m_settings.selectedId, m_settings.highlightStrength);
+        }
         // 调试导出：ID 图原样落盘（PPM）
         {
             std::error_code ec;
@@ -697,11 +728,12 @@ void RenderSystem::runPickPass() {
     }
     // BGRA 序：R=px[2]（ID 低字节） G=px[1]（ID 高字节）
     const uint16_t hitId = static_cast<uint16_t>(px[2] | (px[1] << 8));
-    // 解析对象：遍历场景 Model，匹配 GetID()
+    // 解析对象：遍历场景 Model，匹配 GetID()；命中即选中（D8 高亮）
     for (auto& obj : mCurScene->GetObjs()) {
         auto model = std::dynamic_pointer_cast<Model>(obj);
         if (model && model->GetID() == hitId) {
-            ENGINE_LOG_INFO("[PICK] HIT id=%u (%s)", hitId, "Model");
+            ENGINE_LOG_INFO("[PICK] HIT id=%u (Model) -> selected", hitId);
+            m_settings.selectedId = hitId;   // D8：选中高亮
             return;
         }
     }

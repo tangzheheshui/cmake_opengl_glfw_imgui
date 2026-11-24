@@ -58,6 +58,8 @@ public:
     virtual bool draw(const Matrix &mtx) override;
     virtual bool drawShadow() override;
     virtual bool drawPick() override;
+    // D3：透明排序深度键 = 第一个实例的平移（多实例取代表；CAD 单件常用）
+    glm::vec3 worldCenter() const override;
     // D2: RHI 拾取绘制（pick RT 内调用；调用方管理 pass 与回读）
     bool drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj);
     virtual void update() override;

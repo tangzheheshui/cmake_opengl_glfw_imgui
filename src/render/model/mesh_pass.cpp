@@ -43,7 +43,16 @@ bool MeshPass::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, 
     return true;
 }
 
-bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit) {
+// D8：高亮 push/uniform 值（选中 = 淡蓝 × 强度；未选中 = 全零即关闭）
+static glm::vec4 highlightValueOf(uint32_t flags) {
+    if (!(flags & DrawOption::DRAW_HIGHLIGHT)) {
+        return glm::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    const float strength = RenderSystem::getInstance().settings().highlightStrength;
+    return glm::vec4(0.25f, 0.55f, 1.0f, strength);
+}
+
+bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity) {
     // M4.2: RHI 路由（Vulkan 后端必走；GL 后端可经 modelUseRHI 开关切换对比）
     {
         auto& rs = RenderSystem::getInstance();
@@ -51,7 +60,7 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
         bool useRHI = device && (device->backend() == rhi::Backend::Vulkan
                                  || rs.settings().modelUseRHI);
         if (useRHI) {
-            return DrawRHI(matModel, mtx, flags);
+            return DrawRHI(matModel, mtx, flags, opacity);
         }
     }
 
@@ -72,6 +81,15 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
             : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         shader->setFloat4("uClipPlane", clipPlane.x, clipPlane.y, clipPlane.z, clipPlane.w);
     }
+
+    // D8：选中高亮（未选中传全零，mix 无效果）
+    {
+        const glm::vec4 hl = highlightValueOf(flags);
+        shader->setFloat4("uHighlight", hl.x, hl.y, hl.z, hl.w);
+    }
+
+    // D3：不透明度（GL 遗留路径的 blend 开关在 Model::draw，避免逐网格切状态）
+    shader->setFloat("uOpacity", opacity);
 
     bool bDrawPick = (flags & DrawOption::DRAW_PICK);
  
@@ -276,6 +294,7 @@ void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     desc.primitive = rhi::PrimitiveType::Triangles;
     desc.cull      = rhi::CullMode::Back;
     desc.depth     = { true, true };
+    _lastPipelineDesc = desc;   // D3：blend 变体的复制母本
     m_rhiPipeline = device->createPipeline(desc);
 
     rhi::BufferDesc vbDesc;
@@ -300,7 +319,7 @@ void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     m_rhiBuilt = true;
 }
 
-bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags) {
+bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity) {
     auto& rs = RenderSystem::getInstance();
     auto* device = rs.rhiDevice();
     if (!device) return false;
@@ -334,7 +353,21 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
         return false;
     }
 
-    cmd->bindPipeline(m_rhiPipeline);
+    // D3：透明对象走 blend 变体（depthWrite 关 + srcAlpha 混合；管线惰性建，
+    // 附件格式与 opaque 一致——B4 契约的 swapchain 兼容约束）
+    const bool transparent = (opacity < 0.999f);
+    if (transparent && !m_rhiPipelineBlend.valid()) {
+        rhi::GraphicsPipelineDesc bdesc = _lastPipelineDesc;
+        bdesc.blend.blendEnable = true;
+        bdesc.depth.depthWrite  = false;
+        m_rhiPipelineBlend = device->createPipeline(bdesc);
+        if (!m_rhiPipelineBlend.valid()) {
+            ENGINE_LOG_WARN_ONCE("[RHI] blend pipeline creation failed; falls back to opaque");
+        }
+    }
+    const rhi::PipelineHandle pipe = (transparent && m_rhiPipelineBlend.valid())
+                                         ? m_rhiPipelineBlend : m_rhiPipeline;
+    cmd->bindPipeline(pipe);
 
     // uViewProj → push constant offset 0
     glm::mat4 vp = Matrix::toMatrix(mtx);
@@ -348,6 +381,12 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
                         settings.clipPlaneNormal[2], settings.clipPlaneDistance)
             : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         cmd->setUniform("uClipPlane", rhi::UniformValue::fromVec4(glm::value_ptr(clipPlane)));
+    }
+
+    // D8：选中高亮 → push constant offset 80（B6 反射表按名定位）
+    {
+        const glm::vec4 hl = highlightValueOf(flags);
+        cmd->setUniform("uHighlight", rhi::UniformValue::fromVec4(glm::value_ptr(hl)));
     }
 
     // 绘制级 uniform（灯光/材质/相机）
@@ -366,6 +405,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     du.materialSpecular = m_material->specular;
     bool hasNormalTex = false, hasSpecularTex = false;
     du.materialParams = glm::vec4(m_material->shininess, m_material->shininess_strength, 0, 0);
+    du.misc = glm::vec4(opacity, 0.0f, 0.0f, 0.0f);   // D3：不透明度（首次提交，纹理标记稍后重提）
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));
 
     // 材质纹理：槽位与 GL 路径一致（按材质纹理顺序即 GL 的 texture unit 序）
@@ -440,6 +480,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     }
     du.materialParams = glm::vec4(m_material->shininess, m_material->shininess_strength,
                                   hasNormalTex ? 1.0f : 0.0f, hasSpecularTex ? 1.0f : 0.0f);
+    du.misc = glm::vec4(opacity, 0.0f, 0.0f, 0.0f);   // D3：重提保持 opacity
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));   // 重提（含纹理标记）
 
     cmd->bindVertexBuffer(m_rhiVB);

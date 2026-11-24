@@ -53,6 +53,7 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
     if (ImGui::CollapsingHeader("迁移验证", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Line 走 RHI", &settings.lineUseRHI);
         ImGui::Checkbox("模型走 RHI", &settings.modelUseRHI);
+        ImGui::Checkbox("文字走 RHI (SDF)", &settings.textUseRHI);
         ImGui::TextDisabled("关闭 = 原 GL 路径，打开 = RHI 路径，可实时切换对比");
     }
     ImGui::Separator();
@@ -73,13 +74,23 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
         }
     }
 
-    // ---- CAD 显示（D7 剖切平面）----
+    // ---- CAD 显示（D7 剖切 / D8 选中高亮）----
     if (ImGui::CollapsingHeader("CAD 显示", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("剖切平面", &settings.clipPlaneEnabled);
         if (settings.clipPlaneEnabled) {
             ImGui::SliderFloat("剖切位置 X", &settings.clipPlaneDistance, -20.0f, 20.0f);
             ImGui::TextDisabled("法线 (1,0,0)：保留 dot(n,p)+d >= 0 一侧");
         }
+        ImGui::Separator();
+        ImGui::Text("选中对象 ID: %u%s", settings.selectedId,
+                    settings.selectedId == 0 ? "（无）" : "");
+        if (settings.selectedId != 0) {
+            ImGui::SliderFloat("高亮强度", &settings.highlightStrength, 0.0f, 1.0f, "%.2f");
+            if (ImGui::Button("取消选中")) {
+                settings.selectedId = 0;
+            }
+        }
+        ImGui::TextDisabled("点击模型即选中（拾取）；点空白不清除，用按钮取消");
     }
 
     // ---- 全局 ----
