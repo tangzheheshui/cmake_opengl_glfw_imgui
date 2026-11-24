@@ -3,20 +3,19 @@
 //  RHI OpenGL 后端 - 设备实现
 //
 //  定位：把 Vulkan 语义的显式调用"翻译"回 GL 状态机。
-//  现有的 Shader 类（render/shader.h）直接复用，负责 GLSL 编译。
+//  GLSL 编译由 rhi/gl/GLProgram 承载（L0 内聚，不再依赖 render 层）。
 //
 #ifndef GLDevice_h
 #define GLDevice_h
 
 #include "../IRHIDevice.h"
 #include "../detail/DeletionQueue.h"
+#include "GLProgram.h"
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <glad/glad.h>
-
-class Shader;   // render/shader.h，cpp 中包含
 
 namespace rhi {
 
@@ -61,7 +60,7 @@ struct GLSampler {
 };
 
 struct GLPipeline {
-    std::unique_ptr<Shader> program;
+    std::unique_ptr<GLProgram> program;   // L0：RHI 自有 GLSL 编译器（原 render/shader.h）
     GraphicsPipelineDesc desc;
 };
 

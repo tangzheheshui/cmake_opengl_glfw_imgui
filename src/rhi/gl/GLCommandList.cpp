@@ -4,12 +4,11 @@
 #include "GLCommandList.h"
 #include "GLDevice.h"
 #include "log/LogMacros.h"
-#include "shader.h"
+// L0：uniform 语义由 rhi/gl/GLProgram 承载；DrawUniforms ABI 迁移按
+// docs/ARCHITECTURE_INTERFACES.md 2026-11-24 状态对齐暂缓（V3-2 绑定层重做时处理），
+// 是 src/rhi → render 的唯一残留 include
 #include "render/DrawUniforms.h"
-#include "math/matrix.h"
 #include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
 namespace rhi {
 
@@ -293,23 +292,22 @@ void GLCommandList::flushUniforms() {
     pipe.program->use();   // GL 要求先 use 再设 uniform
 
     for (auto& [name, u] : _pendingUniforms) {
+        const char* n = name.c_str();
         switch (u.type) {
             case UniformValue::Type::Float:
-                pipe.program->setFloat(name, u.data[0]);
+                pipe.program->setFloat(n, u.data[0]);
                 break;
             case UniformValue::Type::Vec3:
-                pipe.program->setFloat3(name, u.data[0], u.data[1], u.data[2]);
+                pipe.program->setFloat3(n, u.data[0], u.data[1], u.data[2]);
                 break;
             case UniformValue::Type::Vec4:
-                pipe.program->setFloat4(name, u.data[0], u.data[1], u.data[2], u.data[3]);
+                pipe.program->setFloat4(n, u.data[0], u.data[1], u.data[2], u.data[3]);
                 break;
-            case UniformValue::Type::Mat4: {
-                glm::mat4 m = glm::make_mat4(u.data);
-                pipe.program->setMat4(name, Matrix::toMatrix(m));
+            case UniformValue::Type::Mat4:
+                pipe.program->setMat4(n, u.data);   // L0：直接传 float[16]
                 break;
-            }
             case UniformValue::Type::Int:
-                pipe.program->setInt(name, static_cast<int>(u.data[0]));
+                pipe.program->setInt(n, static_cast<int>(u.data[0]));
                 break;
         }
     }

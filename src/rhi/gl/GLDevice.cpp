@@ -3,7 +3,6 @@
 //
 #include "GLDevice.h"
 #include "GLCommandList.h"
-#include "shader.h"                 // 复用现有 GLSL 编译器（include path: src/render）
 #include <GLFW/glfw3.h>
 #include "log/LogMacros.h"
 #include <algorithm>
@@ -93,7 +92,7 @@ GLDevice::~GLDevice() {
     for (auto& b : _buffers)   if (b.id) glDeleteBuffers(1, &b.id);
     for (auto& t : _textures)  if (t.id) glDeleteTextures(1, &t.id);
     for (auto& s : _samplers)  if (s.id) glDeleteSamplers(1, &s.id);
-    // GLPipeline 持有 unique_ptr<Shader>，其析构负责 glDeleteProgram
+    // GLPipeline 持有 unique_ptr<GLProgram>，其析构负责 glDeleteProgram
     _delQueue.flushAll();   // V3-0：延迟销毁兜底（waitIdle 后执行安全）
 }
 
@@ -298,10 +297,16 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
 
 PipelineHandle GLDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     GLPipeline pipe;
-    // 按项目着色器约定从文件构建（Shader 的析构负责删除 program）
+    // L0：RHI 自有 GLSL 编译器（GLProgram）。编译失败不再 assert 中止进程——
+    // 返回 invalid 句柄（上层绘制自然跳过），行为改进见 ARCHITECTURE_INTERFACES §4.1
+    auto prog = std::make_unique<GLProgram>();
     const std::string vertPath = _shaderRootPath + shaderFileOf(desc, ShaderStage::Vertex);
     const std::string fragPath = _shaderRootPath + shaderFileOf(desc, ShaderStage::Fragment);
-    pipe.program = std::make_unique<Shader>(vertPath, fragPath);
+    if (!prog->compile(vertPath, fragPath)) {
+        ENGINE_LOG_ERROR("[GL] pipeline creation failed (shader compile); returns invalid handle");
+        return {};
+    }
+    pipe.program = std::move(prog);
     pipe.desc    = desc;
 
     _pipelines.push_back(std::move(pipe));
