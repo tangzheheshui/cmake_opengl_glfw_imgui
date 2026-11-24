@@ -288,10 +288,11 @@ void RenderSystem::drawRhiSceneContents() {
             }
 
             auto drawSceneContent = [&]() {
-                // D3 顺序契约：不透明 → 天空盒 → 透明（视深排序）。
-                // 透明不写深度，天空若在其后绘制会因深度测试覆盖混合结果。
+                // D3/D4 顺序契约：不透明 → 天空盒 → overlay/透明（视深排序）。
+                // 透明与 overlay 不写深度，天空若在其后绘制会因深度测试覆盖
+                // 它们的输出（透明被覆盖 = 混合结果丢失；overlay 被覆盖 = 全消失）。
                 for (auto& obj : drawList) {
-                    if (obj->getAlpha() < 0.999f) continue;
+                    if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) continue;
                     obj->draw(vp);
                 }
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
@@ -301,8 +302,9 @@ void RenderSystem::drawRhiSceneContents() {
                     }
                 }
                 for (auto& obj : drawList) {
-                    if (obj->getAlpha() >= 0.999f) continue;
-                    obj->draw(vp);
+                    if (obj->getAlpha() < 0.999f || obj->isOverlayDraw()) {
+                        obj->draw(vp);
+                    }
                 }
             };
 

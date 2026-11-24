@@ -53,6 +53,7 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
     if (ImGui::CollapsingHeader("迁移验证", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("Line 走 RHI", &settings.lineUseRHI);
         ImGui::Checkbox("模型走 RHI", &settings.modelUseRHI);
+        ImGui::Checkbox("文字走 RHI (SDF)", &settings.textUseRHI);
         ImGui::TextDisabled("关闭 = 原 GL 路径，打开 = RHI 路径，可实时切换对比");
     }
     ImGui::Separator();

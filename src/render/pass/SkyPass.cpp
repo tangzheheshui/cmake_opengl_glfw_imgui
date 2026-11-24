@@ -22,12 +22,12 @@ void CSkyPass::draw(Scene* pScene) {
         sky->draw(matV, matP);
     }
 
-    // D3：透明对象在天空之后按视深远 → 近绘制（getSortedDrawList 已排序，
-    // 此处只取透明子集；不透明对象由 CNormalPass 负责）
+    // D3/D4：overlay 与透明对象在天空之后绘制（getSortedDrawList 已排序，
+    // 此处取 overlay + 透明子集；不透明对象由 CNormalPass 负责）
     const auto camPos = pScene->GetActiveCamera()->getPossition();
     auto mpMatrix = pScene->GetActiveCamera()->GetVPMatrix();
     for (auto& obj : pScene->getSortedDrawList(camPos)) {
-        if (obj->getAlpha() >= 0.999f) continue;
+        if (obj->getAlpha() >= 0.999f && !obj->isOverlayDraw()) continue;
         obj->draw(mpMatrix);
     }
 }

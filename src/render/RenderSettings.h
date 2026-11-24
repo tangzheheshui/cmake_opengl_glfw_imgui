@@ -15,6 +15,7 @@ struct RenderSettings {
     bool rhiTexQuad = false;        // RHI 贴图四边形（M4：验证纹理采样 + 描述符链路）
     bool lineUseRHI = false;        // Line 走 RHI 绘制（M2 迁移验证，已通过逐像素等价性对比）
     bool modelUseRHI = false;       // 模型走 RHI 绘制（M4.2 迁移，GL 模式下可切换对比）
+    bool textUseRHI = false;        // 文字走 RHI 绘制（D4 SDF；VK 后端强制走 RHI）
 
     // ---- 帧级 Pass 开关 ----
     bool drawShadowPass = true;

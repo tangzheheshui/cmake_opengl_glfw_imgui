@@ -52,6 +52,9 @@ public:
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) {}
     // D3：透明排序的深度键（对象世界空间参考点；默认原点，子类覆写）
     virtual glm::vec3 worldCenter() const { return glm::vec3(0.0f); }
+    // D4：overlay 对象（文字等）在天空盒之后绘制——自身不写深度，
+    // 先画会被天空的深度测试覆盖（两端绘制顺序契约的一段）
+    virtual bool isOverlayDraw() const { return false; }
     
     bool getLightOpen() const { return _lightOpen; }
     void setLightOpen(const bool &b) { _lightOpen = b; }

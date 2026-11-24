@@ -93,10 +93,10 @@ int main() {
         auto& renderSys = RenderSystem::getInstance();
         renderSys.preloadTextures(engine::fs::utf8FromPath(
             engine::fs::pathFromUtf8(proPath) / "res"));
-        if (!useVulkan) {
-            renderSys.GetFontMng()->LoadFont(engine::fs::utf8FromPath(
-                engine::fs::pathFromUtf8(proPath) / "res" / "font" / "arial.ttf"), 48);
-        }
+        // D4：两端都加载字体 face（SDF 图集需要）；GL 另建 legacy 字形纹理
+        renderSys.GetFontMng()->LoadFont(engine::fs::utf8FromPath(
+            engine::fs::pathFromUtf8(proPath) / "res" / "font" / "arial.ttf"), 48,
+            /*legacyGlGlyphs=*/!useVulkan);
         if (std::getenv("RHI_SMOKE"))   renderSys.settings().rhiSmokeTriangle = true;
         if (std::getenv("RHI_TEXQUAD")) renderSys.settings().rhiTexQuad = true;
         if (const char* clip = std::getenv("RHI_CLIP")) {   // D7 剖切（法线 (1,0,0)）
