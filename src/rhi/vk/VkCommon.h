@@ -6,6 +6,10 @@
 #define VkCommon_h
 
 #include <vulkan/vulkan.h>
+// windows.h（经 vulkan_win32.h 引入）里 wingdi.h 有打印机 API `DeviceCapabilities`，
+// 且 #define DeviceCapabilities DeviceCapabilitiesW，会顶掉 RhiTypes.h 的同名结构体。
+// 这里 #undef 掉，让后续 IRHIDevice.h/VkDevice.h 里的 DeviceCapabilities 指向我们的类型。
+#undef DeviceCapabilities
 #include "../RhiTypes.h"
 #include "log/LogMacros.h"
 #include "VkMemoryAllocator.h"

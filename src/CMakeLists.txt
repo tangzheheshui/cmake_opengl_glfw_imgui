@@ -53,6 +53,9 @@ add_library(engine STATIC
 # 不指定时会误判中文字符串（C4819 警告，严重时 C2001「常量中有换行符」）。
 if(MSVC)
     target_compile_options(engine PRIVATE /utf-8)
+    # VK_USE_PLATFORM_WIN32_KHR → vulkan_win32.h → windows.h 定义 min/max 宏，
+    # 破坏 std::min/std::max（另一台机器在 macOS 开发，Windows 未验证暴露）。
+    target_compile_definitions(engine PRIVATE NOMINMAX)
 endif()
 
 if(ENGINE_HAS_VULKAN)
