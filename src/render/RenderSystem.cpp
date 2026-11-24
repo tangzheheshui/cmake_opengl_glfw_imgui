@@ -58,6 +58,16 @@ void RenderSystem::shutdown() {
     // 只销毁引擎自己的资源（先等 GPU 收尾）；设备归宿主销毁（C1b 所有权约定）
     if (m_rhiDevice) {
         m_rhiDevice->waitIdle();
+        // V3-0（来自两机合并，origin 963c854）：验证/拾取用的离屏 RT 显式释放；
+        // 设备析构另有兜底回收（~VulkanDevice 的 _renderTargets 循环）
+        if (m_pickRT.valid()) {
+            m_rhiDevice->destroyRenderTarget(m_pickRT);
+            m_pickRT = {};
+        }
+        if (m_rtTestTarget.valid()) {
+            m_rhiDevice->destroyRenderTarget(m_rtTestTarget);
+            m_rtTestTarget = {};
+        }
     }
     // 依赖 GL 上下文的对象（Pass 的 FBO、字体纹理等）在此释放
     m_vec_renderpass.clear();
@@ -173,6 +183,7 @@ void RenderSystem::runChurnTest() {
         }
         for (auto& t : texs) m_rhiDevice->destroyTexture(t);
         m_rhiDevice->endFrame();
+        m_rhiDevice->present();   // C1a present 拆分后：acquire 的图像必须归还
     }
     m_rhiDevice->waitIdle();
     ENGINE_LOG_INFO("[CHURN] %d rounds x 8 textures created+destroyed", rounds);

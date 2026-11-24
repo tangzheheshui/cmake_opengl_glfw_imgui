@@ -30,8 +30,11 @@ constexpr int RhiContractVersion = 2;
 constexpr uint32_t InvalidId = 0;
 
 // ---- 句柄：强类型包装，防止不同资源句柄互相误用 ----
+// V3-1：追加 gen（槽位代际，销毁/复用时 +1）。当前为纯增量字段，
+// HandleTable::alive() 接入后才做校验；业务侧 h.id 用法零改动。
 struct RhiHandle {
-    uint32_t id = InvalidId;
+    uint32_t id  = InvalidId;
+    uint32_t gen = 0;
     bool valid() const { return id != InvalidId; }
 };
 

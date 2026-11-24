@@ -191,6 +191,10 @@ VulkanDevice::~VulkanDevice() {
     // E1：排空帧内延迟的 GPU 工作（如最后帧的纹理 staging）——此前退出路径
     // 不 drain，其 staging 的释放回调永远不执行（分配器统计暴露的既有泄漏）
     drainDeferredGpuWork();
+    // V3-0：延迟销毁兜底必须在 _memAlloc.shutdown() 之前——shutdown 时
+    // （RenderSystem::shutdown 释放 pick RT 等）刚入队的条目尚未 flush，
+    // 若先跑分配器统计会误报 live>0，且回收顺序颠倒
+    _delQueue.flushAll();
     destroySwapchainObjects();
     if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
     if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
@@ -233,7 +237,6 @@ VulkanDevice::~VulkanDevice() {
     savePipelineCache();     // A3: 管线销毁后仍可导出缓存内容；在 destroy device 之前
     if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
     _memAlloc.shutdown();    // E1：设备销毁前回收页/专用分配（泄漏在此告警）
-    _delQueue.flushAll();    // V3-0：延迟销毁兜底（在 waitIdle + drain 之后，安全）
     if (_device)   vkDestroyDevice(_device, nullptr);
     // C1a 所有权约定：externalSurface 归宿主；createSurface 回调/平台自建归 RHI
     if (_surface && _surfaceOwned) vkDestroySurfaceKHR(_instance, _surface, nullptr);
