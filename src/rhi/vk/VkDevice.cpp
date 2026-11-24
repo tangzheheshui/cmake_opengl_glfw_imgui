@@ -157,12 +157,10 @@ VulkanDevice::VulkanDevice(const DeviceDesc& desc, std::string& outError)
     // A1: 加载对象命名函数指针（debug_utils 扩展启用后可用）
     _setNameFn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
         vkGetInstanceProcAddr(_instance, "vkSetDebugUtilsObjectNameEXT"));
-    createWhiteFallbackTexture();   // 先于描述符对象：默认 uniform block 需引用白纹理
+    // V3-2：描述符布局/池先建（纹理创建时就要分配自己的描述符集），
+    // 白兜底纹理随后创建（它同样走 createTexture，拿到的 set 供未绑定槽位使用）
     createDescriptorObjects();
-    // B4：命令列表必须在默认 uniform block 之后创建——VkCommandList 构造函数
-    // 取 defaultUniformBlock() 作为 _curUniformBlock 初值（此前命令列表在前，
-    // 初值为无效句柄；所有真实绘制都先调 setDrawUniforms 掩盖了这个潜伏缺陷，
-    // RT 内首个未设 block 的 draw 触发越界）
+    createWhiteFallbackTexture();
     _commandList = std::make_unique<VkCommandList>(this);
     _initialized = true;
 }
@@ -194,11 +192,8 @@ VulkanDevice::~VulkanDevice() {
         if (t.image)   vkDestroyImage(_device, t.image, nullptr);
         _memAlloc.free(t.memAlloc);   // E1
     });
-    _uniformBlocks.forEach([&](VkUniformBlockRes& b) {
-        if (b.buffer) vkDestroyBuffer(_device, b.buffer, nullptr);
-        _memAlloc.free(b.memAlloc);   // E1
-        // 描述符集随 pool 销毁
-    });
+    // V3-2：uniform block 已无 GPU 资源（数据走帧内环），无需回收
+    _uniformRing.shutdown();
     // V3-0：离屏 RT 的深度附件兜底回收（宿主未调 destroyRenderTarget 的槽位；
     // 颜色附件是 VkTextureRes，已在上方 _textures 循环销毁）
     _renderTargets.forEach([&](VkRenderTargetRes& rt) {
@@ -215,7 +210,9 @@ VulkanDevice::~VulkanDevice() {
         if (pool) vkDestroyDescriptorPool(_device, pool, nullptr);
     }
     _texDescriptorPools.clear();
-    if (_texSetLayout)      vkDestroyDescriptorSetLayout(_device, _texSetLayout, nullptr);
+    if (_frameDescPool)     vkDestroyDescriptorPool(_device, _frameDescPool, nullptr);
+    if (_frameSetLayout)    vkDestroyDescriptorSetLayout(_device, _frameSetLayout, nullptr);
+    if (_texSlotSetLayout)  vkDestroyDescriptorSetLayout(_device, _texSlotSetLayout, nullptr);
     savePipelineCache();     // A3: 管线销毁后仍可导出缓存内容；在 destroy device 之前
     if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
     _memAlloc.shutdown();    // E1：设备销毁前回收页/专用分配（泄漏在此告警）
@@ -971,6 +968,16 @@ bool VulkanDevice::beginFrame() {
         // 帧号先 flush 再递增（登记 base = 已完成的最近帧）。
         _delQueue.flush(_frameCount);
         ++_frameCount;
+
+        // V3-2：帧内 uniform 环归零。上一帧命令已执行完（fence 已等待），
+        // 现在整块复用是安全的。offset 0 预留给"没调 setDrawUniforms 的绘制"，
+        // 内容清零（避免着色器读到上一帧残留）。
+        _uniformRing.reset();
+        static const uint8_t kZeros[kDrawUniformsSize] = {};
+        const uint32_t zeroOff = _uniformRing.alloc(kZeros, kDrawUniformsSize);
+        _defaultUniformOffset = (zeroOff == UINT32_MAX) ? 0 : zeroOff;
+
+        if (_commandList) _commandList->onFrameBegin();
     }
     return _frameActive;
 }
@@ -1247,17 +1254,8 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
         ENGINE_LOG_WARN_ONCE("[VK] destroyUniformBlock: device default block is device-owned, ignored");
         return;
     }
-    VkUniformBlockRes& b = _uniformBlocks.get(h.id);
-    if (!b.buffer) return;
-    VkBuffer buf = b.buffer;
-    VkMemAlloc mem = b.memAlloc;
+    // V3-2：block 没有 GPU 资源，释放槽位即可
     _uniformBlocks.free(h.id);
-    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
-                   [this, buf, mem] {
-                       vkDestroyBuffer(_device, buf, nullptr);
-                       _memAlloc.free(mem);
-                   });
-    // 描述符集随 pool 回收（无 FREE_DESCRIPTOR_SET_BIT），无需单独销毁
 }
 
 // ---- B4：离屏渲染目标 ----
@@ -1601,6 +1599,11 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
     // 开头执行；数据由 lambda 持有（调用方的 initialData 生命周期未知）
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(desc.width) * desc.height * bpp * layerCount;
+    // V3-2：记录上传是不是延迟到下一帧。延迟时布局在上传 lambda 里回写；
+    // 立即执行（帧外创建，submitOneTime 已等待完成）时下面 alloc 之后直接置位——
+    // 上传 lambda 里的回写在"立即"路径下看不到槽位（alloc 尚未发生），
+    // 早先靠描述符不读布局掩盖着，接入绑定层后必须显式区分。
+    const bool uploadDeferred = _frameActive;
     if (desc.initialData && bytes > 0) {
         auto dataCopy = std::make_shared<std::vector<unsigned char>>(
             static_cast<const unsigned char*>(desc.initialData),
@@ -1807,8 +1810,33 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         return {};
     }
 
+    // V3-2：纹理自带描述符集（写一次）。绘制期只绑 set，不再 vkUpdateDescriptorSets。
+    {
+        VkDescriptorSet texSet = VK_NULL_HANDLE;
+        if (!allocTextureSet(texSet)) {
+            vkDestroySampler(_device, t.sampler, nullptr);
+            vkDestroyImageView(_device, t.view, nullptr);
+            vkDestroyImage(_device, t.image, nullptr);
+            _memAlloc.free(t.memAlloc);
+            return {};
+        }
+        VkDescriptorImageInfo ii{t.sampler, t.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet          = texSet;
+        w.dstBinding      = 0;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.descriptorCount = 1;
+        w.pImageInfo      = &ii;
+        vkUpdateDescriptorSets(_device, 1, &w, 0, nullptr);
+        t.set = texSet;
+    }
+
     RhiHandle base = _textures.alloc(std::move(t));
     TextureHandle h; h.id = base.id; h.gen = base.gen;
+    // 立即上传的纹理此时已处于 SHADER_READ_ONLY（见 uploadDeferred 注释）
+    if (desc.initialData && bytes > 0 && !uploadDeferred) {
+        _textures.get(h.id).layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     char tname[48];
     std::snprintf(tname, sizeof(tname), "RHI_Texture_%u", h.id);
     setObjName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(t.image), tname);
@@ -1963,11 +1991,16 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.offset     = 0;
     pushRange.size       = kPushTotalSize;
+    // V3-2：set0 = 帧 uniform 环（动态偏移）；set1..4 = 4 个纹理槽。
+    // 所有管线共用一个 layout，着色器按 set/binding 约定声明（见 res/shaders_vk）。
+    VkDescriptorSetLayout setLayouts[1 + kMaxTexSlots];
+    setLayouts[0] = _frameSetLayout;
+    for (uint32_t i = 0; i < kMaxTexSlots; ++i) setLayouts[i + 1] = _texSlotSetLayout;
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges    = &pushRange;
-    plci.setLayoutCount         = 1;
-    plci.pSetLayouts            = &_texSetLayout;
+    plci.setLayoutCount         = 1 + kMaxTexSlots;
+    plci.pSetLayouts            = setLayouts;
     // 固定布局只创建一次，所有管线共用（此前每管线创建一个 layout 且从未销毁 → 泄漏）
     if (_pipelineLayout == VK_NULL_HANDLE) {
         VK_CHECK(vkCreatePipelineLayout(_device, &plci, nullptr, &_pipelineLayout));
@@ -2104,19 +2137,16 @@ IRHICommandList* VulkanDevice::commandList() {
     return _commandList.get();
 }
 
-// B6：追加一个描述符池（容量翻倍）。旧池不销毁——其上的 set 全生命周期有效，
-// 借此解除固定 maxSets=32 的规模上限（31 mesh 即 abort）。
+// 追加一个纹理描述符池。旧池不销毁——其上的 set 存活到设备销毁，
+// 借此解除固定 maxSets 的规模上限（每张纹理占一个 set）。
 void VulkanDevice::growTexDescriptorPool() {
-    VkDescriptorPoolSize poolSizes[2]{};
-    poolSizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = _poolCapSampler;
-    poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[1].descriptorCount = _poolCapUniform;
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = _poolCapSampler;
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     pi.maxSets       = _poolCapSets;
-    pi.poolSizeCount = 2;
-    pi.pPoolSizes    = poolSizes;
+    pi.poolSizeCount = 1;
+    pi.pPoolSizes    = &poolSize;
     VkDescriptorPool pool = VK_NULL_HANDLE;
     VK_CHECK(vkCreateDescriptorPool(_device, &pi, nullptr, &pool));
     _texDescriptorPools.push_back(pool);
@@ -2124,46 +2154,135 @@ void VulkanDevice::growTexDescriptorPool() {
     std::snprintf(name, sizeof(name), "RHI_TexDescriptorPool_%zu",
                   _texDescriptorPools.size() - 1);
     setObjName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, reinterpret_cast<uint64_t>(pool), name);
-    ENGINE_LOG_INFO("[VK] descriptor pool #%zu: sets=%u sampler=%u ubo=%u",
-                    _texDescriptorPools.size() - 1, _poolCapSets, _poolCapSampler, _poolCapUniform);
+    ENGINE_LOG_INFO("[VK] descriptor pool #%zu: sets=%u sampler=%u",
+                    _texDescriptorPools.size() - 1, _poolCapSets, _poolCapSampler);
+}
+
+bool VulkanDevice::allocTextureSet(VkDescriptorSet& outSet) {
+    if (_texDescriptorPools.empty()) growTexDescriptorPool();
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool     = _texDescriptorPools.back();
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts        = &_texSlotSetLayout;
+    VkResult r = vkAllocateDescriptorSets(_device, &dai, &outSet);
+    if (r == VK_ERROR_OUT_OF_POOL_MEMORY || r == VK_ERROR_FRAGMENTED_POOL) {
+        growTexDescriptorPool();
+        dai.descriptorPool = _texDescriptorPools.back();
+        r = vkAllocateDescriptorSets(_device, &dai, &outSet);
+    }
+    if (r != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] texture descriptor set alloc failed (%d)", static_cast<int>(r));
+        outSet = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
 }
 
 void VulkanDevice::createDescriptorObjects() {
-    // set layout：binding0 = 绘制级 uniform UBO；bindings 1..4 = 采样器槽 0..3
-    VkDescriptorSetLayoutBinding bindings[5];
-    bindings[0] = {};
-    bindings[0].binding         = 0;
-    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    for (uint32_t i = 0; i < 4; ++i) {
-        bindings[i + 1] = {};
-        bindings[i + 1].binding         = i + 1;
-        bindings[i + 1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i + 1].descriptorCount = 1;
-        bindings[i + 1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // ---- set0：帧 uniform 环。动态偏移 = 每绘制的小数据块位置 ----
+    VkDescriptorSetLayoutBinding frameBinding{};
+    frameBinding.binding         = 0;
+    frameBinding.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    frameBinding.descriptorCount = 1;
+    frameBinding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo fli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    fli.bindingCount = 1;
+    fli.pBindings    = &frameBinding;
+    VK_CHECK(vkCreateDescriptorSetLayout(_device, &fli, nullptr, &_frameSetLayout));
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+               reinterpret_cast<uint64_t>(_frameSetLayout), "RHI_FrameSetLayout");
+
+    // ---- set1..4：纹理槽。每个槽一个 set，一张纹理创建一个 set（写一次） ----
+    VkDescriptorSetLayoutBinding texBinding{};
+    texBinding.binding         = 0;
+    texBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    texBinding.descriptorCount = 1;
+    texBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo tli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    tli.bindingCount = 1;
+    tli.pBindings    = &texBinding;
+    VK_CHECK(vkCreateDescriptorSetLayout(_device, &tli, nullptr, &_texSlotSetLayout));
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+               reinterpret_cast<uint64_t>(_texSlotSetLayout), "RHI_TexSlotSetLayout");
+
+    growTexDescriptorPool();
+
+    // ---- 帧 set 的池（1 个 set，永不复位，只重写）----
+    VkDescriptorPoolSize framePoolSize{};
+    framePoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    framePoolSize.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo fpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    fpi.maxSets       = 1;
+    fpi.poolSizeCount = 1;
+    fpi.pPoolSizes    = &framePoolSize;
+    VK_CHECK(vkCreateDescriptorPool(_device, &fpi, nullptr, &_frameDescPool));
+    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+               reinterpret_cast<uint64_t>(_frameDescPool), "RHI_FrameDescriptorPool");
+
+    // ---- 帧 uniform 环（默认 1MB；对齐取设备要求与 256 的较大值）----
+    const uint32_t minAlign = static_cast<uint32_t>(
+        std::max<VkDeviceSize>(256, _caps.props.limits.minUniformBufferOffsetAlignment));
+    _minUboAlign = minAlign;
+    if (!_uniformRing.init(_device, &_memAlloc, 1024u * 1024u, minAlign)) {
+        ENGINE_LOG_ERROR("[VK] frame uniform ring init failed");
     }
-    // bindings 1..4 允许 update-after-bind（draw 期间更新纹理槽位）
-    VkDescriptorBindingFlags bindFlags[5]{};
-    for (uint32_t i = 1; i < 5; ++i) bindFlags[i] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    createFrameUniformSet();
 
-    VkDescriptorSetLayoutBindingFlagsCreateInfo bfi{
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    bfi.bindingCount  = 5;
-    bfi.pBindingFlags = bindFlags;
-
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = 5;
-    li.pBindings    = bindings;
-    li.pNext        = &bfi;
-    li.flags        = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    VK_CHECK(vkCreateDescriptorSetLayout(_device, &li, nullptr, &_texSetLayout));
-
-    growTexDescriptorPool();   // B6：首个池（容量见成员默认值，耗尽自动翻倍追加）
-    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, reinterpret_cast<uint64_t>(_texSetLayout), "RHI_TexSetLayout");
-
-    // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用
+    // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用。
+    // V3-2 起只是身份与尺寸记录，没有 GPU 资源。
     _defaultUniformBlock = createUniformBlock(kDrawUniformsSize);
+}
+
+// 分配并写 set0。环扩容后也要重写（buffer 句柄变了）。
+void VulkanDevice::createFrameUniformSet() {
+    if (!_uniformRing.valid()) return;
+    if (!_frameSet) {
+        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dai.descriptorPool     = _frameDescPool;
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts        = &_frameSetLayout;
+        VK_CHECK(vkAllocateDescriptorSets(_device, &dai, &_frameSet));
+        setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET,
+                   reinterpret_cast<uint64_t>(_frameSet), "RHI_FrameUniformSet");
+    }
+    VkDescriptorBufferInfo bi{_uniformRing.buffer(), 0, kDrawUniformsSize};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet          = _frameSet;
+    w.dstBinding      = 0;
+    w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    w.descriptorCount = 1;
+    w.pBufferInfo     = &bi;
+    vkUpdateDescriptorSets(_device, 1, &w, 0, nullptr);
+}
+
+void VulkanDevice::growUniformRing() {
+    if (!_uniformRing.grow(_uniformRing.capacity() * 2)) {
+        ENGINE_LOG_ERROR("[VK] frame uniform ring grow failed");
+        return;
+    }
+    createFrameUniformSet();   // 新 buffer，重写描述符
+}
+
+uint32_t VulkanDevice::allocDrawUniforms(const void* data, uint32_t size) {
+    if (!data || size == 0) return UINT32_MAX;
+    // 尾部清零：块尾可能残留上一帧/上一块的数据，着色器读到的必须是确定值
+    static thread_local uint8_t block[kDrawUniformsSize];
+    const uint32_t n = size < kDrawUniformsSize ? size : kDrawUniformsSize;
+    std::memcpy(block, data, n);
+    if (n < kDrawUniformsSize) std::memset(block + n, 0, kDrawUniformsSize - n);
+
+    uint32_t off = _uniformRing.alloc(block, kDrawUniformsSize);
+    if (off == UINT32_MAX) {
+        growUniformRing();
+        off = _uniformRing.alloc(block, kDrawUniformsSize);
+    }
+    return off;
+}
+
+VkDescriptorSet VulkanDevice::fallbackTextureSet(uint32_t slot) const {
+    const bool isCubeSlot = (slot == 3);   // 槽 3 = cubemap（天空盒）
+    const TextureHandle h = isCubeSlot ? _whiteCubeTex : _whiteTex;
+    return _textures.alive(h) ? _textures.get(h.id).set : VK_NULL_HANDLE;
 }
 
 void VulkanDevice::createWhiteFallbackTexture() {
@@ -2209,83 +2328,11 @@ void VulkanDevice::submitOneTime(std::function<void(VkCommandBuffer)> record, st
 }
 
 UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
+    // V3-2：不再分配 UBO/描述符集。数据统一进帧内环（见 allocDrawUniforms），
+    // 句柄只保留"这是一次绘制数据块"的身份和尺寸，业务侧调用方式不变。
     VkUniformBlockRes blk;
     blk.size = size;
-
-    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size  = size;
-    bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(_device, &bi, nullptr, &blk.buffer) != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] uniform block vkCreateBuffer failed (%u bytes)", size);
-        return {};
-    }
-    VkMemoryRequirements req;
-    vkGetBufferMemoryRequirements(_device, blk.buffer, &req);
-    // E1：HOST_VISIBLE 子分配（页持久映射）
-    blk.memAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                                       | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (!blk.memAlloc.valid()) {
-        ENGINE_LOG_ERROR("[VK] uniform block alloc failed (%u bytes)", size);
-        vkDestroyBuffer(_device, blk.buffer, nullptr);
-        return {};
-    }
-    blk.memory = blk.memAlloc.memory;
-    blk.mapped = blk.memAlloc.mapped;
-    if (vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset) != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] uniform block vkBindBufferMemory failed at %s:%d", __FILE__, __LINE__);
-        vkDestroyBuffer(_device, blk.buffer, nullptr);
-        _memAlloc.free(blk.memAlloc);
-        return {};
-    }
-
-    // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器。
-    // B6：池耗尽（OUT_OF_POOL/ fragmentation）→ 扩容重试，无规模上限
-    // V3-0：descriptorSetCount/pSetLayouts 必须先于首次分配填写——
-    // 此前首次调用以 count=0 发出，验证层报 "descriptorSetCount must be
-    // greater than 0"（每次 createUniformBlock 一条）
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool     = _texDescriptorPools.back();
-    dai.descriptorSetCount = 1;
-    dai.pSetLayouts        = &_texSetLayout;
-    VkResult setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
-    if (setResult == VK_ERROR_OUT_OF_POOL_MEMORY || setResult == VK_ERROR_FRAGMENTED_POOL) {
-        growTexDescriptorPool();
-        dai.descriptorPool = _texDescriptorPools.back();
-        setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
-    }
-    VK_CHECK(setResult);
-
-    VkDescriptorBufferInfo bufInfo{blk.buffer, 0, size};
-    VkWriteDescriptorSet writes[5]{};
-    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writes[0].dstSet = blk.set;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].descriptorCount = 1;
-    writes[0].pBufferInfo = &bufInfo;
-
-    const VkTextureRes& white = _textures.get(_whiteTex.id);
-    const VkTextureRes& whiteCube = _textures.get(_whiteCubeTex.id);
-    VkDescriptorImageInfo imgInfos[4];
-    for (uint32_t i = 0; i < 4; ++i) {
-        const bool isCubeSlot = (i == 3);   // 槽 3 = cubemap（天空盒）
-        const VkTextureRes& fill = isCubeSlot ? whiteCube : white;
-        imgInfos[i] = { fill.sampler, fill.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        writes[i + 1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        writes[i + 1].dstSet = blk.set;
-        writes[i + 1].dstBinding = i + 1;
-        writes[i + 1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i + 1].descriptorCount = 1;
-        writes[i + 1].pImageInfo = &imgInfos[i];
-    }
-    vkUpdateDescriptorSets(_device, 5, writes, 0, nullptr);
-    char ubname[48];
-    std::snprintf(ubname, sizeof(ubname), "RHI_UniformBlock_%u", static_cast<uint32_t>(_uniformBlocks.size() + 1));
-    setObjName(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(blk.buffer), ubname);
-    setObjName(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(blk.set), ubname);
-
-    RhiHandle base = _uniformBlocks.alloc(std::move(blk));
+    RhiHandle base = _uniformBlocks.alloc(blk);
     UniformBlockHandle h; h.id = base.id; h.gen = base.gen;
     return h;
 }

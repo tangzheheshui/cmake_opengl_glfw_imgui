@@ -9,7 +9,16 @@ namespace rhi {
 
 VkCommandList::VkCommandList(VulkanDevice* device)
     : _device(device)
-    , _curUniformBlock(device->defaultUniformBlock()) {
+    , _uniformOffset(device->defaultUniformOffset()) {
+}
+
+void VkCommandList::onFrameBegin() {
+    for (uint32_t i = 0; i < kMaxTexSlots; ++i) _texSlots[i] = TextureHandle{};
+    _uniformOffset = _device->defaultUniformOffset();
+    for (auto& s : _lastSets) s = VK_NULL_HANDLE;
+    _lastOffset  = UINT32_MAX;
+    _pushDirty   = false;
+    _curPipeline = PipelineHandle{};
 }
 
 void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
@@ -244,27 +253,19 @@ void VkCommandList::bindIndexBuffer(BufferHandle buffer) {
 }
 
 void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
-    if (!texture.valid() || slot >= 4) return;
-    const VkTextureRes& t = _device->textureRes(texture);
-    VkDescriptorImageInfo info{};
-    info.sampler     = t.sampler;
-    info.imageView   = t.view;
-    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet          = _device->uniformBlockRes(_curUniformBlock).set;
-    w.dstBinding      = slot + 1;   // binding0 是绘制级 UBO，采样器从 1 起
-    w.dstArrayElement = 0;
-    w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.descriptorCount = 1;
-    w.pImageInfo      = &info;
-    vkUpdateDescriptorSets(_device->vkDeviceHandle(), 1, &w, 0, nullptr);
+    // V3-2：只记录槽位。纹理在创建期已写好自己的描述符集（sampler + view 不变），
+    // draw 时直接绑 set1..4 —— 这里不再 vkUpdateDescriptorSets。
+    if (!texture.valid() || slot >= kMaxTexSlots) return;
+    _texSlots[slot] = texture;
 }
 
-void VkCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, uint32_t size) {
-    if (!data || size > kDrawUniformsSize) return;
-    if (!block.valid()) block = _curUniformBlock;   // 未指定则沿用当前块
-    std::memcpy(_device->uniformBlockRes(block).mapped, data, size);
-    _curUniformBlock = block;
+void VkCommandList::setDrawUniforms(UniformBlockHandle /*block*/, const void* data, uint32_t size) {
+    // V3-2：数据追加进帧内 uniform 环（256B 对齐），draw 时作为 set0 的动态偏移。
+    // block 句柄不再承载 GPU 数据（GL 后端本来就是哑句柄）。
+    if (!data || size == 0) return;
+    const uint32_t off = _device->allocDrawUniforms(data, size);
+    if (off != UINT32_MAX) _uniformOffset = off;
+    else ENGINE_LOG_WARN_ONCE("[VK] draw uniform ring exhausted; draw uses stale block");
 }
 
 void VkCommandList::setViewport(float x, float y, float w, float h) {
@@ -289,24 +290,45 @@ void VkCommandList::applyPushConstants() {
                            0, kPushTotalSize, _pushData);
         _pushDirty = false;
     }
-    // uniform block 描述符集（binding0=UBO 数据，1..4=纹理），每 draw 绑定
-    // B4：未显式 setDrawUniforms 时回退设备默认块（防御无效句柄越界）
-    UniformBlockHandle blk = _curUniformBlock.valid() ? _curUniformBlock
-                                                      : _device->defaultUniformBlock();
-    VkDescriptorSet set = _device->uniformBlockRes(blk).set;
+}
+
+// V3-2：一次绑 5 个描述符集（set0..4），动态偏移只有 set0 一个。
+// 纹理槽没绑时用白纹理兜底（避免描述符未定义）。
+// 相邻绘制常共用同一组纹理 + 同一块 uniform，缓存命中就跳过绑定命令。
+void VkCommandList::bindDescriptorState() {
+    VkDescriptorSet sets[1 + kMaxTexSlots];
+    sets[0] = _device->frameUniformSet();
+    for (uint32_t i = 0; i < kMaxTexSlots; ++i) {
+        const VkDescriptorSet texSet =
+            _device->textureSet(_texSlots[i].valid() ? _texSlots[i] : TextureHandle{});
+        sets[i + 1] = texSet ? texSet : _device->fallbackTextureSet(i);
+    }
+
+    bool same = (_lastOffset == _uniformOffset);
+    for (uint32_t i = 0; same && i < 1 + kMaxTexSlots; ++i) {
+        same = (_lastSets[i] == sets[i]);
+    }
+    if (same) return;
+
+    const uint32_t dynOffset = _uniformOffset;
     vkCmdBindDescriptorSets(_device->commandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            _device->pipelineLayout(), 0, 1, &set, 0, nullptr);
+                            _device->pipelineLayout(), 0, 1 + kMaxTexSlots,
+                            sets, 1, &dynOffset);
+    for (uint32_t i = 0; i < 1 + kMaxTexSlots; ++i) _lastSets[i] = sets[i];
+    _lastOffset = _uniformOffset;
 }
 
 void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
     if (!_inRenderPass || !_curPipeline.valid()) return;
     applyPushConstants();
+    bindDescriptorState();
     vkCmdDraw(_device->commandBuffer(), vertexCount, 1, firstVertex, 0);
 }
 
 void VkCommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex) {
     if (!_inRenderPass || !_curPipeline.valid() || !_curIndexBuffer.valid()) return;
     applyPushConstants();
+    bindDescriptorState();
     vkCmdDrawIndexed(_device->commandBuffer(), indexCount, instanceCount, firstIndex, 0, 0);
 }
 

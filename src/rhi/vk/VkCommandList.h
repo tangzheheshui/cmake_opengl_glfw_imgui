@@ -35,8 +35,13 @@ public:
     void popDebugLabel() override;
     uint64_t nativeCommandBuffer() const override;
 
+    // V3-2：每帧开头由 VulkanDevice::beginFrame 调用——描述符绑定缓存、
+    // uniform 环偏移、采样槽都按帧归零（命令缓冲换了，旧绑定不再有效）。
+    void onFrameBegin();
+
 private:
     void applyPushConstants();
+    void bindDescriptorState();   // set0（动态偏移）+ set1..4（纹理槽），带去重
 
     VulkanDevice* _device = nullptr;
 
@@ -49,7 +54,14 @@ private:
     bool           _inRenderPass = false;
     RenderTargetHandle _curRenderTarget;   // B4：当前离屏 RT（invalid = swapchain）
 
-    UniformBlockHandle _curUniformBlock;        // 当前绘制使用的 uniform block（默认为 device 默认块）
+    // ---- V3-2 绑定状态 ----
+    // 采样槽：bindTexture 只记录，draw 时解析成纹理各自的描述符集
+    TextureHandle _texSlots[kMaxTexSlots];
+    // 当前绘制数据块在帧内环里的偏移（setDrawUniforms 更新）
+    uint32_t      _uniformOffset = 0;
+    // 去重缓存：和上次绑定完全一致就跳过 vkCmdBindDescriptorSets
+    VkDescriptorSet _lastSets[1 + kMaxTexSlots] = {};
+    uint32_t        _lastOffset = UINT32_MAX;
 
     float _pushData[32] = {};   // 128B push constant 填充区
     bool  _pushDirty    = false;

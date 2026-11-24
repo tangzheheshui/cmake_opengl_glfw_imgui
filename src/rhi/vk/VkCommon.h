@@ -64,6 +64,9 @@ struct VkTextureRes {
     // 作 RT 颜色附件时 COLOR_ATTACHMENT ↔ SHADER_READ_ONLY 往返，回读时 TRANSFER_SRC）
     VkImageLayout  layout  = VK_IMAGE_LAYOUT_UNDEFINED;
     VkMemAlloc     memAlloc;   // E1
+    // V3-2：纹理自带一个描述符集（binding0 = 这张纹理的 sampler+view），
+    // 创建期写一次，绘制期只做 vkCmdBindDescriptorSets，不再逐 draw 更新描述符。
+    VkDescriptorSet set    = VK_NULL_HANDLE;
 };
 
 // B4：离屏渲染目标。颜色附件复用纹理机制（SAMPLED|COLOR_ATTACHMENT，
@@ -81,14 +84,11 @@ struct VkRenderTargetRes {
     bool           alive  = true;   // 对象级销毁：句柄 id 不复用，dead 槽位保留
 };
 
-// 绘制级 uniform 块（M4.2）：独立 UBO + 独立描述符集（避免共享 UBO 逐帧覆盖）
+// 绘制级 uniform 块（M4.2 引入）。V3-2 起不再是 GPU 资源：数据统一进
+// FrameUniformRing（帧内环形缓冲 + 动态偏移），句柄只保留尺寸与身份，
+// 业务侧 createUniformBlock/setDrawUniforms 的调用方式不变。
 struct VkUniformBlockRes {
-    VkBuffer       buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    void*          mapped = nullptr;
-    VkDescriptorSet set   = VK_NULL_HANDLE;
-    uint32_t       size   = 0;
-    VkMemAlloc     memAlloc;   // E1
+    uint32_t size = 0;
 };
 
 // B6：反射出的 push constant 成员（管线创建期从 SPIR-V 生成，
@@ -117,8 +117,10 @@ struct VkPipelineRes {
 constexpr uint32_t kPushMvpOffset  = 0;    // mat4
 constexpr uint32_t kPushColorOffset = 64;  // vec4
 constexpr uint32_t kPushTotalSize   = 128;   // M4.3: 天空盒需双 mat4（uViewMat@0 + uProjMat@64）
-// 绘制级 uniform UBO 大小（engine::DrawUniforms = 160B，对齐预留）
+// 绘制级 uniform UBO 大小（engine::DrawUniforms = 176B，对齐预留到 256）
 constexpr uint32_t kDrawUniformsSize = 256;
+// V3-2：采样槽位数（= 描述符集 set1..set4）
+constexpr uint32_t kMaxTexSlots = 4;
 
 } // namespace rhi
 
