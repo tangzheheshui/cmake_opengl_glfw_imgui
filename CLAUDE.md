@@ -59,6 +59,8 @@ DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan ./build/app/Debug/my_app
 #   RHI_ASYNC_DEMO = 1 后台预解析 duck.dae（E5 流式加载验证；VK 生效，GL 同步退化）
 #   RHI_EXIT_AFTER = <帧数> 跑完 N 帧正常退出（冒烟/回归，验证析构与缓存落盘）
 #   RHI_VK_MULTILIST = 1 多命令列表提交顺序自检（附加列表先、主列表后）
+#   RHI_CMDLIST_CHURN = <N> 附加列表创建/销毁压测（验证不累积）
+#   RHI_TEX_CHURN = <N> 纹理创建/销毁压测（验证句柄槽位复用）
 #   RHI_VK_VALIDATION = 1 强制开验证层 / 0 强制关（Debug 构建默认开）
 #   RHI_VK_PIPELINE_CACHE = <path> 管线缓存位置 / 0 禁用
 #     （默认 res/shaders_vk/pipeline_cache.bin，已 gitignore）
