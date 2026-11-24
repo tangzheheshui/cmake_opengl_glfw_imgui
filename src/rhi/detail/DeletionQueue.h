@@ -22,10 +22,10 @@ namespace detail {
 class DeletionQueue {
 public:
     // 帧滞后期：资源登记后至少经过 kLagFrames 帧才真正销毁。
-    // 当前两后端 frame-in-flight = 1（单 fence），登记帧的提交在下一帧
-    // beginFrame 的 fence 等待后必然完成 → lag=1 即安全；E2 提升到 fif=2
-    // 时改为 2。
-    static constexpr uint64_t kLagFrames = 1;
+    // Vulkan 端帧在飞 = 2（V3-4）：登记帧的提交后还要再等一帧才轮回到同一
+    // 槽位，所以必须 lag=2 才能保证销毁时 GPU 一定用完（GL 端帧号每帧推进，
+    // 多等一帧只是延后回收，无副作用）。
+    static constexpr uint64_t kLagFrames = 2;
 
     // 登记一个到期销毁回调。dueFrame 通常为 currentFrame + kLagFrames。
     void push(uint64_t dueFrame, std::function<void()> fn) {

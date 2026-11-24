@@ -6,7 +6,7 @@
 //    · 两个描述符布局：set0 = 帧 uniform 环（动态偏移 UBO），set1..4 = 纹理槽
 //    · 全局管线布局（所有管线共用）
 //    · 纹理描述符池（每张纹理一个 set，创建时写一次）
-//    · 帧 uniform 环（每帧归零，绘制数据顺序追加）
+//    · 帧 uniform 环（每帧槽位一份，绘制数据顺序追加）
 //
 //  命令列表用到的入口：frameSet()/defaultUniformOffset()/allocDrawUniforms()/
 //  fallbackSet()。纹理创建走 createTextureSet()。
@@ -26,18 +26,21 @@ public:
     // 对象命名回调（RenderDoc/capture 可读；为空时跳过）
     using NameFn = std::function<void(VkObjectType, uint64_t, const char*)>;
 
-    bool init(VkDevice device, uint32_t minUboAlign, VkMemoryAllocator* alloc, NameFn nameFn);
+    // slotCount = 帧在飞数量：每个槽位一套 uniform 环 + 描述符集，
+    // 避免上一帧还在 GPU 上跑时被这一帧覆盖
+    bool init(VkDevice device, uint32_t minUboAlign, VkMemoryAllocator* alloc,
+              uint32_t slotCount, NameFn nameFn);
     void shutdown();
 
-    // ---- 每帧 ----
+    // ---- 每帧（slot = 当前帧槽位）----
     // 环归零并预留 offset 0 的零数据块（没调 setDrawUniforms 的绘制用它）
-    void beginFrame();
+    void beginFrame(uint32_t slot);
     // 追加一次绘制数据，返回动态偏移；环满会扩容后重试
-    uint32_t allocDrawUniforms(const void* data, uint32_t size);
-    uint32_t defaultUniformOffset() const { return _defaultUniformOffset; }
+    uint32_t allocDrawUniforms(uint32_t slot, const void* data, uint32_t size);
+    uint32_t defaultUniformOffset(uint32_t slot) const { return _frameSlots[slot].defaultOffset; }
 
     // ---- 绘制期 ----
-    VkDescriptorSet frameSet() const { return _frameSet; }
+    VkDescriptorSet frameSet(uint32_t slot) const { return _frameSlots[slot].set; }
     // 白纹理兜底：未绑定的槽位、上传还没完成的纹理
     VkDescriptorSet fallbackSet(uint32_t slot) const {
         return (slot == kMaxTexSlots - 1) ? _whiteCubeSet : _whiteSet;
@@ -53,10 +56,16 @@ public:
     VkPipelineLayout pipelineLayout() const { return _pipelineLayout; }
 
 private:
-    void createPoolsAndLayouts();
+    struct FrameSlot {
+        detail::FrameUniformRing ring;
+        VkDescriptorSet set           = VK_NULL_HANDLE;
+        uint32_t        defaultOffset = 0;
+    };
+
+    void createPoolsAndLayouts(uint32_t slotCount);
     void growTexturePool();
-    void writeFrameSet();
-    void growRing();
+    void writeFrameSet(uint32_t slot);
+    void growRing(uint32_t slot);
 
     VkDevice           _device = VK_NULL_HANDLE;
     VkMemoryAllocator* _alloc  = nullptr;
@@ -65,12 +74,10 @@ private:
     VkDescriptorSetLayout _frameSetLayout   = VK_NULL_HANDLE;
     VkDescriptorSetLayout _texSlotSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool      _frameDescPool    = VK_NULL_HANDLE;
-    VkDescriptorSet       _frameSet         = VK_NULL_HANDLE;
     VkPipelineLayout      _pipelineLayout   = VK_NULL_HANDLE;
 
     uint32_t _minAlign = 256;   // minUniformBufferOffsetAlignment（至少 256）
-    uint32_t _defaultUniformOffset = 0;
-    detail::FrameUniformRing _ring;
+    std::vector<FrameSlot> _frameSlots;
 
     std::vector<VkDescriptorPool> _texPools;
     uint32_t _poolCapSets    = 256;

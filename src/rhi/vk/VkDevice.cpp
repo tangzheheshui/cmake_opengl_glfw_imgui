@@ -177,8 +177,7 @@ VulkanDevice::~VulkanDevice() {
     // 若先跑分配器统计会误报 live>0，且回收顺序颠倒
     _delQueue.flushAll();
     destroySwapchainObjects();
-    if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
-    if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
+    _frames.shutdown();
     if (_commandPool)       vkDestroyCommandPool(_device, _commandPool, nullptr);
     // E1：先走子分配器统计/告警，资源对象内存在随行销毁
     _buffers.forEach([&](VkBufferRes& b) {
@@ -626,20 +625,18 @@ void VulkanDevice::createCommandObjects() {
     ai.commandPool        = _commandPool;
     ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = 1;
-    VK_CHECK(vkAllocateCommandBuffers(_device, &ai, &_commandBuffer));
+    // 命令缓冲按帧槽位分配（见 VkFrames::init）
     setObjName(VK_OBJECT_TYPE_COMMAND_POOL, reinterpret_cast<uint64_t>(_commandPool), "RHI_CommandPool");
-    setObjName(VK_OBJECT_TYPE_COMMAND_BUFFER, reinterpret_cast<uint64_t>(_commandBuffer), "RHI_MainCmdBuffer");
 }
 
 void VulkanDevice::createSyncObjects() {
-    VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    VK_CHECK(vkCreateSemaphore(_device, &sci, nullptr, &_semImageAvailable));
-
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;   // 首帧可直接等待
-    VK_CHECK(vkCreateFence(_device, &fci, nullptr, &_fenceInFlight));
-    setObjName(VK_OBJECT_TYPE_SEMAPHORE, reinterpret_cast<uint64_t>(_semImageAvailable), "RHI_ImageAvailable");
-    setObjName(VK_OBJECT_TYPE_FENCE, reinterpret_cast<uint64_t>(_fenceInFlight), "RHI_InFlightFence");
+    // V3-4：帧在飞 = 2。每槽位一套 命令缓冲 + fence + image-available 信号量
+    VkFrames::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
+        setObjName(type, handle, name);
+    };
+    if (!_frames.init(_device, _commandPool, VkFrames::kDefaultSlots, nameFn)) {
+        ENGINE_LOG_ERROR("[VK] frame sync objects init failed");
+    }
 }
 
 // ============================================================
@@ -651,16 +648,18 @@ void VulkanDevice::createSyncObjects() {
 // 帧循环
 // ============================================================
 bool VulkanDevice::beginFrameInternal() {
-    VK_CHECK(vkWaitForFences(_device, 1, &_fenceInFlight, VK_TRUE, UINT64_MAX));
-
-    if (!_swapchain.acquire(_semImageAvailable, _imageIndex)) {
+    // V3-4：等本槽位上一次提交完成（首帧 fence 预置已信号，直接通过）
+    if (!_frames.wait()) {
+        ENGINE_LOG_ERROR("[VK] frame fence wait failed");
+        return false;
+    }
+    if (!_swapchain.acquire(_frames.current().imageAvailable, _imageIndex)) {
         return false;   // OUT_OF_DATE 等：本帧跳过，beginFrame 下一轮重建
     }
-
-    VK_CHECK(vkResetFences(_device, 1, &_fenceInFlight));
-    VK_CHECK(vkResetCommandBuffer(_commandBuffer, 0));
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    VK_CHECK(vkBeginCommandBuffer(_commandBuffer, &bi));
+    if (!_frames.beginRecording()) {
+        ENGINE_LOG_ERROR("[VK] frame command buffer begin failed");
+        return false;
+    }
     return true;
 }
 
@@ -698,7 +697,7 @@ bool VulkanDevice::beginFrame() {
 
         // V3-2：帧内 uniform 环归零。上一帧命令已执行完（fence 已等待），
         // 现在整块复用是安全的；offset 0 留给"没调 setDrawUniforms 的绘制"。
-        _descs.beginFrame();
+        _descs.beginFrame(_frames.index());
 
         if (_commandList) _commandList->onFrameBegin();
     }
@@ -711,8 +710,9 @@ void VulkanDevice::endFrame() {
 
     // B1：dynamic rendering 无 renderpass finalLayout，present 前手动转回 PRESENT_SRC。
     // 仅在本帧真正渲染过（布局已被转到 COLOR_ATTACHMENT）时需要；空帧已是 PRESENT。
-    recordPresentBarrier(_commandBuffer);
-    VK_CHECK(vkEndCommandBuffer(_commandBuffer));
+    VkCommandBuffer cb = _frames.current().cmd;
+    recordPresentBarrier(cb);
+    VK_CHECK(vkEndCommandBuffer(cb));
 
     // 每个 swapchain image 使用独立的 render-done semaphore：
     // presentation 完成前不能复用同一个 binary semaphore（VUID-...-00067）
@@ -725,14 +725,16 @@ void VulkanDevice::endFrame() {
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.waitSemaphoreCount = 1;
-    si.pWaitSemaphores    = &_semImageAvailable;
+    VkSemaphore imageAvailable = _frames.current().imageAvailable;
+    si.pWaitSemaphores    = &imageAvailable;
     si.pWaitDstStageMask  = &waitStage;
     si.commandBufferCount = 1;
-    si.pCommandBuffers    = &_commandBuffer;
+    si.pCommandBuffers    = &cb;
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &renderDone;
-    VK_CHECK(vkQueueSubmit(_queue, 1, &si, _fenceInFlight));
+    VK_CHECK(vkQueueSubmit(_queue, 1, &si, _frames.current().fence));
     _frameSubmitted = true;   // C1b：present() 消费该标志
+    _frames.advance();        // 下一帧换槽位（本帧 GPU 未完成前不覆盖它）
 
     // ---- RHI_PROBE=1：第 30 帧回读中心像素（M3 验证用，之后可移除）----
     // 必须在 present 之前执行：此时图像仍处于 acquired 状态，布局转换合法。
@@ -757,7 +759,7 @@ void VulkanDevice::endFrame() {
         VK_CHECK(vkBindBufferMemory(_device, readback, readbackMem.memory, readbackMem.offset));
 
         // 主命令缓冲已完成，可 reset 后复用录制回读
-        VkCommandBuffer cb = _commandBuffer;
+        VkCommandBuffer cb = _frames.current().cmd;
         VK_CHECK(vkResetCommandBuffer(cb, 0));
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         VK_CHECK(vkBeginCommandBuffer(cb, &bi));
@@ -1610,7 +1612,7 @@ void VulkanDevice::createDescriptorObjects() {
     VkDescriptors::NameFn nameFn = [this](VkObjectType type, uint64_t handle, const char* name) {
         setObjName(type, handle, name);
     };
-    if (!_descs.init(_device, minAlign, &_memAlloc, nameFn)) {
+    if (!_descs.init(_device, minAlign, &_memAlloc, VkFrames::kDefaultSlots, nameFn)) {
         ENGINE_LOG_ERROR("[VK] descriptor objects init failed");
     }
     // 默认 uniform block：未显式持有 block 的绘制（冒烟三角形/贴图四边形）使用。

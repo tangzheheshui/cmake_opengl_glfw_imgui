@@ -17,6 +17,7 @@
 #include "../detail/DeletionQueue.h"
 #include "../detail/HandleTable.h"
 #include "VkDescriptors.h"
+#include "VkFrames.h"
 #include "VkPipelines.h"
 #include "VkSwapchain.h"
 #include "VkCommon.h"
@@ -105,10 +106,12 @@ public:
     VkPipelineLayout   pipelineLayout() const { return _descs.pipelineLayout(); }
 
     // ---- V3-2 绑定层：命令列表用的内部接口（实现在 VkDescriptors）----
-    VkDescriptorSet frameUniformSet() const { return _descs.frameSet(); }
-    uint32_t        defaultUniformOffset() const { return _descs.defaultUniformOffset(); }
+    VkDescriptorSet frameUniformSet() const { return _descs.frameSet(_frames.index()); }
+    uint32_t        defaultUniformOffset() const {
+        return _descs.defaultUniformOffset(_frames.index());
+    }
     uint32_t        allocDrawUniforms(const void* data, uint32_t size) {
-        return _descs.allocDrawUniforms(data, size);
+        return _descs.allocDrawUniforms(_frames.index(), data, size);
     }
     VkDescriptorSet fallbackTextureSet(uint32_t slot) const { return _descs.fallbackSet(slot); }
     // 纹理的采样描述符集。上传还没执行（帧内创建 → 延迟到下一帧，布局仍是
@@ -131,7 +134,7 @@ public:
     void recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTargetHandle rt);
     // endFrame 提交前的 color → PRESENT_SRC 转换（dynamic rendering 无自动 finalLayout）
     void recordPresentBarrier(VkCommandBuffer cb);
-    VkCommandBuffer commandBuffer() const { return _commandBuffer; }
+    VkCommandBuffer commandBuffer() const { return _frames.current().cmd; }
     uint32_t currentImageIndex() const { return _imageIndex; }
     void bindInstanceVertexBuffer(VkCommandBuffer cb, BufferHandle h) const;
 
@@ -181,8 +184,9 @@ private:
     // V3-3：交换链 + 深度附件 + per-image 信号量都归 VkSwapchain
     VkSwapchain _swapchain;
 
-    VkCommandPool   _commandPool   = VK_NULL_HANDLE;
-    VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
+    VkCommandPool _commandPool = VK_NULL_HANDLE;
+    // V3-4：每槽位 命令缓冲 + fence + image-available 信号量
+    VkFrames _frames;
 
     // A3: 物理设备能力（初始化时探测一次）
     VkCaps _caps;
@@ -209,9 +213,8 @@ private:
     detail::HandleTable<VkUniformBlockRes> _uniformBlocks;
     UniformBlockHandle _defaultUniformBlock;   // 未显式持有 block 的绘制使用
 
-    VkSemaphore _semImageAvailable = VK_NULL_HANDLE;
+    // 每槽位 image-available / in-flight fence → 归 VkFrames
     // 每个 swapchain image 一个 render-done semaphore → 归 VkSwapchain
-    VkFence     _fenceInFlight     = VK_NULL_HANDLE;
 
     uint32_t _imageIndex     = 0;
     bool     _frameActive    = false;

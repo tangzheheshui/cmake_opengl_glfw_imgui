@@ -7,24 +7,28 @@
 namespace rhi {
 
 bool VkDescriptors::init(VkDevice device, uint32_t minUboAlign,
-                         VkMemoryAllocator* alloc, NameFn nameFn) {
+                         VkMemoryAllocator* alloc, uint32_t slotCount, NameFn nameFn) {
     _device = device;
     _alloc  = alloc;
     _nameFn = std::move(nameFn);
     if (!_nameFn) _nameFn = [](VkObjectType, uint64_t, const char*) {};
     _minAlign = minUboAlign;
+    if (slotCount < 1) slotCount = 1;
 
-    createPoolsAndLayouts();
+    createPoolsAndLayouts(slotCount);
 
-    // 环初始就留出 offset 0 的零块：命令列表构造期就能拿到有效偏移
-    static const uint8_t kZeros[kDrawUniformsSize] = {};
-    const uint32_t zeroOff = _ring.alloc(kZeros, kDrawUniformsSize);
-    _defaultUniformOffset = (zeroOff == UINT32_MAX) ? 0 : zeroOff;
-
-    return _ring.valid();
+    bool ok = true;
+    for (auto& fs : _frameSlots) {
+        // 环初始就留出 offset 0 的零块：命令列表构造期就能拿到有效偏移
+        static const uint8_t kZeros[kDrawUniformsSize] = {};
+        const uint32_t zeroOff = fs.ring.alloc(kZeros, kDrawUniformsSize);
+        fs.defaultOffset = (zeroOff == UINT32_MAX) ? 0 : zeroOff;
+        ok = ok && fs.ring.valid();
+    }
+    return ok;
 }
 
-void VkDescriptors::createPoolsAndLayouts() {
+void VkDescriptors::createPoolsAndLayouts(uint32_t slotCount) {
     // ---- set0：帧 uniform 环。动态偏移 = 每绘制的小数据块位置 ----
     VkDescriptorSetLayoutBinding frameBinding{};
     frameBinding.binding         = 0;
@@ -53,12 +57,12 @@ void VkDescriptors::createPoolsAndLayouts() {
 
     growTexturePool();
 
-    // ---- 帧 set 的池（1 个 set，永不复位，只重写）----
+    // ---- 帧 set 的池（每帧槽位一个 set，永不复位，只重写）----
     VkDescriptorPoolSize framePoolSize{};
     framePoolSize.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    framePoolSize.descriptorCount = 1;
+    framePoolSize.descriptorCount = slotCount;
     VkDescriptorPoolCreateInfo fpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    fpi.maxSets       = 1;
+    fpi.maxSets       = slotCount;
     fpi.poolSizeCount = 1;
     fpi.pPoolSizes    = &framePoolSize;
     VK_CHECK(vkCreateDescriptorPool(_device, &fpi, nullptr, &_frameDescPool));
@@ -82,12 +86,15 @@ void VkDescriptors::createPoolsAndLayouts() {
     _nameFn(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
             reinterpret_cast<uint64_t>(_pipelineLayout), "RHI_PipelineLayout");
 
-    // ---- 帧 uniform 环（默认 1MB；对齐取设备要求与 256 的较大值）----
+    // ---- 帧 uniform 环（每槽位 1MB；对齐取设备要求与 256 的较大值）----
     const uint32_t align = _minAlign < 256 ? 256 : _minAlign;
-    if (!_ring.init(_device, _alloc, 1024u * 1024u, align)) {
-        ENGINE_LOG_ERROR("[VK] frame uniform ring init failed");
+    _frameSlots.resize(slotCount);
+    for (uint32_t i = 0; i < slotCount; ++i) {
+        if (!_frameSlots[i].ring.init(_device, _alloc, 1024u * 1024u, align)) {
+            ENGINE_LOG_ERROR("[VK] frame %u uniform ring init failed", i);
+        }
+        writeFrameSet(i);
     }
-    writeFrameSet();
 }
 
 void VkDescriptors::growTexturePool() {
@@ -138,20 +145,22 @@ bool VkDescriptors::createTextureSet(VkSampler sampler, VkImageView view,
     return true;
 }
 
-void VkDescriptors::writeFrameSet() {
-    if (!_ring.valid()) return;
-    if (!_frameSet) {
+void VkDescriptors::writeFrameSet(uint32_t slot) {
+    FrameSlot& fs = _frameSlots[slot];
+    if (!fs.ring.valid()) return;
+    if (!fs.set) {
         VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         dai.descriptorPool     = _frameDescPool;
         dai.descriptorSetCount = 1;
         dai.pSetLayouts        = &_frameSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(_device, &dai, &_frameSet));
-        _nameFn(VK_OBJECT_TYPE_DESCRIPTOR_SET,
-                reinterpret_cast<uint64_t>(_frameSet), "RHI_FrameUniformSet");
+        VK_CHECK(vkAllocateDescriptorSets(_device, &dai, &fs.set));
+        char name[48];
+        std::snprintf(name, sizeof(name), "RHI_FrameUniformSet_%u", slot);
+        _nameFn(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(fs.set), name);
     }
-    VkDescriptorBufferInfo bi{_ring.buffer(), 0, kDrawUniformsSize};
+    VkDescriptorBufferInfo bi{fs.ring.buffer(), 0, kDrawUniformsSize};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet          = _frameSet;
+    w.dstSet          = fs.set;
     w.dstBinding      = 0;
     w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     w.descriptorCount = 1;
@@ -159,39 +168,43 @@ void VkDescriptors::writeFrameSet() {
     vkUpdateDescriptorSets(_device, 1, &w, 0, nullptr);
 }
 
-void VkDescriptors::beginFrame() {
-    _ring.reset();
+void VkDescriptors::beginFrame(uint32_t slot) {
+    FrameSlot& fs = _frameSlots[slot];
+    fs.ring.reset();
     static const uint8_t kZeros[kDrawUniformsSize] = {};
-    const uint32_t off = _ring.alloc(kZeros, kDrawUniformsSize);
-    _defaultUniformOffset = (off == UINT32_MAX) ? 0 : off;
+    const uint32_t off = fs.ring.alloc(kZeros, kDrawUniformsSize);
+    fs.defaultOffset = (off == UINT32_MAX) ? 0 : off;
 }
 
-uint32_t VkDescriptors::allocDrawUniforms(const void* data, uint32_t size) {
+uint32_t VkDescriptors::allocDrawUniforms(uint32_t slot, const void* data, uint32_t size) {
     if (!data || size == 0) return UINT32_MAX;
+    FrameSlot& fs = _frameSlots[slot];
     // 尾部清零：块尾可能残留上一块的数据，着色器读到的必须是确定值
     static thread_local uint8_t block[kDrawUniformsSize];
     const uint32_t n = size < kDrawUniformsSize ? size : kDrawUniformsSize;
     std::memcpy(block, data, n);
     if (n < kDrawUniformsSize) std::memset(block + n, 0, kDrawUniformsSize - n);
 
-    uint32_t off = _ring.alloc(block, kDrawUniformsSize);
+    uint32_t off = fs.ring.alloc(block, kDrawUniformsSize);
     if (off == UINT32_MAX) {
-        growRing();
-        off = _ring.alloc(block, kDrawUniformsSize);
+        growRing(slot);
+        off = fs.ring.alloc(block, kDrawUniformsSize);
     }
     return off;
 }
 
-void VkDescriptors::growRing() {
-    if (!_ring.grow(_ring.capacity() * 2)) {
-        ENGINE_LOG_ERROR("[VK] frame uniform ring grow failed");
+void VkDescriptors::growRing(uint32_t slot) {
+    FrameSlot& fs = _frameSlots[slot];
+    if (!fs.ring.grow(fs.ring.capacity() * 2)) {
+        ENGINE_LOG_ERROR("[VK] frame %u uniform ring grow failed", slot);
         return;
     }
-    writeFrameSet();   // buffer 换了，描述符要重写
+    writeFrameSet(slot);   // buffer 换了，描述符要重写
 }
 
 void VkDescriptors::shutdown() {
-    _ring.shutdown();
+    for (auto& fs : _frameSlots) fs.ring.shutdown();
+    _frameSlots.clear();
     for (auto pool : _texPools) {
         if (pool) vkDestroyDescriptorPool(_device, pool, nullptr);
     }
@@ -204,7 +217,6 @@ void VkDescriptors::shutdown() {
     _pipelineLayout = VK_NULL_HANDLE;
     _frameSetLayout = VK_NULL_HANDLE;
     _texSlotSetLayout = VK_NULL_HANDLE;
-    _frameSet = VK_NULL_HANDLE;
 }
 
 } // namespace rhi
