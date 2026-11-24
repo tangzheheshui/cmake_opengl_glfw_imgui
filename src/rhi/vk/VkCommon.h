@@ -74,6 +74,8 @@ struct VkTextureRes {
 // （storeOp=DONT_CARE + 每次 begin CLEAR，跨 Pass 不保内容）。
 struct VkRenderTargetRes {
     TextureHandle  colorTex;                            // 颜色附件（VkTextureRes）
+    Format         colorFormat = Format::BGRA8_SRGB;    // 颜色附件格式（Pass 校验用）
+    Format         depthFormat = Format::Depth32F;      // 深度附件格式（无深度时无效）
     VkImage        depthImage  = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkMemAlloc     depthMemAlloc;                       // E1
@@ -111,6 +113,9 @@ struct VkPipelineRes {
     float pushConstants[32] = {};
     // B6：反射 uniform 表（名字命中即按 offset 写 push；空表回退旧映射）
     std::vector<VkPipelineUniformInfo> uniformTable;
+    // V3-12：管线烘焙时声明的附件格式（beginRenderPass 校验实际附件用）
+    Format colorFormat = Format::BGRA8_SRGB;
+    Format depthFormat = Format::Depth32F;
 };
 
 // push constant 布局常量（与 res/shaders_vk/*.vert|.frag 中的 PC 块一致）

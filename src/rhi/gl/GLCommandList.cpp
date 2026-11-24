@@ -75,6 +75,11 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
     // B2：采样器槽位跟踪表清零（只记录本 Pass 内的绑定，见 endRenderPass）
     for (uint32_t i = 0; i < 32; ++i) _samplerSlotsTouched[i] = false;
 
+    // V3-12：记录本 Pass 目标（bindPipeline 用来比对附件格式）
+    _curRenderTarget = desc.renderTarget;
+    _inPass          = true;
+    _formatMismatch  = false;
+
     // B4：离屏 RenderTarget（RHI 资源 FBO）优先于 v1 遗留 FBO 直通
     if (desc.renderTarget.valid()) {
         const GLRenderTarget& rt = _device->renderTarget(desc.renderTarget);
@@ -139,6 +144,9 @@ void GLCommandList::endRenderPass() {
         restoreState(_savedState);
         _stateSaved = false;
     }
+    _inPass          = false;
+    _formatMismatch  = false;
+    _curRenderTarget = RenderTargetHandle{};
 }
 
 void GLCommandList::bindPipeline(PipelineHandle pipeline) {
@@ -146,6 +154,21 @@ void GLCommandList::bindPipeline(PipelineHandle pipeline) {
     _curPipeline = pipeline;
 
     const GraphicsPipelineDesc& desc = _device->pipeline(pipeline).desc;
+
+    // V3-12：GL 的 FBO 附件格式由纹理决定，管线声明的格式必须与实际附件一致。
+    // 默认帧缓冲（无离屏目标）不做格式比对——GL 没有可查询的统一格式。
+    _formatMismatch = false;
+    if (_inPass && _curRenderTarget.valid()) {
+        const GLRenderTarget& rt = _device->renderTarget(_curRenderTarget);
+        const GLTexture& colorTex = _device->texture(rt.colorTex);
+        if (colorTex.format != desc.attachment.colorFormats[0]) {
+            _formatMismatch = true;
+            ENGINE_LOG_ERROR("[GL] pass attachment mismatch: pipeline colorFormat=%d "
+                             "vs FBO %d — draws skipped",
+                             static_cast<int>(desc.attachment.colorFormats[0]),
+                             static_cast<int>(colorTex.format));
+        }
+    }
 
     // 深度状态
     if (desc.depth.depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
@@ -360,7 +383,7 @@ void GLCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, 
 }
 
 void GLCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
-    if (!_curPipeline.valid() || !_curVertexBuffer.valid()) return;
+    if (!_curPipeline.valid() || !_curVertexBuffer.valid() || _formatMismatch) return;
     const GLuint vao = obtainVAO();
     if (!vao) return;
     const GLPipeline& pipe = _device->pipeline(_curPipeline);
@@ -372,6 +395,7 @@ void GLCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
 
 void GLCommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex) {
     if (!_curPipeline.valid() || !_curVertexBuffer.valid() || !_curIndexBuffer.valid()) return;
+    if (_formatMismatch) return;
     const GLuint vao = obtainVAO();
     if (!vao) return;
     const GLPipeline& pipe = _device->pipeline(_curPipeline);

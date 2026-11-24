@@ -34,6 +34,19 @@ const FormatInfo kTable[] = {
 
 } // namespace
 
+bool FormatInfo::fromVkFormat(uint32_t vkFormat, Format& out) {
+    if (vkFormat == 0) return false;
+    // 枚举值从 0 连续排列（RhiTypes.h 只允许追加），逐个比对即可
+    for (int i = 0; i <= static_cast<int>(Format::R32_UInt); ++i) {
+        const Format f = static_cast<Format>(i);
+        if (of(f).vkFormat() == vkFormat) {
+            out = f;
+            return true;
+        }
+    }
+    return false;
+}
+
 const FormatInfo& FormatInfo::of(Format f) {
     const int i = static_cast<int>(f);
     const int n = static_cast<int>(sizeof(kTable) / sizeof(kTable[0]));

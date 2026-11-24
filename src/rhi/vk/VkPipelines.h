@@ -28,8 +28,8 @@ public:
               VkPipelineLayout layout, NameFn nameFn);
 
     // 创建图形管线：成功时 out.pipeline 有效、out.uniformTable 填好
-    bool create(const GraphicsPipelineDesc& desc, VkFormat colorFmt, VkFormat depthFmt,
-                VkPipelineRes& out);
+    // 附件格式从 desc.attachment 取（不再固定用交换链格式）
+    bool create(const GraphicsPipelineDesc& desc, VkPipelineRes& out);
 
     // 退出时调用：导出缓存到磁盘，再销毁缓存对象
     void saveAndDestroy();

@@ -3,6 +3,7 @@
 //
 #include "VkPipelines.h"
 #include "VkShaderReflect.h"
+#include "../FormatInfo.h"
 #include "fs/FilePathUtil.h"
 #include <algorithm>
 #include <cstdio>
@@ -142,8 +143,29 @@ void VkPipelines::saveAndDestroy() {
     }
 }
 
-bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkFormat colorFmt, VkFormat depthFmt,
-                         VkPipelineRes& res) {
+bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkPipelineRes& res) {
+    // ---- 附件格式：按管线声明烘焙（MRT / MSAA 尚未实现，显式拒绝而非静默降级）----
+    if (desc.attachment.colorCount != 1) {
+        ENGINE_LOG_ERROR("[VK] createPipeline: MRT not implemented (colorCount=%u)",
+                         desc.attachment.colorCount);
+        return false;
+    }
+    if (desc.attachment.samples != 1) {
+        ENGINE_LOG_ERROR("[VK] createPipeline: MSAA not implemented (samples=%u)",
+                         desc.attachment.samples);
+        return false;
+    }
+    const Format colorFormat = desc.attachment.colorFormats[0];
+    const Format depthFormat = desc.attachment.depthFormat;
+    const VkFormat colorFmt = static_cast<VkFormat>(FormatInfo::of(colorFormat).vkFormat());
+    const VkFormat depthFmt = static_cast<VkFormat>(FormatInfo::of(depthFormat).vkFormat());
+    if (colorFmt == VK_FORMAT_UNDEFINED || depthFmt == VK_FORMAT_UNDEFINED) {
+        ENGINE_LOG_ERROR("[VK] createPipeline: unusable attachment format");
+        return false;
+    }
+    res.colorFormat = colorFormat;
+    res.depthFormat = depthFormat;
+
     // ---- 着色器模块：从 shaders_vk/ 读取 <name>.spv ----
     std::vector<VkPipelineShaderStageCreateInfo> stages;
     std::vector<VkShaderModule> modules;
@@ -301,7 +323,7 @@ bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkFormat colorFmt, Vk
     // 不再引用 VkRenderPass → swapchain 重建无需重建 PSO
     VkPipelineRenderingCreateInfo prci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     prci.colorAttachmentCount    = 1;
-    prci.pColorAttachmentFormats = &colorFmt;
+    prci.pColorAttachmentFormats = &colorFmt;   // 来自 desc.attachment（V3-12）
     prci.depthAttachmentFormat   = depthFmt;
     gpi.pNext               = &prci;
     gpi.renderPass          = VK_NULL_HANDLE;

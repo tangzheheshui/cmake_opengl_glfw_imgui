@@ -55,6 +55,8 @@ public:
 private:
     void applyPushConstants();
     void bindDescriptorState();   // set0（动态偏移）+ set1..4（纹理槽），带去重
+    // V3-12：记录本 Pass 实际附件格式（beginRenderPass 时算一次，bindPipeline 比对）
+    void recordPassFormats(bool hasColor, Format colorFormat, bool hasDepth, Format depthFormat);
 
     VulkanDevice* _device = nullptr;
 
@@ -80,6 +82,13 @@ private:
     // 去重缓存：和上次绑定完全一致就跳过 vkCmdBindDescriptorSets
     VkDescriptorSet _lastSets[1 + kMaxTexSlots] = {};
     uint32_t        _lastOffset = UINT32_MAX;
+
+    // V3-12：本 Pass 实际附件格式 + 与当前管线不匹配时跳过绘制
+    bool   _passHasColor = false;
+    bool   _passHasDepth = false;
+    Format _passColorFormat = Format::BGRA8_SRGB;
+    Format _passDepthFormat = Format::Depth32F;
+    bool   _formatMismatch  = false;
 
     float _pushData[32] = {};   // 128B push constant 填充区
     bool  _pushDirty    = false;

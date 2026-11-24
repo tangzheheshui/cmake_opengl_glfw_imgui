@@ -1013,6 +1013,8 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
     VkRenderTargetRes rt;
     rt.width = desc.width;
     rt.height = desc.height;
+    rt.colorFormat = desc.colorFormat;
+    rt.depthFormat = desc.depthFormat;
 
     // 颜色附件走纹理机制：采样（bindTexture/描述符）、附件、回读（TRANSFER_SRC）一体
     TextureDesc td;
@@ -1741,7 +1743,7 @@ void VulkanDevice::commandListChurnTest() {
 // V3-3：管线创建/缓存交给 VkPipelines；设备只保留句柄表
 PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     VkPipelineRes res;
-    if (!_pipes.create(desc, _swapchain.format(), _swapchain.depthFormat(), res)) {
+    if (!_pipes.create(desc, res)) {
         return {};
     }
     RhiHandle base = _pipelines.alloc(std::move(res));

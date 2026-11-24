@@ -4,6 +4,7 @@
 #include "log/LogMacros.h"
 #include "VkCommandList.h"
 #include "VkDevice.h"
+#include "../FormatInfo.h"
 
 namespace rhi {
 
@@ -36,6 +37,16 @@ bool VkCommandList::initCommandBuffers(uint32_t slots) {
         return false;
     }
     return true;
+}
+
+// V3-12：本 Pass 实际附件格式（beginRenderPass 时算一次，bindPipeline 比对）
+void VkCommandList::recordPassFormats(bool hasColor, Format colorFormat,
+                                      bool hasDepth, Format depthFormat) {
+    _passHasColor    = hasColor;
+    _passColorFormat = colorFormat;
+    _passHasDepth    = hasDepth;
+    _passDepthFormat = depthFormat;
+    _formatMismatch  = false;
 }
 
 void VkCommandList::beginFrameSlot(uint32_t slot) {
@@ -99,6 +110,8 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         _device->beginRenderingFn()(commandBuffer(), &ri);
         _inRenderPass    = true;
         _curRenderTarget = desc.renderTarget;
+        recordPassFormats(true, rt.colorFormat,
+                          rt.depthView != VK_NULL_HANDLE, rt.depthFormat);
 
         // 与 swapchain 路径相同的负高度 viewport（B3a）+ scissor
         setViewport(0, static_cast<float>(extent.height),
@@ -144,6 +157,14 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     _device->recordBeginPassBarriers(commandBuffer(), desc.clearColor, desc.clearDepth);
     _device->beginRenderingFn()(commandBuffer(), &ri);
     _inRenderPass = true;
+    {
+        // 默认帧缓冲：把交换链的 VkFormat 反查回 RHI 的 Format 再比对
+        Format colorF = Format::BGRA8_SRGB;
+        Format depthF = Format::Depth32F;
+        FormatInfo::fromVkFormat(static_cast<uint32_t>(_device->swapchainFormat()), colorF);
+        FormatInfo::fromVkFormat(static_cast<uint32_t>(_device->depthFormat()), depthF);
+        recordPassFormats(true, colorF, true, depthF);
+    }
 
     // 动态 viewport/scissor（desc 未指定时用 swapchain 尺寸）
     uint32_t w = desc.viewportWidth  ? desc.viewportWidth  : extent.width;
@@ -176,6 +197,21 @@ void VkCommandList::bindPipeline(PipelineHandle pipeline) {
     if (!pipeline.valid()) return;
     _used = true;
     _curPipeline = pipeline;
+    // V3-12：管线声明的附件格式必须与本 Pass 实际附件一致，否则本 Pass 不画
+    {
+        const VkPipelineRes& pr = _device->pipelineRes(pipeline);
+        const bool depthOk = !_passHasDepth || pr.depthFormat == _passDepthFormat;
+        if (!_passHasColor || pr.colorFormat != _passColorFormat || !depthOk) {
+            _formatMismatch = true;
+            ENGINE_LOG_ERROR("[VK] pass attachment mismatch: pipeline(color=%d depth=%d) "
+                             "vs pass(color=%d/%d depth=%d/%d) — draws skipped",
+                             static_cast<int>(pr.colorFormat), static_cast<int>(pr.depthFormat),
+                             _passHasColor ? 1 : 0, static_cast<int>(_passColorFormat),
+                             _passHasDepth ? 1 : 0, static_cast<int>(_passDepthFormat));
+        } else {
+            _formatMismatch = false;
+        }
+    }
     // 关键：真正绑定管线命令（漏掉此调用时 encoder 无绑定管线，
     // draw 编码时 getGraphicsPipeline() 返回 null 直接崩溃）
     vkCmdBindPipeline(commandBuffer(),
@@ -349,7 +385,7 @@ void VkCommandList::bindDescriptorState() {
 }
 
 void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
-    if (!_inRenderPass || !_curPipeline.valid()) return;
+    if (!_inRenderPass || !_curPipeline.valid() || _formatMismatch) return;
     _used = true;
     applyPushConstants();
     bindDescriptorState();
@@ -358,6 +394,7 @@ void VkCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {
 
 void VkCommandList::drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex) {
     if (!_inRenderPass || !_curPipeline.valid() || !_curIndexBuffer.valid()) return;
+    if (_formatMismatch) return;
     _used = true;
     applyPushConstants();
     bindDescriptorState();

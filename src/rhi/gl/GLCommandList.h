@@ -97,6 +97,11 @@ private:
     // B2：本次 Pass 内绑定过独立采样器的纹理单元（endRenderPass 统一解绑为 0，
     // 把"Pass 边界状态中性"约定扩展到 GL_SAMPLER_BINDING）
     bool _samplerSlotsTouched[32] = {};
+
+    // V3-12：当前 Pass 的离屏目标与附件格式校验结果
+    RenderTargetHandle _curRenderTarget;
+    bool               _inPass         = false;
+    bool               _formatMismatch = false;
 };
 
 } // namespace rhi

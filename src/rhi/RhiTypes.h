@@ -204,10 +204,15 @@ struct BlendState {
 };
 
 // ---- 光栅状态 / 附件布局 / 索引格式（管线烘焙字段，带默认值）----
+// 附件格式是管线烘焙的一部分：Vulkan 的 PSO 必须声明它会渲染到的附件格式。
+// 后端在建管线时按这里声明的格式创建；实际 Pass 的附件格式不一致时后端报错并
+// 跳过该 Pass 的绘制（不静默画错）。
 struct AttachmentLayout {
-    Format   colorFormat = Format::BGRA8_SRGB;   // 颜色附件（MRT 前单色）；默认 = 交换链 sRGB
-    Format   depthFormat = Format::Depth32F;
-    uint32_t samples     = 1;                     // MSAA 预留（D6）
+    Format   colorFormats[4] = { Format::BGRA8_SRGB, Format::BGRA8_SRGB,
+                                 Format::BGRA8_SRGB, Format::BGRA8_SRGB };
+    uint32_t colorCount = 1;                     // 只实现 1；>1 后端显式报错（MRT 预留）
+    Format   depthFormat = Format::Depth32F;     // 默认 = 交换链 sRGB + 深度
+    uint32_t samples     = 1;                    // 只实现 1；>1 后端显式报错（MSAA 留给 D6）
 };
 
 enum class IndexFormat : int { UINT16, UINT32 };

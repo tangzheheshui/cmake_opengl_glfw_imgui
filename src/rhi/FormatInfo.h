@@ -18,6 +18,9 @@ public:
     // 按 Format 取格式信息；越界触发断言（表与 Format 枚举不同步时暴露）。
     static const FormatInfo& of(Format f);
 
+    // VkFormat → Format 反查（校验实际附件格式用）。查不到返回 false。
+    static bool fromVkFormat(uint32_t vkFormat, Format& out);
+
     uint32_t bytesPerPixel()    const { return _bytes; }
     bool     isDepth()          const { return _depth; }
     bool     isSRGB()           const { return _srgb; }
