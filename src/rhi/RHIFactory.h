@@ -7,28 +7,21 @@
 
 #include "RhiTypes.h"
 #include "IRHIDevice.h"
+#include <memory>
 #include <string>
-
-struct GLFWwindow;
 
 namespace rhi {
 
 class RHIFactory {
 public:
-    // 创建指定后端的渲染设备。
-    // backend = OpenGL   : 当前可用（复用现有 GLFW 窗口与 GL 上下文）
-    // backend = Vulkan   : 里程碑 M3 实现，当前返回 nullptr 并输出日志
-    //
-    // shaderRootPath: 着色器根目录（与 ShaderCache 使用的路径一致，
-    //                 形如 ".../res/shaders/"，含末尾分隔符）
-    static std::unique_ptr<IRHIDevice> createDevice(Backend backend,
-                                                    GLFWwindow* window,
-                                                    const std::string& shaderRootPath);
-
-    // v2 契约入口（B0 冻结；宿主窗口/离屏接入在 C1 实现）：
-    //   - 引擎不再硬依赖 GLFW；GLFW 只是示例 app 的窗口来源
-    //   - DeviceDesc::window 为空且 offscreen = true 时创建无 swapchain 的离屏设备
-    static std::unique_ptr<IRHIDevice> createDevice(const DeviceDesc& desc);
+    // 唯一设备创建入口（C1a 落地；宿主不经过 GLFW/原生 API 类型）。
+    //   - GL：要求宿主已创建并把 GL 上下文设为 current（RHI 不创建上下文）；
+    //     desc.window.swapBuffers 由宿主提供（present 用）
+    //   - Vulkan：surface 来源优先级 externalSurface → createSurface(instance)
+    //     → 按 NativeWindowType 平台自建；offscreen=true 不建 swapchain
+    // 失败返回 nullptr 并填充 *outError（可诊断，不抛异常）。
+    static std::unique_ptr<IRHIDevice> createDevice(const DeviceDesc& desc,
+                                                    std::string* outError = nullptr);
 };
 
 } // namespace rhi

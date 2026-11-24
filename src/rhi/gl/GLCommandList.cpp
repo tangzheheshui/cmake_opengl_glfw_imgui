@@ -4,12 +4,10 @@
 #include "GLCommandList.h"
 #include "GLDevice.h"
 #include "log/LogMacros.h"
-#include "shader.h"
+// L0：uniform 语义由 rhi/gl/GLProgram 承载；DrawUniforms ABI 迁移按
+// docs/ARCHITECTURE_INTERFACES.md 2026-11-24 状态对齐暂缓（V3-2 绑定层重做时处理），
+// 是 src/rhi → render 的唯一残留 include
 #include "render/DrawUniforms.h"
-#include "math/matrix.h"
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
 namespace rhi {
 
@@ -29,23 +27,6 @@ GLCommandList::GLCommandList(GLDevice* device)
 GLCommandList::~GLCommandList() {
     for (auto& [key, vao] : _vaoCache) {
         if (vao) glDeleteVertexArrays(1, &vao);
-    }
-}
-
-// V3-0：销毁 buffer/pipeline 时剔除引用它的 VAO 缓存条目。
-// 不清理的话，缓存命中会继续用持有已删除 buffer 属性指针的 VAO，画出垃圾。
-void GLCommandList::discardVAOs(uint32_t pipelineId, uint32_t bufferId) {
-    for (auto it = _vaoCache.begin(); it != _vaoCache.end();) {
-        const auto& key = it->first;
-        const bool hitPipeline = pipelineId != 0 && std::get<0>(key) == pipelineId;
-        const bool hitBuffer   = bufferId != 0 &&
-                                 (std::get<1>(key) == bufferId || std::get<2>(key) == bufferId);
-        if (hitPipeline || hitBuffer) {
-            if (it->second) glDeleteVertexArrays(1, &it->second);
-            it = _vaoCache.erase(it);
-        } else {
-            ++it;
-        }
     }
 }
 
@@ -107,7 +88,8 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
         glClear(GL_DEPTH_BUFFER_BIT);
     }
 
-    // 视口：desc 未指定时取 RT 尺寸（B4）或窗口大小（Retina 下 framebuffer 尺寸 ≠ 窗口尺寸）
+    // 视口：desc 未指定时取 RT 尺寸（B4）或设备保存的帧缓冲尺寸
+    //（C1a：RHI 不回查窗口系统；Retina 下 framebuffer 尺寸 ≠ 窗口逻辑尺寸）
     int w = static_cast<int>(desc.viewportWidth);
     int h = static_cast<int>(desc.viewportHeight);
     if (w <= 0 || h <= 0) {
@@ -116,7 +98,9 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
             w = static_cast<int>(rt.width);
             h = static_cast<int>(rt.height);
         } else {
-            glfwGetFramebufferSize(_device->window(), &w, &h);
+            const auto fb = _device->framebufferSize();
+            w = static_cast<int>(fb.width);
+            h = static_cast<int>(fb.height);
         }
     }
     glViewport(0, 0, w, h);
@@ -221,6 +205,31 @@ void GLCommandList::setViewport(float x, float y, float w, float h) {
                static_cast<GLsizei>(w), static_cast<GLsizei>(h));
 }
 
+// V3-0：销毁后清理 VAO 缓存。VAO 固化的是 GL 对象名——源资源删除后驱动
+// 可能复用同名 id 给新资源，旧 VAO 就会指向错误对象（画出垃圾/踩内存）。
+void GLCommandList::invalidateVAOForBuffer(uint32_t bufferId) {
+    for (auto it = _vaoCache.begin(); it != _vaoCache.end();) {
+        const auto& key = it->first;
+        if (std::get<1>(key) == bufferId || std::get<2>(key) == bufferId) {
+            if (it->second) glDeleteVertexArrays(1, &it->second);
+            it = _vaoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void GLCommandList::invalidateVAOForPipeline(uint32_t pipelineId) {
+    for (auto it = _vaoCache.begin(); it != _vaoCache.end();) {
+        if (std::get<0>(it->first) == pipelineId) {
+            if (it->second) glDeleteVertexArrays(1, &it->second);
+            it = _vaoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 GLuint GLCommandList::obtainVAO() {
     if (!_curPipeline.valid() || !_curVertexBuffer.valid()) return 0;
 
@@ -285,23 +294,22 @@ void GLCommandList::flushUniforms() {
     pipe.program->use();   // GL 要求先 use 再设 uniform
 
     for (auto& [name, u] : _pendingUniforms) {
+        const char* n = name.c_str();
         switch (u.type) {
             case UniformValue::Type::Float:
-                pipe.program->setFloat(name, u.data[0]);
+                pipe.program->setFloat(n, u.data[0]);
                 break;
             case UniformValue::Type::Vec3:
-                pipe.program->setFloat3(name, u.data[0], u.data[1], u.data[2]);
+                pipe.program->setFloat3(n, u.data[0], u.data[1], u.data[2]);
                 break;
             case UniformValue::Type::Vec4:
-                pipe.program->setFloat4(name, u.data[0], u.data[1], u.data[2], u.data[3]);
+                pipe.program->setFloat4(n, u.data[0], u.data[1], u.data[2], u.data[3]);
                 break;
-            case UniformValue::Type::Mat4: {
-                glm::mat4 m = glm::make_mat4(u.data);
-                pipe.program->setMat4(name, Matrix::toMatrix(m));
+            case UniformValue::Type::Mat4:
+                pipe.program->setMat4(n, u.data);   // L0：直接传 float[16]
                 break;
-            }
             case UniformValue::Type::Int:
-                pipe.program->setInt(name, static_cast<int>(u.data[0]));
+                pipe.program->setInt(n, static_cast<int>(u.data[0]));
                 break;
         }
     }

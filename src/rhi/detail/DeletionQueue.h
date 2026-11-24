@@ -1,75 +1,72 @@
 //
 //  DeletionQueue.h
-//  RHI 延迟资源销毁（V3-0）
+//  RHI 内部值对象（GL/VK 共用）—— 句柄制前提之一：帧在飞时延迟回收
 //
-//  背景：Vulkan 资源被 in-flight command buffer 引用时不能立即 vkDestroy*。
-//  destroy* 只把句柄从资源表摘除（标记 dead），实际释放登记到本队列；
-//  endFrame 推进帧号，销毁已过 delayFrames 的条目。
+//  V3-0（docs/RHI_V3_PLAN.md）：destroy* 不立即销毁 GPU 对象，改为摘句柄 +
+//  登记回调（dueFrame = 当前帧 + 帧滞后期）；设备在每帧 beginFrame（GPU 同步点
+//  之后）批量执行到期回调，析构前 flushAll() 兜底。
+//  纯 CPU 数据结构，无虚函数，不进契约层。
 //
-//  约定：
-//  - 单线程（与 device 接口一致），不加锁；
-//  - 设备析构前必须先 waitIdle + flush()，否则 lambda 里的 vkDevice 已失效；
-//  - GL 后端当前仍即时删除（GL 同步语义；VAO 悬空已由 discardVAOs 处理），
-//    后续可复用本类统一。
-//
-#ifndef RhiDetailDeletionQueue_h
-#define RhiDetailDeletionQueue_h
+#ifndef RhiDeletionQueue_h
+#define RhiDeletionQueue_h
 
-#include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <functional>
 #include <utility>
 #include <vector>
 
 namespace rhi {
+namespace detail {
 
 class DeletionQueue {
 public:
-    explicit DeletionQueue(uint32_t delayFrames = 2) : _delay(delayFrames) {}
+    // 帧滞后期：资源登记后至少经过 kLagFrames 帧才真正销毁。
+    // 当前两后端 frame-in-flight = 1（单 fence），登记帧的提交在下一帧
+    // beginFrame 的 fence 等待后必然完成 → lag=1 即安全；E2 提升到 fif=2
+    // 时改为 2。
+    static constexpr uint64_t kLagFrames = 1;
 
-    void enqueue(std::function<void()> fn) {
-        _entries.push_back(Entry{_frame + _delay, std::move(fn)});
+    // 登记一个到期销毁回调。dueFrame 通常为 currentFrame + kLagFrames。
+    void push(uint64_t dueFrame, std::function<void()> fn) {
+        _items.push_back(Item{dueFrame, std::move(fn)});
     }
 
-    // 每帧末尾调用：推进帧号并执行到期条目。
-    // 先摘出到期项再执行，允许回调里继续 enqueue。
-    void tick() {
-        ++_frame;
-        std::vector<Entry> due;
-        for (auto it = _entries.begin(); it != _entries.end();) {
-            if (it->frame <= _frame) {
-                due.push_back(std::move(*it));
-                it = _entries.erase(it);
+    // 执行所有 dueFrame <= currentFrame 的回调（保持登记顺序）。
+    void flush(uint64_t currentFrame) {
+        if (_items.empty()) return;
+        std::vector<Item> remain;
+        remain.reserve(_items.size());
+        for (Item& it : _items) {
+            if (it.dueFrame <= currentFrame) {
+                if (it.fn) it.fn();
             } else {
-                ++it;
+                remain.push_back(std::move(it));
             }
         }
-        for (auto& e : due) e.fn();
+        _items.swap(remain);
     }
 
-    // 设备销毁前强制清空（调用方保证 GPU 已 idle）。
-    // 循环处理"回调里又 enqueue"的情况。
-    void flush() {
-        while (!_entries.empty()) {
-            std::vector<Entry> all;
-            all.swap(_entries);
-            for (auto& e : all) e.fn();
+    // 无条件执行全部回调（设备析构 / waitIdle 之后）。
+    void flushAll() {
+        for (Item& it : _items) {
+            if (it.fn) it.fn();
         }
+        _items.clear();
     }
 
-    std::size_t pending() const { return _entries.size(); }
-    uint64_t frame() const { return _frame; }
+    bool     empty() const { return _items.empty(); }
+    uint32_t size()  const { return static_cast<uint32_t>(_items.size()); }
 
 private:
-    struct Entry {
-        uint64_t frame = 0;
+    struct Item {
+        uint64_t             dueFrame = 0;
         std::function<void()> fn;
     };
-    uint32_t _delay = 2;
-    uint64_t _frame = 0;
-    std::vector<Entry> _entries;
+    std::vector<Item> _items;
 };
 
+} // namespace detail
 } // namespace rhi
 
-#endif /* RhiDetailDeletionQueue_h */
+#endif /* RhiDeletionQueue_h */

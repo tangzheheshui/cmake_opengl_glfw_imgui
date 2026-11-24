@@ -25,6 +25,18 @@ namespace rhi {
         }                                                                     \
     } while (0)
 
+// V3-0：资源创建路径的失败语义——打印 + return {}（invalid 句柄），不中止进程。
+// 仅限返回句柄类型的 create* 函数内使用；帧路径/设备初始化仍用 VK_CHECK（abort）。
+#define VK_CHECK_RET(call)                                                    \
+    do {                                                                      \
+        const VkResult _r_ = (call);                                          \
+        if (_r_ != VK_SUCCESS) {                                              \
+            ENGINE_LOG_ERROR("[VK] %s failed (%d) at %s:%d",                  \
+                             #call, (int)_r_, __FILE__, __LINE__);            \
+            return {};                                                        \
+        }                                                                     \
+    } while (0)
+
 // 后端内部 Buffer 资源（M3：HOST_VISIBLE + 持久映射，适合小数据量）
 struct VkBufferRes {
     VkBuffer       buffer = VK_NULL_HANDLE;
@@ -67,13 +79,12 @@ struct VkRenderTargetRes {
 
 // 绘制级 uniform 块（M4.2）：独立 UBO + 独立描述符集（避免共享 UBO 逐帧覆盖）
 struct VkUniformBlockRes {
-    VkBuffer         buffer = VK_NULL_HANDLE;
-    VkDeviceMemory   memory = VK_NULL_HANDLE;
-    void*            mapped = nullptr;
-    VkDescriptorSet  set    = VK_NULL_HANDLE;
-    VkDescriptorPool pool   = VK_NULL_HANDLE;   // V3-0：set 的归属池（延迟归还用）
-    uint32_t         size   = 0;
-    VkMemAlloc       memAlloc;   // E1
+    VkBuffer       buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void*          mapped = nullptr;
+    VkDescriptorSet set   = VK_NULL_HANDLE;
+    uint32_t       size   = 0;
+    VkMemAlloc     memAlloc;   // E1
 };
 
 // B6：反射出的 push constant 成员（管线创建期从 SPIR-V 生成，

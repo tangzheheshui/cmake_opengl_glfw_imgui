@@ -13,7 +13,6 @@
 #include "../IRHICommandList.h"
 #include <map>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 #include <glad/glad.h>
@@ -45,9 +44,11 @@ public:
     void pushDebugLabel(const char* label) override;
     void popDebugLabel() override;
 
-    // V3-0：资源销毁时清理引用该 pipeline/buffer 的 VAO 缓存，避免悬空属性指针。
-    // pipelineId=0 表示只按 buffer 清理；bufferId=0 表示只按 pipeline 清理。
-    void discardVAOs(uint32_t pipelineId, uint32_t bufferId);
+    // V3-0：buffer/pipeline 销毁后清理引用它的 VAO 缓存条目。
+    // VAO 的属性指针/绑定在创建期固化为 GL 对象名，源资源删除后复用该 VAO
+    // 会画出垃圾（悬空引用）。
+    void invalidateVAOForBuffer(uint32_t bufferId);
+    void invalidateVAOForPipeline(uint32_t pipelineId);
 
 private:
     // 按 (pipeline, vertexBuffer) 组合缓存 VAO（M2：替换 v1 的单 VAO 重配置）

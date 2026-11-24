@@ -10,8 +10,6 @@
 #include <memory>
 #include <vector>
 
-struct GLFWwindow;
-
 namespace rhi {
 
 class IRHICommandList;
@@ -65,15 +63,30 @@ public:
     virtual UniformBlockHandle createUniformBlock(uint32_t size) = 0;
 
     // ---- 帧循环 ----
-    // GL 后端：空实现（swap 由 main 里的 glfwSwapBuffers 完成，保持现有主循环不变）
-    // Vulkan 后端：beginFrame = acquire image；endFrame = submit + present
-    // V3-0：返回 false 表示本帧没有可用的 swapchain image（过期/重建中），
-    // 上层必须跳过本帧录制与 endFrame，避免提交一个状态机不匹配的帧。
+    // GL 后端：执行延迟销毁队列（V3-0 DeletionQueue），恒返回 true
+    // Vulkan 后端：beginFrame = 等待 fence + acquire image；endFrame = submit + present
+    // 返回 false = 本帧无法开始（swapchain 过期重建中/窗口最小化），上层必须
+    // 跳过全部命令录制（此前返回 void 时失败被内部吞掉，上层会录制一个
+    // 不会提交的帧——V3-0 止血项）
     virtual bool beginFrame() = 0;
     virtual void endFrame()   = 0;
 
-    // 窗口尺寸变化通知（Vulkan 后端重建 swapchain；GL 后端 no-op）
+    // 窗口尺寸变化通知（Vulkan 后端重建 swapchain；GL 后端保存尺寸）
     virtual void onResize(int width, int height) { (void)width; (void)height; }
+
+    // ---- C1a：尺寸查询与呈现（RHI 永不回查窗口系统）----
+    struct FramebufferSize {
+        uint32_t width  = 0;
+        uint32_t height = 0;
+    };
+    // 默认帧缓冲/离屏目标的像素尺寸（GL：构造/onResize 保存的值；
+    // VK：swapchain extent）
+    virtual FramebufferSize framebufferSize() const { return {}; }
+
+    // 呈现当前帧。GL：调用 NativeWindow::swapBuffers 回调（宿主拥有窗口）；
+    // VK：vkQueuePresentKHR；离屏：no-op。
+    // C1b 起由 RenderSystem::renderFrame 统一调用。
+    virtual void present() {}
 
     // 命令录制（每帧从 device 获取，框架内部可复用同一实例）
     virtual IRHICommandList* commandList() = 0;

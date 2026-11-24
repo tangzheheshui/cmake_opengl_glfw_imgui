@@ -64,3 +64,9 @@ add_subdirectory(src)
 
 # ---- app 层 ----
 add_subdirectory(app)
+
+# ---- L1：分层检查（docs/ARCHITECTURE_INTERFACES.md §4.5）----
+# cmake --build <build> --target check_layers；CI/提交前调用
+add_custom_target(check_layers
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_SOURCE_DIR}/tools/check_layers.cmake
+    COMMENT "check_layers: 引擎分层依赖检查")

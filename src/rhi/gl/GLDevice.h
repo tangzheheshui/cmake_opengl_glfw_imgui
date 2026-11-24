@@ -3,19 +3,19 @@
 //  RHI OpenGL 后端 - 设备实现
 //
 //  定位：把 Vulkan 语义的显式调用"翻译"回 GL 状态机。
-//  现有的 Shader 类（render/shader.h）直接复用，负责 GLSL 编译。
+//  GLSL 编译由 rhi/gl/GLProgram 承载（L0 内聚，不再依赖 render 层）。
 //
 #ifndef GLDevice_h
 #define GLDevice_h
 
 #include "../IRHIDevice.h"
+#include "../detail/DeletionQueue.h"
+#include "GLProgram.h"
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <glad/glad.h>
-
-class Shader;   // render/shader.h，cpp 中包含
 
 namespace rhi {
 
@@ -60,13 +60,15 @@ struct GLSampler {
 };
 
 struct GLPipeline {
-    std::unique_ptr<Shader> program;
+    std::unique_ptr<GLProgram> program;   // L0：RHI 自有 GLSL 编译器（原 render/shader.h）
     GraphicsPipelineDesc desc;
 };
 
 class GLDevice final : public IRHIDevice {
 public:
-    GLDevice(GLFWwindow* window, const std::string& shaderRootPath);
+    // C1a：宿主已创建 GL 上下文并 current；RHI 不创建窗口/上下文。
+    // desc.window.swapBuffers 由宿主提供（present 用）。
+    explicit GLDevice(const DeviceDesc& desc);
     ~GLDevice() override;
 
     Backend    backend() const override { return Backend::OpenGL; }
@@ -104,9 +106,14 @@ public:
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 
-    bool beginFrame() override { return true; }
+    bool beginFrame() override;   // V3-0：帧号推进 + 延迟销毁队列 flush
     void endFrame()   override {}
     void waitIdle()   override;
+
+    // ---- C1a：尺寸推送 + 呈现（RHI 不回查窗口系统）----
+    void onResize(int width, int height) override;
+    FramebufferSize framebufferSize() const override { return _size; }
+    void present() override;   // 调 desc.window.swapBuffers（宿主回调）
 
     IRHICommandList* commandList() override;
 
@@ -121,11 +128,23 @@ public:
     // B2：设备上是否存在显式创建的独立采样器。false 时 bindTexture 完全
     // 不触碰 GL_SAMPLER_BINDING 状态，保证遗留路径行为零变化。
     bool hasSamplers() const { return !_samplers.empty(); }
-    GLFWwindow*       window() const { return _window; }
+
+    // C1a：构造期有效性（上下文缺失/非法 desc 时 false，工厂据此报错）
+    bool initialized() const { return _initialized; }
+
+    // V3-0：销毁走延迟队列（帧在飞的资源不得立即删）。供析构兜底 flushAll。
+    detail::DeletionQueue& deletionQueue() { return _delQueue; }
 
 private:
-    GLFWwindow* _window = nullptr;
+    // C1a：RHI 不持有窗口——尺寸与交换回调来自 DeviceDesc（宿主职责）
     std::string _shaderRootPath;
+    FramebufferSize _size;
+    NativeWindow    _window;      // 宿主交换回调（present 用；非 GLFW 类型）
+    bool _initialized = false;
+    // V3-0：GL 无 fence，帧号由 beginFrame 推进（GL 路径 RenderSystem 每帧调用；
+    // 遗留叠加路径的多次调用幂等无副作用）
+    uint64_t _frameCount = 0;
+    detail::DeletionQueue _delQueue;
 
     // 句柄 id = 数组下标 + 1（0 保留为 invalid）
     std::vector<GLBuffer>   _buffers;

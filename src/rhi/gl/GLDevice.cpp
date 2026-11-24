@@ -4,8 +4,6 @@
 #include "GLDevice.h"
 #include "GLCommandList.h"
 #include "rhi/FormatInfo.h"
-#include "shader.h"                 // 复用现有 GLSL 编译器（include path: src/render）
-#include <GLFW/glfw3.h>
 #include "log/LogMacros.h"
 #include <algorithm>
 #include <cstring>
@@ -56,30 +54,34 @@ static std::string shaderFileOf(const GraphicsPipelineDesc& desc, ShaderStage st
     return "";
 }
 
-GLDevice::GLDevice(GLFWwindow* window, const std::string& shaderRootPath)
-    : _window(window)
-    , _shaderRootPath(shaderRootPath) {
+// C1a：宿主已把 GL 上下文设为 current 后调用。RHI 不创建窗口/上下文，
+// 只保存尺寸与宿主交换回调。
+GLDevice::GLDevice(const DeviceDesc& desc)
+    : _shaderRootPath(desc.shaderRootPath)
+    , _size{desc.width, desc.height}
+    , _window(desc.window) {
+    if (!_window.valid() || !_window.swapBuffers) {
+        ENGINE_LOG_ERROR("[GL] DeviceDesc.window invalid or missing swapBuffers callback "
+                         "(host owns window/swap, see docs ARCHITECTURE_INTERFACES §3.2)");
+        return;   // _initialized 保持 false，工厂报错
+    }
+    _initialized = true;
     _commandList = std::make_unique<GLCommandList>(this);
 }
 
 GLDevice::~GLDevice() {
     waitIdle();
-    // V3-0：离屏 RT 的 FBO/深度 RBO 必须在颜色纹理之前释放（FBO 引用纹理）
-    size_t liveRts = 0;
+    // V3-0：渲染目标的 FBO/RBO 此前析构不释放（泄漏）；颜色纹理在下方
+    // _textures 循环统一删除。手动 destroyRenderTarget 过的槽位 fbo 已为 0。
     for (auto& rt : _renderTargets) {
-        if (!rt.fbo) continue;
-        ++liveRts;
         if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
-        glDeleteFramebuffers(1, &rt.fbo);
+        if (rt.fbo)      glDeleteFramebuffers(1, &rt.fbo);
     }
-    size_t liveBuffers = 0, liveTextures = 0, liveSamplers = 0, livePipelines = 0;
-    for (auto& b : _buffers)   if (b.id) { ++liveBuffers;  glDeleteBuffers(1, &b.id); }
-    for (auto& t : _textures)  if (t.id) { ++liveTextures; glDeleteTextures(1, &t.id); }
-    for (auto& s : _samplers)  if (s.id) { ++liveSamplers; glDeleteSamplers(1, &s.id); }
-    for (auto& p : _pipelines) if (p.program) ++livePipelines;
-    // GLPipeline 持有 unique_ptr<Shader>，其析构负责 glDeleteProgram
-    ENGINE_LOG_INFO("[GL] shutdown: buffers=%zu textures=%zu samplers=%zu pipelines=%zu renderTargets=%zu",
-                    liveBuffers, liveTextures, liveSamplers, livePipelines, liveRts);
+    for (auto& b : _buffers)   if (b.id) glDeleteBuffers(1, &b.id);
+    for (auto& t : _textures)  if (t.id) glDeleteTextures(1, &t.id);
+    for (auto& s : _samplers)  if (s.id) glDeleteSamplers(1, &s.id);
+    // GLPipeline 持有 unique_ptr<GLProgram>，其析构负责 glDeleteProgram
+    _delQueue.flushAll();   // V3-0：延迟销毁兜底（waitIdle 后执行安全）
 }
 
 DeviceInfo GLDevice::info() const {
@@ -144,7 +146,7 @@ DeviceCapabilities GLDevice::capabilities() const {
 
     // sRGB 默认帧缓冲（等价 VK 的 sRGB 交换链）：GL 3.0 起核心提供
     // GL_FRAMEBUFFER_SRGB 写入编码开关（B3c 线性工作流依赖它）。
-    // 注意 GLFW_SRGB_CAPABLE 在 macOS 上查不到（见 app/main.cpp B3c 注释），
+    // 注意 macOS 上 GLFW 不报告 GLFW_SRGB_CAPABLE（见 app/main.cpp B3c 注释），
     // GL_BACK 的 COLOR_ENCODING 查询也实测报 linear——按核心版本能力报告。
     caps.sRGBSwapchain = (major >= 3);
 
@@ -221,9 +223,11 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     const GLenum dataFmt     = static_cast<GLenum>(fi.glDataFormat());
     const GLenum dataType    = static_cast<GLenum>(fi.glDataType());
 
-    const GLenum target = desc.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
-    // V3-0：R8 等非 4 字节对齐行宽的上传不能依赖默认 UNPACK_ALIGNMENT=4
+    // V3-0：上传逐字节假定紧排（R8 / 非 4 倍数宽度会错位）。GL 默认
+    // GL_UNPACK_ALIGNMENT=4，只对本 Width*4 对齐安全。入口设 1，出口恢复。
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    const GLenum target = desc.cubemap ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
     glBindTexture(target, tex.id);
     tex.width  = desc.width;    // B4：readback/RT 需要
     tex.height = desc.height;
@@ -274,7 +278,7 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
     glTexParameterf(target, GL_TEXTURE_MIN_LOD, sd.minLod);
     glTexParameterf(target, GL_TEXTURE_MAX_LOD, sd.maxLod);
     glBindTexture(target, 0);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);   // 恢复默认，避免泄漏给后续上传
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);   // V3-0：恢复默认紧排假设
 
     _textures.push_back(std::move(tex));
     TextureHandle h; h.id = static_cast<uint32_t>(_textures.size());
@@ -283,10 +287,16 @@ TextureHandle GLDevice::createTexture(const TextureDesc& desc) {
 
 PipelineHandle GLDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     GLPipeline pipe;
-    // 按项目着色器约定从文件构建（Shader 的析构负责删除 program）
+    // L0：RHI 自有 GLSL 编译器（GLProgram）。编译失败不再 assert 中止进程——
+    // 返回 invalid 句柄（上层绘制自然跳过），行为改进见 ARCHITECTURE_INTERFACES §4.1
+    auto prog = std::make_unique<GLProgram>();
     const std::string vertPath = _shaderRootPath + shaderFileOf(desc, ShaderStage::Vertex);
     const std::string fragPath = _shaderRootPath + shaderFileOf(desc, ShaderStage::Fragment);
-    pipe.program = std::make_unique<Shader>(vertPath, fragPath);
+    if (!prog->compile(vertPath, fragPath)) {
+        ENGINE_LOG_ERROR("[GL] pipeline creation failed (shader compile); returns invalid handle");
+        return {};
+    }
+    pipe.program = std::move(prog);
     pipe.desc    = desc;
 
     _pipelines.push_back(std::move(pipe));
@@ -394,21 +404,27 @@ void GLDevice::attachSampler(TextureHandle tex, SamplerHandle s) {
 }
 
 // ---- v2 对象级销毁（B0）----
+// V3-0：销毁走 DeletionQueue 延迟到下一帧 beginFrame（帧在飞的资源不得立即删；
+// GL 命令可能在 GPU 上仍在执行）。摘句柄立即生效（id 不复用），真删除到期批量。
 void GLDevice::destroyBuffer(BufferHandle h) {
     if (!h.valid() || h.id > _buffers.size()) return;
     GLBuffer& b = _buffers[h.id - 1];
     if (!b.id) return;
-    // V3-0：VAO 缓存持有该 buffer 的属性指针，先失效再删 GL 资源
-    if (_commandList) _commandList->discardVAOs(0, h.id);
-    glDeleteBuffers(1, &b.id);
+    GLuint id = b.id;
     b = GLBuffer{};
+    _commandList->invalidateVAOForBuffer(id);   // VAO 持属性指针，源 buffer 先摘引用
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [id] { glDeleteBuffers(1, &id); });
 }
 
 void GLDevice::destroyTexture(TextureHandle h) {
     if (!h.valid() || h.id > _textures.size()) return;
     GLTexture& t = _textures[h.id - 1];
-    if (t.id) glDeleteTextures(1, &t.id);
+    if (!t.id) return;
+    GLuint id = t.id;
     t = GLTexture{};
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [id] { glDeleteTextures(1, &id); });
 }
 
 // ---- B4：离屏渲染目标 ----
@@ -469,8 +485,12 @@ void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
     GLRenderTarget& rt = _renderTargets[h.id - 1];
     if (rt.fbo) {
         destroyTexture(rt.colorTex);
-        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
-        glDeleteFramebuffers(1, &rt.fbo);
+        GLuint fbo = rt.fbo, rbo = rt.depthRbo;
+        // FBO/RBO 同走延迟队列（Pass 可能仍在帧内引用）
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames, [fbo, rbo] {
+            if (rbo) glDeleteRenderbuffers(1, &rbo);
+            glDeleteFramebuffers(1, &fbo);
+        });
         rt = GLRenderTarget{};
     }
     rt.alive = false;   // 槽位保留（id 不复用）
@@ -526,7 +546,6 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
     }
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(rb.x, rb.y, w, h, dataFmt, dataType, outData);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);   // 恢复默认，避免泄漏给后续回读
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &fbo);
     return true;
@@ -535,15 +554,40 @@ bool GLDevice::readbackTexture(TextureHandle tex, void* outData, size_t outSize,
 void GLDevice::destroyPipeline(PipelineHandle h) {
     if (!h.valid() || h.id > _pipelines.size()) return;
     GLPipeline& p = _pipelines[h.id - 1];
-    if (!p.program) return;
-    // V3-0：VAO 缓存按 pipelineId 关联，先失效再删 program
-    if (_commandList) _commandList->discardVAOs(h.id, 0);
-    p.program.reset();   // Shader 析构负责 glDeleteProgram
+    if (p.program) {
+        // V3-0：先清 VAO 缓存（VAO 固化了管线的属性布局指针），再删 program。
+        // glDeleteProgram 自带"在用即标记删除"语义（帧在飞安全），无需入队。
+        _commandList->invalidateVAOForPipeline(h.id);
+        p.program.reset();
+    }
     p.desc = GraphicsPipelineDesc{};
 }
 
 void GLDevice::waitIdle() {
     glFinish();
+}
+
+// V3-0：帧号推进 + 到期延迟销毁。GL 路径 RenderSystem 每帧调用一次；
+// 遗留叠加路径（drawSmokeTriangle 等）的额外调用幂等（flush 空队列无副作用）。
+bool GLDevice::beginFrame() {
+    ++_frameCount;
+    _delQueue.flush(_frameCount);
+    return true;
+}
+
+// ---- C1a：尺寸推送 + 呈现 ----
+void GLDevice::onResize(int width, int height) {
+    if (width > 0 && height > 0) {
+        _size.width  = static_cast<uint32_t>(width);
+        _size.height = static_cast<uint32_t>(height);
+    }
+}
+
+void GLDevice::present() {
+    // 宿主拥有窗口与交换时机策略（vsync 等）；RHI 只转发回调
+    if (_window.swapBuffers) {
+        _window.swapBuffers(_window.swapUser);
+    }
 }
 
 IRHICommandList* GLDevice::commandList() {

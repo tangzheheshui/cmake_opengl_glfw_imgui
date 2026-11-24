@@ -5,15 +5,69 @@
 #include "VkDevice.h"
 #include "VkCommandList.h"
 #include "rhi/FormatInfo.h"
-#include <GLFW/glfw3.h>
 #include <fstream>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
 #include <filesystem>
 #include "fs/FilePathUtil.h"
 #include "VkShaderReflect.h"
 
+// C1a：平台 surface 建面宏由 CMake 注入（VK_USE_PLATFORM_*）。公共头不出现
+// Vk 类型；此处是全库唯一允许平台分支的位置（后端内部实现细节）。
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+#include <vulkan/vulkan_metal.h>
+#endif
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+#include <X11/Xlib.h>
+#include <vulkan/vulkan_xlib.h>
+#endif
+#if defined(VK_USE_PLATFORM_XCB_KHR)
+#include <xcb/xcb.h>
+#include <vulkan/vulkan_xcb.h>
+#endif
+#if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+#include <wayland-client.h>
+#include <vulkan/vulkan_wayland.h>
+#endif
+
 namespace rhi {
+
+// C1a：按 NativeWindowType 推导实例扩展（宿主未提供 instanceExtensions 时）。
+// 返回 false = 该窗口类型无对应平台 surface 扩展（无法自建面）。
+static bool platformInstanceExtensions(NativeWindowType t,
+                                       std::vector<const char*>& out) {
+    switch (t) {
+        case NativeWindowType::Win32:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_win32_surface");
+            return true;
+        case NativeWindowType::Xlib:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_xlib_surface");
+            return true;
+        case NativeWindowType::Xcb:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_xcb_surface");
+            return true;
+        case NativeWindowType::Wayland:
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_KHR_wayland_surface");
+            return true;
+        case NativeWindowType::MetalLayer:
+        case NativeWindowType::Cocoa:   // Cocoa 窗口经 CAMetalLayer 建面（宿主回调常见）
+            out.push_back("VK_KHR_surface");
+            out.push_back("VK_EXT_metal_surface");
+            return true;
+        case NativeWindowType::None:
+        default:
+            return false;
+    }
+}
 
 static const char* kRequiredDeviceExts[] = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -77,11 +131,19 @@ static bool formatBlitSupported(VkPhysicalDevice pd, VkFormat f) {
 // ============================================================
 // 创建 / 销毁
 // ============================================================
-VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath)
-    : _window(window)
-    , _shaderRootPath(shaderRootPath) {
+// C1a：由 DeviceDesc 构造。早期初始化失败写入 outError 并保持 _initialized=false
+//（工厂转译为 nullptr + 诊断信息）；深度失败（资源路径 VK_CHECK）仍 abort，
+// V3-1 引入 Result<T> 后收口。
+VulkanDevice::VulkanDevice(const DeviceDesc& desc, std::string& outError)
+    : _desc(desc)
+    , _shaderRootPath(desc.shaderRootPath)
+    , _size{desc.width, desc.height} {
+    if (desc.offscreen) {
+        outError = "offscreen Vulkan device not supported yet (C4/F1)";
+        return;
+    }
     createInstance();
-    createSurface();
+    if (!createSurface(outError)) return;
     pickPhysicalDevice();
     // A3: 能力探测（启动日志打印能力表，多机验证的第一手资料）
     _caps = VkCaps::query(_physicalDevice, _surface);
@@ -102,6 +164,7 @@ VulkanDevice::VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath
     // 初值为无效句柄；所有真实绘制都先调 setDrawUniforms 掩盖了这个潜伏缺陷，
     // RT 内首个未设 block 的 draw 触发越界）
     _commandList = std::make_unique<VkCommandList>(this);
+    _initialized = true;
 }
 
 VulkanDevice::~VulkanDevice() {
@@ -111,8 +174,10 @@ VulkanDevice::~VulkanDevice() {
     // E1：排空帧内延迟的 GPU 工作（如最后帧的纹理 staging）——此前退出路径
     // 不 drain，其 staging 的释放回调永远不执行（分配器统计暴露的既有泄漏）
     drainDeferredGpuWork();
-    // V3-0：GPU 已 idle，执行延迟销毁队列（必须在资源表/描述符池销毁之前）
-    _deletionQueue.flush();
+    // V3-0：延迟销毁兜底必须在 _memAlloc.shutdown() 之前——shutdown 时
+    // （RenderSystem::shutdown 释放 pick RT 等）刚入队的条目尚未 flush，
+    // 若先跑分配器统计会误报 live>0，且回收顺序颠倒
+    _delQueue.flushAll();
     destroySwapchainObjects();
     if (_fenceInFlight)     vkDestroyFence(_device, _fenceInFlight, nullptr);
     if (_semImageAvailable) vkDestroySemaphore(_device, _semImageAvailable, nullptr);
@@ -134,6 +199,13 @@ VulkanDevice::~VulkanDevice() {
         _memAlloc.free(b.memAlloc);   // E1
         // 描述符集随 pool 销毁
     }
+    // V3-0：离屏 RT 的深度附件兜底回收（宿主未调 destroyRenderTarget 的槽位；
+    // 颜色附件是 VkTextureRes，已在上方 _textures 循环销毁）
+    for (auto& rt : _renderTargets) {
+        if (rt.depthView)  vkDestroyImageView(_device, rt.depthView, nullptr);
+        if (rt.depthImage) vkDestroyImage(_device, rt.depthImage, nullptr);
+        _memAlloc.free(rt.depthMemAlloc);
+    }
     // destroySwapchainObjects 只回收 swapchain/renderPass，不回收管线
     for (auto& p : _pipelines) {
         if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
@@ -149,7 +221,8 @@ VulkanDevice::~VulkanDevice() {
     if (_pipelineCache)     vkDestroyPipelineCache(_device, _pipelineCache, nullptr);
     _memAlloc.shutdown();    // E1：设备销毁前回收页/专用分配（泄漏在此告警）
     if (_device)   vkDestroyDevice(_device, nullptr);
-    if (_surface)  vkDestroySurfaceKHR(_instance, _surface, nullptr);
+    // C1a 所有权约定：externalSurface 归宿主；createSurface 回调/平台自建归 RHI
+    if (_surface && _surfaceOwned) vkDestroySurfaceKHR(_instance, _surface, nullptr);
     if (_debugMessenger && _destroyDebugMessengerFn) {
         _destroyDebugMessengerFn(_instance, _debugMessenger, nullptr);
     }
@@ -157,15 +230,24 @@ VulkanDevice::~VulkanDevice() {
 }
 
 void VulkanDevice::createInstance() {
-    // 1) GLFW 要求的平台 surface 扩展（macOS: VK_KHR_surface + VK_EXT_metal_surface）
+    // 1) 平台 surface 扩展：宿主显式提供（instanceExtensions）优先；
+    //    否则按 NativeWindowType 推导（C1a，RHI 不依赖任何窗口库）
     std::vector<const char*> exts;
-    {
-        uint32_t n = 0;
-        const char** e = glfwGetRequiredInstanceExtensions(&n);
-        exts.assign(e, e + n);
-        for (uint32_t i = 0; i < n; ++i) {
-            ENGINE_LOG_ERROR("[VK] glfw ext[%u] = %s", i, e[i]);
+    if (!_desc.instanceExtensions.empty()) {
+        for (const auto& e : _desc.instanceExtensions) {
+            exts.push_back(e.c_str());   // 指向 _desc 成员字符串，设备生命周期内稳定
         }
+        ENGINE_LOG_INFO("[VK] instance extensions provided by host (%zu)",
+                        _desc.instanceExtensions.size());
+    } else {
+        std::vector<const char*> plat;
+        if (!platformInstanceExtensions(_desc.window.type, plat)) {
+            ENGINE_LOG_ERROR("[VK] no platform surface extension for window type %d "
+                             "(provide DeviceDesc.createSurface or instanceExtensions)",
+                             static_cast<int>(_desc.window.type));
+            return;   // _initialized 保持 false
+        }
+        exts = plat;
     }
 
     // 2) 校验并启用 portability 枚举（macOS 必须，MoltenVK 是 portability 驱动）
@@ -187,14 +269,17 @@ void VulkanDevice::createInstance() {
     app.pApplicationName = "my_app";
     app.apiVersion       = VK_API_VERSION_1_0;   // 最低版本请求，规避 loader/MVK 版本协商问题
 
-    // A1: 验证层开关（RHI_VK_VALIDATION=1 强制开 / =0 强制关；Debug 构建默认开）
+    // A1: 验证层开关（RHI_VK_VALIDATION=1 强制开 / =0 强制关；Debug 构建默认开；
+    // DeviceDesc::enableValidation=false 关闭——环境变量可覆盖宿主设置）
     const char* venv = std::getenv("RHI_VK_VALIDATION");
-    bool wantValidation = false;
+    bool wantValidation = _desc.enableValidation;
     if (venv) {
         wantValidation = (std::strcmp(venv, "0") != 0);
     }
 #ifndef NDEBUG
-    else {
+    else if (!_desc.enableValidation) {
+        wantValidation = false;   // 宿主显式关闭
+    } else {
         wantValidation = true;   // Debug 构建默认开启
     }
 #endif
@@ -273,8 +358,103 @@ void VulkanDevice::setObjName(VkObjectType type, uint64_t handle, const char* na
     _setNameFn(_device, &oi);
 }
 
-void VulkanDevice::createSurface() {
-    VK_CHECK(glfwCreateWindowSurface(_instance, _window, nullptr, &_surface));
+// C1a：surface 来源优先级 externalSurface（宿主持有，RHI 不销毁）
+// → createSurface 回调（RHI 接管）→ 平台自建（RHI 接管）。
+bool VulkanDevice::createSurface(std::string& outError) {
+    if (_desc.externalSurface != 0) {
+        _surface = reinterpret_cast<VkSurfaceKHR>(_desc.externalSurface);
+        _surfaceOwned = false;
+        ENGINE_LOG_INFO("[VK] using host-owned external surface");
+        return true;
+    }
+    if (_desc.createSurface) {
+        const uint64_t s = _desc.createSurface(reinterpret_cast<uint64_t>(_instance));
+        if (s == 0) {
+            outError = "host createSurface callback returned 0";
+            return false;
+        }
+        _surface = reinterpret_cast<VkSurfaceKHR>(s);
+        _surfaceOwned = true;
+        return true;
+    }
+
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+    if (_desc.window.type == NativeWindowType::MetalLayer
+        || _desc.window.type == NativeWindowType::Cocoa) {
+        if (_desc.window.type == NativeWindowType::Cocoa) {
+            // Cocoa 窗口句柄（NSView*）不能直接建面；需要 CAMetalLayer。
+            // 由宿主提供 createSurface 回调（GLFW 宿主内部处理窗口→layer 转换）
+            outError = "Cocoa window requires host createSurface callback (NSView -> CAMetalLayer)";
+            return false;
+        }
+        VkMetalSurfaceCreateInfoEXT mi{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+        mi.pLayer = _desc.window.handle;   // CAMetalLayer*
+        mi.flags  = 0;
+        if (vkCreateMetalSurfaceEXT(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateMetalSurfaceEXT failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
+    if (_desc.window.type == NativeWindowType::Win32) {
+        VkWin32SurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+        mi.hinstance = GetModuleHandle(nullptr);
+        mi.hwnd      = static_cast<HWND>(_desc.window.handle);
+        if (vkCreateWin32SurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateWin32SurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_XLIB_KHR)
+    if (_desc.window.type == NativeWindowType::Xlib) {
+        VkXlibSurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
+        mi.dpy       = static_cast<Display*>(_desc.window.display);
+        mi.window    = reinterpret_cast<Window>(_desc.window.handle);
+        if (vkCreateXlibSurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateXlibSurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_XCB_KHR)
+    if (_desc.window.type == NativeWindowType::Xcb) {
+        VkXcbSurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR};
+        mi.connection = static_cast<xcb_connection_t*>(_desc.window.display);
+        mi.window     = static_cast<xcb_window_t>(reinterpret_cast<uintptr_t>(_desc.window.handle));
+        if (vkCreateXcbSurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateXcbSurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+#if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+    if (_desc.window.type == NativeWindowType::Wayland) {
+        VkWaylandSurfaceCreateInfoKHR mi{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+        mi.display   = static_cast<wl_display*>(_desc.window.display);
+        mi.surface   = static_cast<wl_surface*>(_desc.window.handle);
+        if (vkCreateWaylandSurfaceKHR(_instance, &mi, nullptr, &_surface) != VK_SUCCESS) {
+            outError = "vkCreateWaylandSurfaceKHR failed";
+            return false;
+        }
+        _surfaceOwned = true;
+        return true;
+    }
+#endif
+    (void)outError;
+    outError = "no platform surface path for window type "
+               + std::to_string(static_cast<int>(_desc.window.type))
+               + " (platform macro not compiled in?)";
+    return false;
 }
 
 void VulkanDevice::pickPhysicalDevice() {
@@ -364,15 +544,10 @@ void VulkanDevice::createLogicalDevice() {
     bool isVulkan13 = _deviceApiVersion >= VK_API_VERSION_1_3;
     if (isVulkan13 || hasDynamicRenderingExt) {
         _dynamicRendering = true;
-        // V3-0：实例按 API 1.0 请求时，1.3 设备上的 core 入口
-        //（vkCmdBeginRendering）对 vkGetDeviceProcAddr 不可见；只要设备列出
-        // VK_KHR_dynamic_rendering，就显式启用扩展，保证 KHR 入口可解析。
-        // 1.2 设备还需要规范要求的依赖扩展链。
-        if (hasDynamicRenderingExt) {
-            // dynamic rendering 扩展的规范依赖链必须一并启用。
-            // 注意：1.3 设备 + 实例按 1.0 请求时同样需要显式列出
-            //（VUID-vkCreateDevice-ppEnabledExtensionNames-01387）；
-            // 已提升为 core 且未枚举的项跳过即可。
+        if (!isVulkan13) {
+            // 1.2 设备走扩展路径：dynamic rendering 依赖的扩展必须一并启用
+            //（规范依赖链：format_feature_flags2 / maintenance2 → create_renderpass2
+            //  → depth_stencil_resolve → dynamic_rendering）
             const char* dynDeps[] = {
                 "VK_KHR_maintenance2",
                 "VK_KHR_multiview",
@@ -383,7 +558,7 @@ void VulkanDevice::createLogicalDevice() {
             for (const char* dep : dynDeps) {
                 if (_caps.hasExtension(dep)) {
                     devExts.push_back(dep);
-                } else if (!isVulkan13) {
+                } else {
                     ENGINE_LOG_WARN("[VK] dynamic rendering dependency missing: %s", dep);
                 }
             }
@@ -431,23 +606,13 @@ void VulkanDevice::createLogicalDevice() {
     ci.pNext                   = featureChain;
     VK_CHECK(vkCreateDevice(_physicalDevice, &ci, nullptr, &_device));
     vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
-    // B1：dynamic rendering 入口点。V3-0：部分 1.3 驱动只导出 core 入口
-    //（vkCmdBeginRendering），不导出已提升的 KHR 别名；两者 ABI 兼容，
-    // 优先 KHR、回退 core，避免驱动差异直接 abort。
+    // B1：KHR 入口点（1.3 设备驱动同样导出已提升扩展的 KHR 别名，统一走它）
     _vkBeginRendering = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
         vkGetDeviceProcAddr(_device, "vkCmdBeginRenderingKHR"));
-    if (!_vkBeginRendering) {
-        _vkBeginRendering = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
-            vkGetDeviceProcAddr(_device, "vkCmdBeginRendering"));
-    }
     _vkEndRendering = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
         vkGetDeviceProcAddr(_device, "vkCmdEndRenderingKHR"));
-    if (!_vkEndRendering) {
-        _vkEndRendering = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
-            vkGetDeviceProcAddr(_device, "vkCmdEndRendering"));
-    }
     if (_dynamicRendering && (!_vkBeginRendering || !_vkEndRendering)) {
-        ENGINE_LOG_ERROR("[VK] no vkCmdBeginRendering entry (KHR/core)");
+        ENGINE_LOG_ERROR("[VK] vkCmdBeginRenderingKHR not resolvable");
         std::abort();
     }
     setObjName(VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(_device), "RHI_VulkanDevice");
@@ -455,16 +620,17 @@ void VulkanDevice::createLogicalDevice() {
 }
 
 void VulkanDevice::createSwapchainObjects() {
-    int fbW = 0, fbH = 0;
-    glfwGetFramebufferSize(_window, &fbW, &fbH);
+    // C1a：RHI 不回查窗口系统——尺寸来自 DeviceDesc/onResize（宿主推送）
+    const uint32_t fbW = _size.width;
+    const uint32_t fbH = _size.height;
 
     // surface 能力
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_physicalDevice, _surface, &caps);
     _swapchainExtent = caps.currentExtent;
     if (_swapchainExtent.width == UINT32_MAX) {
-        _swapchainExtent.width  = std::clamp(static_cast<uint32_t>(fbW),  caps.minImageExtent.width,  caps.maxImageExtent.width);
-        _swapchainExtent.height = std::clamp(static_cast<uint32_t>(fbH), caps.minImageExtent.height, caps.maxImageExtent.height);
+        _swapchainExtent.width  = std::clamp(fbW, caps.minImageExtent.width,  caps.maxImageExtent.width);
+        _swapchainExtent.height = std::clamp(fbH, caps.minImageExtent.height, caps.maxImageExtent.height);
     }
 
     // surface 格式（B3c）：优先 sRGB 交换链（线性工作流的编码端）。
@@ -805,13 +971,16 @@ bool VulkanDevice::beginFrame() {
     }
     _frameSkipped = !beginFrameInternal();
     _frameActive  = !_frameSkipped;
-    // V3-0：本帧没有可用 image 时上层必须跳过录制，不能进入 endFrame
+    if (_frameActive) {
+        // V3-0：fence 已等待 = 上一帧提交完成，此处的到期销毁安全。
+        // 帧号先 flush 再递增（登记 base = 已完成的最近帧）。
+        _delQueue.flush(_frameCount);
+        ++_frameCount;
+    }
     return _frameActive;
 }
 
 void VulkanDevice::endFrame() {
-    // V3-0：推进延迟销毁队列（即使本帧被跳过也要推进，否则资源永不释放）
-    _deletionQueue.tick();
     if (!_frameActive) { _frameSkipped = false; return; }
     _frameActive = false;
 
@@ -838,6 +1007,7 @@ void VulkanDevice::endFrame() {
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &renderDone;
     VK_CHECK(vkQueueSubmit(_queue, 1, &si, _fenceInFlight));
+    _frameSubmitted = true;   // C1b：present() 消费该标志
 
     // ---- RHI_PROBE=1：第 30 帧回读中心像素（M3 验证用，之后可移除）----
     // 必须在 present 之前执行：此时图像仍处于 acquired 状态，布局转换合法。
@@ -934,8 +1104,18 @@ void VulkanDevice::endFrame() {
         _memAlloc.free(readbackMem);   // E1
         std::fflush(stdout);
     }
+    // C1b：present 由 IRHIDevice::present() 独立执行（GL 宿主 swapBuffers 与
+    // VK vkQueuePresentKHR 同一入口），endFrame 只负责 submit
+}
+
+// ---- C1a/C1b：呈现独立于提交（GL 宿主 swap 与 VK present 同一入口）----
+void VulkanDevice::present() {
+    if (!_frameSubmitted) return;   // 帧跳过/未提交：无可呈现图像
+    _frameSubmitted = false;
+    if (_imageIndex >= _semRenderDone.size() || _swapchain == VK_NULL_HANDLE) return;
 
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    VkSemaphore renderDone = _semRenderDone[_imageIndex];
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores    = &renderDone;
     pi.swapchainCount     = 1;
@@ -948,6 +1128,11 @@ void VulkanDevice::endFrame() {
 }
 
 void VulkanDevice::onResize(int width, int height) {
+    // C1a：尺寸由宿主推送，保存为帧缓冲尺寸真相源（framebufferSize 返回值）
+    if (width > 0 && height > 0) {
+        _size.width  = static_cast<uint32_t>(width);
+        _size.height = static_cast<uint32_t>(height);
+    }
     // 尺寸未变则忽略（应用启动时 onWindowSizeChanged 传来的尺寸与创建时一致，
     // 若此时重建 swapchain，会销毁管线引用的 renderPass 导致绘制崩溃）
     if (width > 0 && height > 0 &&
@@ -973,7 +1158,7 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
     bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
               | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VK_CHECK(vkCreateBuffer(_device, &bci, nullptr, &res.buffer));
+    VK_CHECK_RET(vkCreateBuffer(_device, &bci, nullptr, &res.buffer));
 
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(_device, res.buffer, &req);
@@ -987,7 +1172,12 @@ BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
     }
     res.memory = res.memAlloc.memory;
     res.mapped = res.memAlloc.mapped;
-    VK_CHECK(vkBindBufferMemory(_device, res.buffer, res.memory, res.memAlloc.offset));
+    if (vkBindBufferMemory(_device, res.buffer, res.memory, res.memAlloc.offset) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] vkBindBufferMemory failed at %s:%d", __FILE__, __LINE__);
+        vkDestroyBuffer(_device, res.buffer, nullptr);
+        _memAlloc.free(res.memAlloc);
+        return {};
+    }
     if (desc.initialData && desc.size > 0) {
         std::memcpy(res.mapped, desc.initialData, desc.size);
     }
@@ -1009,40 +1199,51 @@ void VulkanDevice::updateBuffer(BufferHandle buffer, const void* data,
 }
 
 // ---- v2 对象级销毁（B0）----
+// V3-0 DeletionQueue：摘句柄立即生效（槽位清空、id 不复用）；真销毁登记到
+// _frameCount + kLagFrames，beginFrame 的 fence 等待之后批量执行——资源不再
+// 被帧在飞的命令引用。析构路径 flushAll 兜底。
 void VulkanDevice::destroyBuffer(BufferHandle h) {
     if (!h.valid() || h.id > _buffers.size()) return;
     VkBufferRes& b = _buffers[h.id - 1];
     if (!b.buffer) return;
-    const VkBuffer   buf = b.buffer;
-    const VkMemAlloc mem = b.memAlloc;
-    b = VkBufferRes{};   // 立即摘句柄，后续 draw 不再能看到它
-    _deletionQueue.enqueue([this, buf, mem]() {
-        vkDestroyBuffer(_device, buf, nullptr);
-        _memAlloc.free(mem);   // E1：free 隐含 unmap（页/专用）
-    });
+    VkBuffer buf = b.buffer;
+    VkMemAlloc mem = b.memAlloc;
+    b = VkBufferRes{};
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [this, buf, mem] {
+                       vkDestroyBuffer(_device, buf, nullptr);
+                       _memAlloc.free(mem);
+                   });
 }
 
 void VulkanDevice::destroyTexture(TextureHandle h) {
     if (!h.valid() || h.id > _textures.size()) return;
     VkTextureRes& t = _textures[h.id - 1];
     if (!t.image) return;
-    const VkSampler   sampler = t.sampler;
-    const VkImageView view    = t.view;
-    const VkImage     image   = t.image;
-    const VkMemAlloc  mem     = t.memAlloc;
+    VkImage img = t.image;
+    VkImageView view = t.view;
+    VkSampler sm = t.sampler;
+    VkMemAlloc mem = t.memAlloc;
     t = VkTextureRes{};
-    _deletionQueue.enqueue([this, sampler, view, image, mem]() {
-        if (sampler) vkDestroySampler(_device, sampler, nullptr);
-        if (view)    vkDestroyImageView(_device, view, nullptr);
-        if (image)   vkDestroyImage(_device, image, nullptr);
-        _memAlloc.free(mem);   // E1
-    });
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [this, img, view, sm, mem] {
+                       if (sm)   vkDestroySampler(_device, sm, nullptr);
+                       if (view) vkDestroyImageView(_device, view, nullptr);
+                       vkDestroyImage(_device, img, nullptr);
+                       _memAlloc.free(mem);
+                   });
 }
 
 void VulkanDevice::destroyPipeline(PipelineHandle h) {
     if (!h.valid() || h.id > _pipelines.size()) return;
     VkPipelineRes& p = _pipelines[h.id - 1];
-    if (p.pipeline) vkDestroyPipeline(_device, p.pipeline, nullptr);
+    if (p.pipeline) {
+        VkPipeline pipe = p.pipeline;
+        p.pipeline = VK_NULL_HANDLE;
+        // V3-0：管线可能被帧在飞的命令引用，同样延迟销毁
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                       [this, pipe] { vkDestroyPipeline(_device, pipe, nullptr); });
+    }
     p = VkPipelineRes{};
     p.alive = false;   // 槽位保留（id 不复用）；swapchain 重建不复活
 }
@@ -1055,17 +1256,15 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
     }
     VkUniformBlockRes& b = _uniformBlocks[h.id - 1];
     if (!b.buffer) return;
-    const VkBuffer         buf  = b.buffer;
-    const VkMemAlloc       mem  = b.memAlloc;
-    const VkDescriptorSet  set  = b.set;
-    const VkDescriptorPool pool = b.pool;
+    VkBuffer buf = b.buffer;
+    VkMemAlloc mem = b.memAlloc;
     b = VkUniformBlockRes{};
-    _deletionQueue.enqueue([this, buf, mem, set, pool]() {
-        if (buf) vkDestroyBuffer(_device, buf, nullptr);
-        _memAlloc.free(mem);   // E1
-        // V3-0：池已开 FREE_BIT，到期归还描述符集（与 buffer 生命周期一致）
-        if (set && pool) vkFreeDescriptorSets(_device, pool, 1, &set);
-    });
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                   [this, buf, mem] {
+                       vkDestroyBuffer(_device, buf, nullptr);
+                       _memAlloc.free(mem);
+                   });
+    // 描述符集随 pool 回收（无 FREE_DESCRIPTOR_SET_BIT），无需单独销毁
 }
 
 // ---- B4：离屏渲染目标 ----
@@ -1110,25 +1309,41 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
         ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VK_CHECK(vkCreateImage(_device, &ici, nullptr, &rt.depthImage));
+        if (vkCreateImage(_device, &ici, nullptr, &rt.depthImage) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] RT depth vkCreateImage failed");
+            destroyTexture(rt.colorTex);
+            return {};
+        }
         VkMemoryRequirements req;
         vkGetImageMemoryRequirements(_device, rt.depthImage, &req);
         rt.depthMemAlloc = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);   // E1
         if (!rt.depthMemAlloc.valid()) {
             ENGINE_LOG_ERROR("[VK] RT depth memory alloc failed");
-            vkDestroyImageView(_device, rt.depthView, nullptr);
             vkDestroyImage(_device, rt.depthImage, nullptr);
+            destroyTexture(rt.colorTex);
             return {};
         }
         rt.depthMemory = rt.depthMemAlloc.memory;
-        VK_CHECK(vkBindImageMemory(_device, rt.depthImage, rt.depthMemory, rt.depthMemAlloc.offset));
+        if (vkBindImageMemory(_device, rt.depthImage, rt.depthMemory, rt.depthMemAlloc.offset) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] RT depth vkBindImageMemory failed at %s:%d", __FILE__, __LINE__);
+            vkDestroyImage(_device, rt.depthImage, nullptr);
+            _memAlloc.free(rt.depthMemAlloc);
+            destroyTexture(rt.colorTex);
+            return {};
+        }
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vci.image    = rt.depthImage;
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format   = depthFmt;
         vci.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &rt.depthView));
+        if (vkCreateImageView(_device, &vci, nullptr, &rt.depthView) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] RT depth vkCreateImageView failed at %s:%d", __FILE__, __LINE__);
+            vkDestroyImage(_device, rt.depthImage, nullptr);
+            _memAlloc.free(rt.depthMemAlloc);
+            destroyTexture(rt.colorTex);
+            return {};
+        }
     }
 
     _renderTargets.push_back(rt);
@@ -1153,18 +1368,20 @@ void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
     if (!h.valid() || h.id > _renderTargets.size()) return;
     VkRenderTargetRes& rt = _renderTargets[h.id - 1];
     if (!rt.alive && !rt.colorTex.valid()) return;
-    const TextureHandle colorTex    = rt.colorTex;
-    const VkImageView   depthView   = rt.depthView;
-    const VkImage       depthImage  = rt.depthImage;
-    const VkMemAlloc    depthMem    = rt.depthMemAlloc;
+    destroyTexture(rt.colorTex);   // V3-0：颜色附件走纹理延迟销毁
+    if (rt.depthView || rt.depthImage) {
+        VkImageView view = rt.depthView;
+        VkImage img = rt.depthImage;
+        VkMemAlloc mem = rt.depthMemAlloc;
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                       [this, view, img, mem] {
+                           if (view) vkDestroyImageView(_device, view, nullptr);
+                           vkDestroyImage(_device, img, nullptr);
+                           _memAlloc.free(mem);
+                       });
+    }
     rt = VkRenderTargetRes{};
     rt.alive = false;   // 槽位保留（id 不复用）
-    if (colorTex.valid()) destroyTexture(colorTex);   // 内部同样延迟
-    _deletionQueue.enqueue([this, depthView, depthImage, depthMem]() {
-        if (depthView)   vkDestroyImageView(_device, depthView, nullptr);
-        if (depthImage)  vkDestroyImage(_device, depthImage, nullptr);
-        if (depthMem.valid()) _memAlloc.free(depthMem);   // E1
-    });
 }
 
 TextureHandle VulkanDevice::renderTargetColorTexture(RenderTargetHandle h) const {
@@ -1207,7 +1424,12 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
         vkDestroyBuffer(_device, dst, nullptr);
         return false;
     }
-    VK_CHECK(vkBindBufferMemory(_device, dst, dstMem.memory, dstMem.offset));
+    if (vkBindBufferMemory(_device, dst, dstMem.memory, dstMem.offset) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] readback vkBindBufferMemory failed at %s:%d", __FILE__, __LINE__);
+        vkDestroyBuffer(_device, dst, nullptr);
+        _memAlloc.free(dstMem);
+        return false;
+    }
 
     VkImageLayout curLayout = t.layout;   // lambda 内访问布局快照
     const VkImage image = t.image;
@@ -1307,18 +1529,18 @@ void VulkanDevice::recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTarge
     if (!t.image || t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-    // V3-0：这里的目标阶段是片元采样；TRANSFER_READ 不由此阶段支持
-    //（VUID-vkCmdPipelineBarrier-pImageMemoryBarriers-02820）。回读走
-    // readbackTexture 自己的 TRANSFER 屏障，不需要在这里预置。
-    bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
     bar.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bar.image = t.image;
     bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    // dstAccess 含 TRANSFER_READ（回读就绪），stage 掩码必须同时覆盖 TRANSFER
+    //（验证层：dstAccessMask 不受 dstStageMask 支持即报 error）
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                         | VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
                          0, nullptr, 0, nullptr, 1, &bar);
     t.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
@@ -1367,7 +1589,7 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
                       | ((desc.usage & TEX_COLOR_ATTACHMENT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
     ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VK_CHECK(vkCreateImage(_device, &ici, nullptr, &t.image));
+    VK_CHECK_RET(vkCreateImage(_device, &ici, nullptr, &t.image));
     t.bpp = bpp;   // B4：readback 区域字节数计算用
 
     VkMemoryRequirements req;
@@ -1379,7 +1601,12 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         return {};
     }
     t.memory = t.memAlloc.memory;
-    VK_CHECK(vkBindImageMemory(_device, t.image, t.memory, t.memAlloc.offset));
+    if (vkBindImageMemory(_device, t.image, t.memory, t.memAlloc.offset) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] vkBindImageMemory failed at %s:%d", __FILE__, __LINE__);
+        vkDestroyImage(_device, t.image, nullptr);
+        _memAlloc.free(t.memAlloc);
+        return {};
+    }
 
     // ---- 数据上传：staging → 拷贝 + （可选）mipmap blit + 布局转换 ----
     // 可能在 render pass 活跃的帧内被调用：GPU 工作经 deferGpuWork 延迟到下一帧
@@ -1398,7 +1625,13 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
         sbi.size  = bytes;
         sbi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         sbi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VK_CHECK(vkCreateBuffer(_device, &sbi, nullptr, &staging));
+        if (vkCreateBuffer(_device, &sbi, nullptr, &staging) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] staging vkCreateBuffer failed (%llu bytes)",
+                             static_cast<unsigned long long>(bytes));
+            vkDestroyImage(_device, t.image, nullptr);
+            _memAlloc.free(t.memAlloc);
+            return {};
+        }
         VkMemoryRequirements req2;
         vkGetBufferMemoryRequirements(_device, staging, &req2);
         stagingMem = _memAlloc.alloc(req2, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
@@ -1407,9 +1640,18 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
             ENGINE_LOG_ERROR("[VK] staging alloc failed (%llu bytes)",
                              static_cast<unsigned long long>(bytes));
             vkDestroyBuffer(_device, staging, nullptr);
+            vkDestroyImage(_device, t.image, nullptr);
+            _memAlloc.free(t.memAlloc);
             return {};
         }
-        VK_CHECK(vkBindBufferMemory(_device, staging, stagingMem.memory, stagingMem.offset));
+        if (vkBindBufferMemory(_device, staging, stagingMem.memory, stagingMem.offset) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] staging vkBindBufferMemory failed at %s:%d", __FILE__, __LINE__);
+            vkDestroyBuffer(_device, staging, nullptr);
+            _memAlloc.free(stagingMem);
+            vkDestroyImage(_device, t.image, nullptr);
+            _memAlloc.free(t.memAlloc);
+            return {};
+        }
         void* mapped = stagingMem.mapped;
         std::memcpy(mapped, dataCopy->data(), static_cast<size_t>(bytes));
 
@@ -1525,7 +1767,12 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     vci.viewType = desc.cubemap ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     vci.format   = vkFmt;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, layerCount};
-    VK_CHECK(vkCreateImageView(_device, &vci, nullptr, &t.view));
+    if (vkCreateImageView(_device, &vci, nullptr, &t.view) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] vkCreateImageView failed at %s:%d", __FILE__, __LINE__);
+        vkDestroyImage(_device, t.image, nullptr);
+        _memAlloc.free(t.memAlloc);
+        return {};
+    }
 
     // B3：采样参数由 TextureDesc::sampler 驱动（契约 SamplerDesc）
     const SamplerDesc& sd = desc.sampler;
@@ -1563,7 +1810,13 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     sci.minLod           = sd.minLod;
     sci.maxLod           = sd.maxLod;
     sci.borderColor      = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-    VK_CHECK(vkCreateSampler(_device, &sci, nullptr, &t.sampler));
+    if (vkCreateSampler(_device, &sci, nullptr, &t.sampler) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] vkCreateSampler failed at %s:%d", __FILE__, __LINE__);
+        vkDestroyImageView(_device, t.view, nullptr);
+        vkDestroyImage(_device, t.image, nullptr);
+        _memAlloc.free(t.memAlloc);
+        return {};
+    }
 
     _textures.push_back(t);
     char tname[48];
@@ -1610,7 +1863,11 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
         mci.codeSize = code.size();
         mci.pCode    = reinterpret_cast<const uint32_t*>(code.data());
         VkShaderModule mod;
-        VK_CHECK(vkCreateShaderModule(_device, &mci, nullptr, &mod));
+        if (vkCreateShaderModule(_device, &mci, nullptr, &mod) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] vkCreateShaderModule failed for %s", path.c_str());
+            for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
+            return {};
+        }
         modules.push_back(mod);
 
         VkPipelineShaderStageCreateInfo st{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -1738,7 +1995,12 @@ PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
     gpi.pNext               = &prci;
     gpi.renderPass          = VK_NULL_HANDLE;
     gpi.subpass             = 0;
-    VK_CHECK(vkCreateGraphicsPipelines(_device, _pipelineCache, 1, &gpi, nullptr, &res.pipeline));
+    // V3-0：管线创建失败返回空句柄（不 abort）；着色器模块已销毁
+    if (vkCreateGraphicsPipelines(_device, _pipelineCache, 1, &gpi, nullptr, &res.pipeline) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] vkCreateGraphicsPipelines failed at %s:%d", __FILE__, __LINE__);
+        for (auto m : modules) vkDestroyShaderModule(_device, m, nullptr);
+        return {};
+    }
     {
         char pname[48];
         std::snprintf(pname, sizeof(pname), "RHI_Pipeline_%u", static_cast<uint32_t>(_pipelines.size() + 1));
@@ -1801,13 +2063,18 @@ void VulkanDevice::recordBeginPassBarriers(VkCommandBuffer cb, bool clearColor, 
 }
 
 // B1：present 前把当前 image 转回 PRESENT_SRC（仅当本帧渲染过）。
+// V3-0：本帧未渲染（acquire 后跳过，layout 仍 UNDEFINED，如 CHURN 压测的
+// 帧外 beginFrame/endFrame 循环）也必须转换——present 要求 PRESENT_SRC。
 void VulkanDevice::recordPresentBarrier(VkCommandBuffer cb) {
     if (_imageIndex >= _swapchainLayouts.size()) return;
-    if (_swapchainLayouts[_imageIndex] != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
+    const VkImageLayout cur = _swapchainLayouts[_imageIndex];
+    if (cur != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        && cur != VK_IMAGE_LAYOUT_UNDEFINED) return;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    bar.srcAccessMask = (cur == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                            ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : 0;
     bar.dstAccessMask = 0;
-    bar.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    bar.oldLayout = cur;
     bar.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -1846,10 +2113,7 @@ void VulkanDevice::growTexDescriptorPool() {
     poolSizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = _poolCapUniform;
     VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    // V3-0：允许对象级归还描述符集（与 UPDATE_AFTER_BIND 可共存；
-    // 实际 vkFreeDescriptorSets 随 DeletionQueue 接入）
-    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT
-                     | VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pi.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     pi.maxSets       = _poolCapSets;
     pi.poolSizeCount = 2;
     pi.pPoolSizes    = poolSizes;
@@ -1952,11 +2216,8 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     bi.size  = size;
     bi.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    // V3-0：资源创建失败返回 {}，不再 VK_CHECK abort（上层可降级/报错）
-    VkResult bufRes = vkCreateBuffer(_device, &bi, nullptr, &blk.buffer);
-    if (bufRes != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] createUniformBlock: vkCreateBuffer failed (%d), size=%u",
-                         (int)bufRes, size);
+    if (vkCreateBuffer(_device, &bi, nullptr, &blk.buffer) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] uniform block vkCreateBuffer failed (%u bytes)", size);
         return {};
     }
     VkMemoryRequirements req;
@@ -1971,36 +2232,29 @@ UniformBlockHandle VulkanDevice::createUniformBlock(uint32_t size) {
     }
     blk.memory = blk.memAlloc.memory;
     blk.mapped = blk.memAlloc.mapped;
-    VkResult bindRes = vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset);
-    if (bindRes != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] createUniformBlock: vkBindBufferMemory failed (%d)", (int)bindRes);
+    if (vkBindBufferMemory(_device, blk.buffer, blk.memory, blk.memAlloc.offset) != VK_SUCCESS) {
+        ENGINE_LOG_ERROR("[VK] uniform block vkBindBufferMemory failed at %s:%d", __FILE__, __LINE__);
         vkDestroyBuffer(_device, blk.buffer, nullptr);
         _memAlloc.free(blk.memAlloc);
         return {};
     }
 
     // 独立描述符集：binding0 = UBO；bindings1..4 = 白色兜底采样器。
-    // B6：池耗尽（OUT_OF_POOL / fragmentation）→ 扩容重试，无规模上限
-    // V3-0：descriptorSetCount / pSetLayouts 必须在首次分配前设置，
-    //       且失败时回滚 buffer/memory 返回 {}，不 abort。
+    // B6：池耗尽（OUT_OF_POOL/ fragmentation）→ 扩容重试，无规模上限
+    // V3-0：descriptorSetCount/pSetLayouts 必须先于首次分配填写——
+    // 此前首次调用以 count=0 发出，验证层报 "descriptorSetCount must be
+    // greater than 0"（每次 createUniformBlock 一条）
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool     = _texDescriptorPools.back();
     dai.descriptorSetCount = 1;
     dai.pSetLayouts        = &_texSetLayout;
-    dai.descriptorPool     = _texDescriptorPools.back();
     VkResult setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
     if (setResult == VK_ERROR_OUT_OF_POOL_MEMORY || setResult == VK_ERROR_FRAGMENTED_POOL) {
         growTexDescriptorPool();
         dai.descriptorPool = _texDescriptorPools.back();
         setResult = vkAllocateDescriptorSets(_device, &dai, &blk.set);
     }
-    if (setResult != VK_SUCCESS) {
-        ENGINE_LOG_ERROR("[VK] createUniformBlock: descriptor set alloc failed (%d), size=%u",
-                         (int)setResult, size);
-        vkDestroyBuffer(_device, blk.buffer, nullptr);
-        _memAlloc.free(blk.memAlloc);
-        return {};
-    }
-    blk.pool = dai.descriptorPool;   // V3-0：延迟归还描述符集需要归属池
+    VK_CHECK(setResult);
 
     VkDescriptorBufferInfo bufInfo{blk.buffer, 0, size};
     VkWriteDescriptorSet writes[5]{};

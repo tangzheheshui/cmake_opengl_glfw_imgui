@@ -21,16 +21,20 @@
 #include <string>
 #include <functional>
 
-struct GLFWwindow;
-
 namespace rhi {
 
 class VkCommandList;
 
 class VulkanDevice final : public IRHIDevice {
 public:
-    VulkanDevice(GLFWwindow* window, const std::string& shaderRootPath);
+    // C1a：由 DeviceDesc 构造（RHI 不碰 GLFW）。surface 来源优先级
+    // externalSurface → desc.createSurface(instance) → 按平台自建；
+    // 失败原因写入 outError，工厂据此返回诊断信息。
+    explicit VulkanDevice(const DeviceDesc& desc, std::string& outError);
     ~VulkanDevice() override;
+
+    // 构造期有效性（instance/physicalDevice/device 建立成功）
+    bool initialized() const { return _initialized; }
 
     Backend    backend() const override { return Backend::Vulkan; }
     DeviceInfo info() const override;
@@ -57,16 +61,19 @@ public:
                          const ReadbackDesc& = {}) override;
 
     bool beginFrame() override;
-    void endFrame()   override;
+    void endFrame()   override;   // C1b 语义：录制提交（不再含 present）
     void waitIdle()   override;
     void onResize(int width, int height) override;
+
+    // ---- C1a：尺寸查询 + 呈现（RHI 不回查窗口系统）----
+    FramebufferSize framebufferSize() const override { return _size; }
+    void present() override;   // vkQueuePresentKHR（离屏 no-op）
 
     IRHICommandList* commandList() override;
     uint64_t nativeHandle(RhiHandle handle) const override;
     bool nativeHandles(NativeHandles& out) const override;
 
     // 内部访问（VkCommandList 使用）
-    GLFWwindow* window() const { return _window; }
     const std::string& shaderRootPath() const { return _shaderRootPath; }
     ::VkDevice           vkDeviceHandle() const { return _device; }
     VkExtent2D       swapchainExtent() const { return _swapchainExtent; }
@@ -105,7 +112,7 @@ public:
 private:
     friend class VkCommandList;
     void createInstance();
-    void createSurface();
+    bool createSurface(std::string& outError);   // C1a：externalSurface → 回调 → 平台自建
     void pickPhysicalDevice();
     void createLogicalDevice();
     void createSwapchainObjects();   // swapchain + views + depth（B1：无 renderpass/framebuffer）
@@ -133,8 +140,13 @@ private:
 
     bool beginFrameInternal();       // 失败（swapchain 过期）返回 false，本帧跳过
 
-    GLFWwindow*  _window = nullptr;
+    // C1a：RHI 不持有窗口——desc 保存宿主窗口描述与 surface 来源，
+    // _size 为帧缓冲像素尺寸（onResize 推送）
+    DeviceDesc   _desc;
     std::string  _shaderRootPath;
+    FramebufferSize _size;
+    bool         _initialized = false;
+    bool         _surfaceOwned = false;   // true = RHI 负责销毁 surface
 
     VkInstance       _instance       = VK_NULL_HANDLE;
     VkSurfaceKHR     _surface        = VK_NULL_HANDLE;
@@ -181,7 +193,7 @@ private:
     // B6：描述符池按需扩容——耗尽即追加新池（旧池连同其上 set 存活到销毁），
     // 取代固定 maxSets=32（31 mesh 即 abort 的规模上限）
     std::vector<VkDescriptorPool> _texDescriptorPools;
-    uint32_t _poolCapSets    = 1024;   // V3-0：首池容量对齐 v3 方案（耗尽仍会自动追加）
+    uint32_t _poolCapSets    = 256;
     uint32_t _poolCapSampler = 1024;
     uint32_t _poolCapUniform = 256;
     void growTexDescriptorPool();
@@ -210,9 +222,12 @@ private:
     bool     _frameActive    = false;
     bool     _frameSkipped   = false;
     bool     _needsRecreate  = false;
+    bool     _frameSubmitted = false;   // C1b 语义：endFrame 已提交，present 可执行
+    // V3-0：帧号（非 swapchain image 下标）。延迟销毁队列的时基：
+    // destroy* 登记 _frameCount + kLagFrames，beginFrame 在 fence 等待后 flush。
+    uint64_t _frameCount     = 0;
+    detail::DeletionQueue _delQueue;
 
-    // V3-0：延迟销毁队列（destroy* 摘句柄 + 登记，endFrame 到期释放）
-    DeletionQueue _deletionQueue;
     std::vector<VkBufferRes>   _buffers;
     std::vector<VkPipelineRes> _pipelines;
     // 帧内请求的一次性 GPU 工作（纹理上传等）：render pass 活跃时提交会触发

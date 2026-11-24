@@ -16,6 +16,7 @@
 #define RhiTypes_h
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,12 @@ struct NativeWindow {
     NativeWindowType type = NativeWindowType::None;
     void* handle  = nullptr;
     void* display = nullptr;   // 仅 Xlib 用
+
+    // C1a：GL 专用的宿主交换回调（present() 调用；Vulkan 忽略——present 走
+    // vkQueuePresentKHR，离屏为 no-op）。宿主（如 GLFW demo）在窗口创建后填写。
+    void (*swapBuffers)(void* user) = nullptr;
+    void* swapUser = nullptr;
+
     bool valid() const { return type != NativeWindowType::None && handle != nullptr; }
 };
 
@@ -77,6 +84,28 @@ struct DeviceDesc {
     std::string  shaderRootPath;      // 后端变体着色器根目录（以路径分隔符结尾）
     bool         enableValidation = true;   // 后端/构建允许时启用；环境变量可覆盖
     uint32_t     swapchainImageCount = 0;   // 0 = 后端默认
+
+    // ---- C1a 追加：帧缓冲尺寸 / Vulkan surface 接管 ----
+    // 帧缓冲像素尺寸（不是窗口逻辑尺寸）。RHI 永不回查窗口系统：GL 后端
+    // 保存此尺寸（onResize 更新）；VK 用于 swapchain currentExtent==UINT32_MAX
+    //（组合器未定）时的回退。
+    uint32_t     width  = 0;
+    uint32_t     height = 0;
+
+    // 宿主可选的 Vulkan 逃生口（公共头不出现 Vk 类型）：
+    // 宿主填写 instanceExtensions/createSurface 时优先使用；留空时 RHI 按
+    // NativeWindowType 自行推导平台扩展并建面。
+    std::vector<std::string> instanceExtensions;
+    // 在拿到 VkInstance 后由宿主创建 surface（macOS 上 GLFW 宿主内部调
+    // glfwCreateWindowSurface，引擎不碰 GLFW/ObjC++）；参数/返回值按 uint64
+    // 传递（VkInstance / VkSurfaceKHR）。返回 0 = 创建失败。
+    std::function<uint64_t(uint64_t instance)> createSurface;
+    // 或直接给已创建的 surface（宿主持有并负责销毁，RHI 不接管）
+    uint64_t externalSurface = 0;
+    // 所有权约定：
+    //   externalSurface != 0  → RHI 不销毁，宿主负责
+    //   createSurface 返回非0 → RHI 接管并在设备析构时销毁
+    //   RHI 自建 surface      → RHI 销毁
 };
 
 // ---- Buffer 用途（位掩码）。Vulkan: 映射 VkBufferUsageFlags ----
