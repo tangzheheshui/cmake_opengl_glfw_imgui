@@ -15,8 +15,8 @@
 
 #include "../IRHIDevice.h"
 #include "../detail/DeletionQueue.h"
-#include "../detail/FrameUniformRing.h"
 #include "../detail/HandleTable.h"
+#include "VkDescriptors.h"
 #include "VkCommon.h"
 #include "VkCaps.h"
 #include <vector>
@@ -100,15 +100,15 @@ public:
     const VkRenderTargetRes& renderTargetRes(RenderTargetHandle h) const { return _renderTargets.get(h.id); }
     VkTextureRes&       textureResMut(TextureHandle h) { return _textures.get(h.id); }
     UniformBlockHandle defaultUniformBlock() const { return _defaultUniformBlock; }
-    VkPipelineLayout   pipelineLayout() const { return _pipelineLayout; }
+    VkPipelineLayout   pipelineLayout() const { return _descs.pipelineLayout(); }
 
-    // ---- V3-2 绑定层：命令列表用的内部接口 ----
-    VkDescriptorSet frameUniformSet() const { return _frameSet; }        // set0：动态偏移 UBO
-    uint32_t        defaultUniformOffset() const { return _defaultUniformOffset; }
-    // 把一次绘制级 uniform 数据追加进帧内环，返回动态偏移（失败返回 UINT32_MAX）
-    uint32_t allocDrawUniforms(const void* data, uint32_t size);
-    // 采样槽 N 的兜底纹理描述符集（白纹理/白 cubemap，未绑定槽位用）
-    VkDescriptorSet fallbackTextureSet(uint32_t slot) const;
+    // ---- V3-2 绑定层：命令列表用的内部接口（实现在 VkDescriptors）----
+    VkDescriptorSet frameUniformSet() const { return _descs.frameSet(); }
+    uint32_t        defaultUniformOffset() const { return _descs.defaultUniformOffset(); }
+    uint32_t        allocDrawUniforms(const void* data, uint32_t size) {
+        return _descs.allocDrawUniforms(data, size);
+    }
+    VkDescriptorSet fallbackTextureSet(uint32_t slot) const { return _descs.fallbackSet(slot); }
     // 纹理的采样描述符集。上传还没执行（帧内创建 → 延迟到下一帧，布局仍是
     // UNDEFINED）时返回空，让命令列表退到白纹理兜底——否则会拿未转换布局的
     // image 出图（VUID-vkCmdDraw-None-09600，画面也是未定义内容）。
@@ -146,9 +146,7 @@ private:
     // A3: Pipeline Cache 持久化（创建/加载/退出时保存；为优化项，失败不致命）
     void createPipelineCache();
     void savePipelineCache();
-    void createDescriptorObjects();  // 描述符布局/池 + 帧 uniform 环（V3-2 重做）
-    void createFrameUniformSet();    // 分配并写 set0（环扩容后需重写）
-    void growUniformRing();          // 环满：扩容 + 重写 set0
+    void createDescriptorObjects();  // 描述符布局/池 + 帧 uniform 环（委托 VkDescriptors）
     // A1: Validation Layer + Debug Utils
     void setupDebugValidation(std::vector<const char*>& exts, std::vector<const char*>& layers);
     void createDebugMessenger();
@@ -201,9 +199,6 @@ private:
     VkCommandPool   _commandPool   = VK_NULL_HANDLE;
     VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
 
-    // A3: 全部管线共用的 pipeline layout（固定 push constant 布局，创建一次）
-    VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;
-
     // A3: 物理设备能力（初始化时探测一次）+ Pipeline Cache 持久化状态
     VkCaps         _caps;
     VkPipelineCache _pipelineCache = VK_NULL_HANDLE;
@@ -214,23 +209,8 @@ private:
     // E1：内存子分配器（页内 first-fit + 大额专用），替换逐资源 vkAllocateMemory
     VkMemoryAllocator _memAlloc;
 
-    // ---- V3-2 绑定层描述符 ----
-    // set0 = 帧 uniform 环（动态偏移 UBO）；set1..4 = 纹理槽（每张纹理自带一个 set）。
-    VkDescriptorSetLayout _frameSetLayout   = VK_NULL_HANDLE;
-    VkDescriptorSetLayout _texSlotSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool      _frameDescPool    = VK_NULL_HANDLE;
-    VkDescriptorSet       _frameSet         = VK_NULL_HANDLE;
-    uint32_t              _defaultUniformOffset = 0;
-    uint32_t              _minUboAlign      = 256;   // minUniformBufferOffsetAlignment
-    detail::FrameUniformRing _uniformRing;
-
-    // 纹理描述符池按需扩容——耗尽即追加新池（旧池连同其上 set 存活到销毁）
-    std::vector<VkDescriptorPool> _texDescriptorPools;
-    uint32_t _poolCapSets    = 256;
-    uint32_t _poolCapSampler = 1024;
-    void growTexDescriptorPool();
-    // 从纹理池分配一个纹理槽描述符集（耗尽自动扩容）
-    bool allocTextureSet(VkDescriptorSet& outSet);
+    // V3-3：描述符与绑定资源（布局/池/帧 uniform 环）归 VkDescriptors
+    VkDescriptors _descs;
     // A1: 验证层与调试工具
     bool                  _validationEnabled = false;
     bool                  _descriptorIndexing = false;
