@@ -33,6 +33,14 @@ public:
     virtual void destroyPipeline(PipelineHandle) {}
     virtual void destroyUniformBlock(UniformBlockHandle) {}
 
+    // ---- V3-1：句柄有效性查询 ----
+    // 默认只做 valid()（id != 0）；后端接入 HandleTable 后覆写，
+    // 增加 id 范围 + gen 代际校验，访问已销毁/越界句柄返回 false 而非静默误用。
+    virtual bool alive(BufferHandle h)   const { return h.valid(); }
+    virtual bool alive(TextureHandle h)  const { return h.valid(); }
+    virtual bool alive(PipelineHandle h) const { return h.valid(); }
+    virtual bool alive(SamplerHandle h)  const { return h.valid(); }
+
     // ---- v2 采样器（B2 GL / B3 VK 生效；默认不支持）----
     virtual SamplerHandle createSampler(const SamplerDesc&) { return {}; }
     virtual void destroySampler(SamplerHandle) {}
