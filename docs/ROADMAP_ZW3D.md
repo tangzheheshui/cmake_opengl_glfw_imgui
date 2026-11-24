@@ -8,6 +8,29 @@
 
 ## 当前状态（2026-11-23）
 
+- ✅ **C 线（嵌入宿主）**（2026-11-24，按 `ARCHITECTURE_INTERFACES.md` 执行）：
+  1. **V3-0 止血**：GL FBO 泄漏/VAO 悬空/UNPACK_ALIGNMENT；VK
+     descriptorSetCount=0 验证错误、RT 布局屏障在 render pass 实例内、
+     RT 深度附件析构泄漏（退出 live=0）；`beginFrame()` 改 bool；
+     `rhi/detail/DeletionQueue` 延迟销毁（GL/VK 共用）；`RHI_CHURN` 压测开关
+  2. **L0-lite**：GLSL 编译下沉 `rhi/gl/GLProgram`（GL 后端去 render/shader.h；
+     DrawUniforms 迁移按状态对齐暂缓至 V3-2）
+  3. **C1a**：RHI 去 GLFW——`DeviceDesc` 契约入口（swapBuffers/width/height/
+     instanceExtensions/createSurface/externalSurface）+ `framebufferSize()`/
+     `present()`；平台 surface 自建（Win32/Xlib/Xcb/Wayland/MetalLayer）；
+     engine 移除 glfw 链接
+  4. **C1b**：RenderSystem 门面——`InitDesc`/`renderFrame()`（beginFrame →
+     passes → overlay → endFrame → present，主循环零后端分支）；引擎不读
+     RHI_BACKEND、不持有窗口；GL ImGui 走 overlay 合成点
+  5. **C5**：`GlfwHost`（窗口/设备/ImGui/事件转发）+ `SceneDemo`（场景组装）+
+     main.cpp 缩至 155 行
+  6. **L1**：`tools/check_layers.cmake` + check_layers target（例外：GLCommandList
+     的 DrawUniforms 过渡 include）
+  验证：GL/VK 全门禁（SMOKE/TEXQUAD/RT/PICK/LINE/VIEWPORTS=4/RESIZE_AT/
+  CHURN=200）全绿；VK 验证层 0 error（此前 23 条）、退出 live=0；像素回归
+  与基线一致；`rg GLFW|ImGui src/` 代码级为空
+- ⚠ **已知小问题（不阻塞，已记录）**：
+
 - ✅ **A1** Validation Layer + Debug Utils + 对象命名（验证层 0 error）
 - ✅ **A3** VkCaps 能力探测 + Pipeline Cache 持久化 + 面板/日志能力表
   （顺带修复：pipeline layout 泄漏、退出时对象在命令缓冲中销毁、
@@ -126,7 +149,7 @@
 | P0 | B1 | ~~Dynamic Rendering + resize/ImGui 失效收尾~~ | ✅ 完成（2026-11-23） | B0 | 与 B3 串行（VkDevice/管线） | M |
 | P0 | B2 | GL 后端 v2：render target / sampler / readback / caps | 契约已冻结，GL 未实现 | B0 | **可并行** | M |
 | P0 | B4 | ~~离屏 RenderTarget + readback~~ | ✅ 完成（2026-11-23，GL/VK 双端回读逐字节一致） | B1 | 与 B2 并行 | M |
-| P1 | C1 | 宿主窗口/离屏接入，引擎去 GLFW | 引擎依赖 GLFW 主循环 | B1 | 可与 C2 并行 | M |
+| P1 | C1 | ~~宿主窗口/离屏接入，引擎去 GLFW~~ | ✅ 完成（2026-11-24：C1a DeviceDesc 契约入口 + C1b RenderSystem 门面，src 内 GLFW 代码清零，离屏设备创建随 C4/F1） | B1 ✅ | — | M |
 | P1 | C2 | ~~多视口~~ | v1 完成（2026-11-23：viewport/scissor tile 循环，2/4 分屏验证）；多相机视口待接 | B0 ✅ | 可并行 | M |
 | P1 | D1 | ~~宽线核心版~~（屏幕空间三角形展开，GL/VK 像素级一致）✅ 2026-11-23 | AA/端点圆头/接线随 D6 | B3 ✅ | 可并行 | L→M 已减 |
 | P1 | D2 | ~~拾取 Pass + 回读~~ | RHI 路径完成（2026-11-23，点击拾取 + 全图扫描验证）；多视口随 C2 | B4 ✅ | 可并行 | M |
@@ -224,7 +247,7 @@ Vulkan Video / Mesh Shader / Shader Object（理由见第 1 节）。
 | C2 | 多视口：相机/视口矩形/scissor，一套场景多视图渲染 | M | B0 | 可并行 | `camera/*`、`RenderSystem.*` |
 | C3 | headless 测试工具：离屏渲染 + 哈希/截图，供多机验证 | S | B4 | 可并行 | `tools/`（新建） |
 | C4 | 设备丢失 / swapchain 重建 / TDR 恢复 | M | B1 | 可并行 | `VkDevice.*` |
-| C5 | 示例 app 重构为“引擎库的消费者” | S | C1 | 与 C2 可并行 | `app/*` |
+| C5 | ~~示例 app 重构为“引擎库的消费者”~~ | ✅ 完成（2026-11-24：GlfwHost/SceneDemo/slim main，main.cpp 155 行） | C1 ✅ | — | `app/*` |
 
 验收：引擎可渲染到 ZW3D 提供的窗口/纹理；无 GLFW 依赖也能初始化；多视口正确；设备丢失后可恢复。
 
