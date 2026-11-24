@@ -26,8 +26,9 @@ struct DrawUniforms {
     glm::vec4 materialSpecular;          // uMaterail.specular
     glm::vec4 materialParams;            // x=uMaterail.shininess y=shininess_strength
                                          // z=has_normal_tex w=has_specular_tex
+    glm::vec4 misc;                      // D3：x=opacity（透明排序 <1 走 blend 管线）；yzw 预留
 };
-static_assert(sizeof(DrawUniforms) == 160, "DrawUniforms layout must stay 160 bytes");
+static_assert(sizeof(DrawUniforms) == 176, "DrawUniforms layout must stay 176 bytes");
 
 } // namespace engine
 

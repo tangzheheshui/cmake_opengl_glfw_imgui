@@ -35,6 +35,9 @@ public:
 
     std::vector<std::shared_ptr<BaseDraw>> GetObjs() { return m_vec_drawobj; }
     void AddObj(std::shared_ptr<BaseDraw> obj);
+    // D3：透明排序绘制列表——不透明对象按加入顺序在前，透明对象（alpha < 1）
+    // 按到相机距离降序（远 → 近）在后。两端绘制路径共用，保证 GL/VK 画序一致。
+    std::vector<std::shared_ptr<BaseDraw>> getSortedDrawList(const glm::vec3& camPos) const;
 private:
     // camera
     std::shared_ptr<Camera> mCameraActive;

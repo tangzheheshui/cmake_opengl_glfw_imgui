@@ -272,8 +272,26 @@ void RenderSystem::drawRhiSceneContents() {
             const auto fb = m_rhiDevice->framebufferSize();   // C1b：设备尺寸，不查窗口
             int fw = static_cast<int>(fb.width), fh = static_cast<int>(fb.height);
 
+            // D3：透明排序绘制列表（两端共用同一排序；每帧算一次）
+            const auto drawList = mCurScene->getSortedDrawList(cam->getPossition());
+            static bool sortLogged = false;
+            if (!sortLogged && std::getenv("RHI_ALPHA_DEMO")) {
+                sortLogged = true;
+                for (size_t i = 0; i < drawList.size(); ++i) {
+                    auto model = std::dynamic_pointer_cast<Model>(drawList[i]);
+                    if (model && model->getAlpha() < 0.999f) {
+                        const glm::vec3 c = model->worldCenter();
+                        ENGINE_LOG_INFO("[SORT] idx=%zu model id=%u alpha=%.2f center=(%.1f,%.1f,%.1f)",
+                                        i, model->GetID(), model->getAlpha(), c.x, c.y, c.z);
+                    }
+                }
+            }
+
             auto drawSceneContent = [&]() {
-                for (auto& obj : mCurScene->GetObjs()) {
+                // D3 顺序契约：不透明 → 天空盒 → 透明（视深排序）。
+                // 透明不写深度，天空若在其后绘制会因深度测试覆盖混合结果。
+                for (auto& obj : drawList) {
+                    if (obj->getAlpha() < 0.999f) continue;
                     obj->draw(vp);
                 }
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
@@ -281,6 +299,10 @@ void RenderSystem::drawRhiSceneContents() {
                     if (auto sky = mCurScene->GetSkyBox()) {
                         sky->drawRHI(cmd, cam->GetViewMatrix(), cam->GetProjectMatrix());
                     }
+                }
+                for (auto& obj : drawList) {
+                    if (obj->getAlpha() >= 0.999f) continue;
+                    obj->draw(vp);
                 }
             };
 

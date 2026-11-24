@@ -50,6 +50,8 @@ public:
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) { return false; }
 public:
     virtual void getDebugPoint(std::vector<glm::vec3> &vertices, std::vector<unsigned int> &indices) {}
+    // D3：透明排序的深度键（对象世界空间参考点；默认原点，子类覆写）
+    virtual glm::vec3 worldCenter() const { return glm::vec3(0.0f); }
     
     bool getLightOpen() const { return _lightOpen; }
     void setLightOpen(const bool &b) { _lightOpen = b; }

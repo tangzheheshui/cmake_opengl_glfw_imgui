@@ -11,6 +11,7 @@ layout(set = 0, binding = 0) uniform FrameData {
     vec4 materialDiffuse;
     vec4 materialSpecular;
     vec4 materialParams;   // x=shininess y=strength z=has_normal w=has_specular
+    vec4 misc;             // D3：x=opacity（与 DrawUniforms.h 布局同步，176B）
 } fd;
 
 layout(set = 0, binding = 1) uniform sampler2D texture_diffuse0;
@@ -80,5 +81,5 @@ void main()
     // D8：选中高亮混合（uHighlight.a = 0 时无效果）
     result = mix(result, pc.uHighlight.rgb, pc.uHighlight.a);
 
-    FragColor = vec4(result, 1.0);
+    FragColor = vec4(result, fd.misc.x);   // D3：材质不透明度
 }

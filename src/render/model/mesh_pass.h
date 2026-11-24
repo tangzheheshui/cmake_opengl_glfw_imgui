@@ -38,10 +38,11 @@ public:
         }
     }
     
-    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit);
+    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity = 1.0f);
     bool DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID);
     // M4.2: RHI 绘制路径（Vulkan 必走；GL 可经 modelUseRHI 开关切换对比）
-    bool DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags);
+    // D3：opacity < 1 走 blend 管线变体（depthWrite 关 + srcAlpha 混合）
+    bool DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity = 1.0f);
     // D2: RHI 拾取绘制（pick 管线 + ID 色直出；调用方管理 RT/pass）
     bool DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
                      const Matrix& viewProj, const std::vector<Matrix>& matModel,
@@ -65,6 +66,8 @@ public:
     rhi::BufferHandle m_rhiInstanceVB;
     rhi::BufferHandle m_rhiIB;
     rhi::PipelineHandle m_rhiPipeline;
+    rhi::PipelineHandle m_rhiPipelineBlend;   // D3：透明变体（blend+depthWrite off，惰性建）
+    rhi::GraphicsPipelineDesc _lastPipelineDesc;   // D3：blend 变体从 opaque desc 复制改状态
     rhi::UniformBlockHandle m_rhiUniformBlock;
     bool m_rhiBuilt = false;
     std::map<std::string, rhi::TextureHandle> m_rhiTexCache;   // 材质纹理缓存（文件名 → RHI 纹理）

@@ -383,6 +383,13 @@ bool Model::drawPick() {
     return true;
 }
 
+// D3：透明排序深度键 = 第一个实例的世界平移（Matrix 列主序，平移在 [12..14]）
+glm::vec3 Model::worldCenter() const {
+    if (m_vec_modelMat.empty()) return glm::vec3(0.0f);
+    const float* m = m_vec_modelMat[0].buffer();
+    return glm::vec3(m[12], m[13], m[14]);
+}
+
 // D2: RHI 拾取绘制——所有网格经 pick 管线直出本对象 ID 色
 bool Model::drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj) {
     Matrix mtx;
@@ -462,10 +469,24 @@ bool Model::draw(const Matrix &mtx) {
             flags |= DrawOption::DRAW_HIGHLIGHT;
         }
     }
-    
+
+    // D3：透明对象（alpha < 1）——GL 遗留路径开 blend + 关深度写（画完恢复；
+    // RHI 路径由 blend 管线变体管理，VK 模式无 GL 状态）
+    const float opacity = getAlpha();
+    const bool blend = !vkMode && opacity < 0.999f;
+    if (blend) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+    }
+
     for (auto mesh : m_mesh) {
         mesh->setBoneMat(m_FinalBoneMatrices);
-        mesh->Draw(m_vec_modelMat, mtx, flags, m_nMultiViewport);
+        mesh->Draw(m_vec_modelMat, mtx, flags, m_nMultiViewport, opacity);
+    }
+    if (blend) {
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
     }
     if (!vkMode) {
         glDisable(GL_CULL_FACE);
