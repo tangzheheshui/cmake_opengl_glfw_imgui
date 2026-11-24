@@ -119,11 +119,14 @@ public:
     // 等待 GPU 完成（调试/销毁前用；GL: glFinish；Vulkan: vkDeviceWaitIdle）
     virtual void waitIdle() = 0;
 
-    // ---- 逃生舱 ----
-    // 返回后端原生句柄：GL → GLuint；Vulkan → VkBuffer/VkImage/VkPipeline。
-    // 用于过渡期与旧 GL 代码互操作（如把现有阴影 FBO 直通给 RenderPassDesc）。
-    // 注意：这层是有意留的"后门"，正式路径不要依赖它。
-    virtual uint64_t nativeHandle(RhiHandle handle) const = 0;
+    // ---- 逃生舱（按类型拆分，消除 nativeHandle(RhiHandle) 的跨类型歧义）----
+    // 返回后端原生句柄：GL → GLuint；Vulkan → VkBuffer/VkImage/VkPipeline 等。
+    // 用于过渡期与旧 GL 代码 / 第三方库互操作；正式路径不要依赖。
+    // 默认返回 0，后端按支持的类型覆写。
+    virtual uint64_t nativeBuffer(BufferHandle h)   const { (void)h; return 0; }
+    virtual uint64_t nativeTexture(TextureHandle h) const { (void)h; return 0; }
+    virtual uint64_t nativeSampler(SamplerHandle h) const { (void)h; return 0; }
+    virtual uint64_t nativePipeline(PipelineHandle h) const { (void)h; return 0; }
 };
 
 } // namespace rhi

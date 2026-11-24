@@ -76,7 +76,9 @@ public:
     void present() override;   // vkQueuePresentKHR（离屏 no-op）
 
     IRHICommandList* commandList() override;
-    uint64_t nativeHandle(RhiHandle handle) const override;
+    uint64_t nativeBuffer(BufferHandle h)   const override;
+    uint64_t nativeTexture(TextureHandle h) const override;
+    uint64_t nativePipeline(PipelineHandle h) const override;
     bool nativeHandles(NativeHandles& out) const override;
 
     // 内部访问（VkCommandList 使用）

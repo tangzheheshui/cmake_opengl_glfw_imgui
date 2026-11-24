@@ -589,11 +589,18 @@ IRHICommandList* GLDevice::commandList() {
     return _commandList.get();
 }
 
-uint64_t GLDevice::nativeHandle(RhiHandle handle) const {
-    // 过渡期与旧 GL 代码互操作：buffer 句柄 → GLuint；texture 句柄 → GLuint
-    if (_buffers.alive(handle)) return _buffers.get(handle.id).id;
-    if (_textures.alive(handle)) return _textures.get(handle.id).id;
-    return 0;
+uint64_t GLDevice::nativeBuffer(BufferHandle h) const {
+    return _buffers.alive(h) ? _buffers.get(h.id).id : 0;
+}
+uint64_t GLDevice::nativeTexture(TextureHandle h) const {
+    return _textures.alive(h) ? _textures.get(h.id).id : 0;
+}
+uint64_t GLDevice::nativeSampler(SamplerHandle h) const {
+    return _samplers.alive(h) ? _samplers.get(h.id).id : 0;
+}
+uint64_t GLDevice::nativePipeline(PipelineHandle h) const {
+    return (_pipelines.alive(h) && _pipelines.get(h.id).program)
+        ? _pipelines.get(h.id).program->id() : 0;
 }
 
 const GLBuffer& GLDevice::buffer(BufferHandle h) const {

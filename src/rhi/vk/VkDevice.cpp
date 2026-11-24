@@ -2283,11 +2283,14 @@ void VulkanDevice::bindInstanceVertexBuffer(VkCommandBuffer cb, BufferHandle h) 
     vkCmdBindVertexBuffers(cb, 1, 1, &vb, &offset);   // binding1 = 实例率
 }
 
-uint64_t VulkanDevice::nativeHandle(RhiHandle handle) const {
-    if (_buffers.alive(handle)) {
-        return reinterpret_cast<uint64_t>(_buffers.get(handle.id).buffer);
-    }
-    return 0;
+uint64_t VulkanDevice::nativeBuffer(BufferHandle h) const {
+    return _buffers.alive(h) ? reinterpret_cast<uint64_t>(_buffers.get(h.id).buffer) : 0;
+}
+uint64_t VulkanDevice::nativeTexture(TextureHandle h) const {
+    return _textures.alive(h) ? reinterpret_cast<uint64_t>(_textures.get(h.id).image) : 0;
+}
+uint64_t VulkanDevice::nativePipeline(PipelineHandle h) const {
+    return _pipelines.alive(h) ? reinterpret_cast<uint64_t>(_pipelines.get(h.id).pipeline) : 0;
 }
 
 // V3-1：句柄有效性（id 范围 + gen 代际校验）
