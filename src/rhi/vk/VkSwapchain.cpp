@@ -341,8 +341,8 @@ bool VkSwapchain::acquire(VkSemaphore imageAvailable, uint32_t& imageIndex) {
     return true;
 }
 
-bool VkSwapchain::present(VkQueue queue, uint32_t imageIndex, VkSemaphore renderDone) {
-    if (!_swapchain) return false;
+VkResult VkSwapchain::present(VkQueue queue, uint32_t imageIndex, VkSemaphore renderDone) {
+    if (!_swapchain) return VK_SUCCESS;
     VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     pi.waitSemaphoreCount = 1;
     pi.pWaitSemaphores    = &renderDone;
@@ -353,7 +353,7 @@ bool VkSwapchain::present(VkQueue queue, uint32_t imageIndex, VkSemaphore render
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) {
         _needsRecreate = true;
     }
-    return r == VK_SUCCESS;
+    return r;
 }
 
 void VkSwapchain::recordBeginPassBarriers(VkCommandBuffer cb, uint32_t imageIndex,

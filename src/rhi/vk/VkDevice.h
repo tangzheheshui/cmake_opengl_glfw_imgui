@@ -42,6 +42,7 @@ public:
 
     // 构造期有效性（instance/physicalDevice/device 建立成功）
     bool initialized() const { return _initialized; }
+    bool deviceLost() const override { return _deviceLost; }
 
     Backend    backend() const override { return Backend::Vulkan; }
     DeviceInfo info() const override;
@@ -185,6 +186,8 @@ private:
     std::string  _shaderRootPath;
     FramebufferSize _size;
     bool         _initialized = false;
+    // V3-16：设备丢失（驱动重置/TDR）。置位后停止一切 GPU 工作，等上层重建。
+    bool         _deviceLost = false;
     bool         _surfaceOwned = false;   // true = RHI 负责销毁 surface
 
     VkInstance       _instance       = VK_NULL_HANDLE;

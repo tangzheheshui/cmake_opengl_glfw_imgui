@@ -33,7 +33,7 @@ public:
     // 取下一张可渲染的 image。OUT_OF_DATE 时置重建标志并返回 false。
     bool acquire(VkSemaphore imageAvailable, uint32_t& imageIndex);
     // 呈现（等待该 image 的 render-done）。OUT_OF_DATE/SUBOPTIMAL 置重建标志。
-    bool present(VkQueue queue, uint32_t imageIndex, VkSemaphore renderDone);
+    VkResult present(VkQueue queue, uint32_t imageIndex, VkSemaphore renderDone);
 
     // ---- 查询 ----
     bool     valid() const      { return _swapchain != VK_NULL_HANDLE; }

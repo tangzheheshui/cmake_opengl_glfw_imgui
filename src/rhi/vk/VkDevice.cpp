@@ -667,7 +667,10 @@ void VulkanDevice::createSyncObjects() {
 bool VulkanDevice::beginFrameInternal() {
     // V3-4：等本槽位上一次提交完成（首帧 fence 预置已信号，直接通过）
     if (!_frames.wait()) {
-        ENGINE_LOG_ERROR("[VK] frame fence wait failed");
+        // 设备丢失时 fence 会直接失败；置标志停掉后续所有 GPU 工作
+        _deviceLost = true;
+        ENGINE_LOG_ERROR("[VK] DEVICE LOST (fence wait); rendering stopped, "
+                         "host should recreate the device");
         return false;
     }
     if (!_swapchain.acquire(_frames.current().imageAvailable, _imageIndex)) {
@@ -797,7 +800,15 @@ void VulkanDevice::endFrame() {
     si.pCommandBuffers    = cbs.data();
     si.signalSemaphoreCount = 1;
     si.pSignalSemaphores    = &renderDone;
-    VK_CHECK(vkQueueSubmit(_queue, 1, &si, _frames.current().fence));
+    {
+        const VkResult submitResult = vkQueueSubmit(_queue, 1, &si, _frames.current().fence);
+        if (submitResult == VK_ERROR_DEVICE_LOST) {
+            _deviceLost = true;
+            ENGINE_LOG_ERROR("[VK] DEVICE LOST (queue submit); rendering stopped");
+            return;
+        }
+        VK_CHECK(submitResult);
+    }
     _frameSubmitted = true;   // C1b：present() 消费该标志
     _frames.advance();        // 下一帧换槽位（本帧 GPU 未完成前不覆盖它）
 
@@ -908,7 +919,11 @@ void VulkanDevice::present() {
     _frameSubmitted = false;
     VkSemaphore renderDone = _swapchain.renderDoneSemaphore(_imageIndex);
     if (!renderDone) return;
-    _swapchain.present(_queue, _imageIndex, renderDone);
+    const VkResult r = _swapchain.present(_queue, _imageIndex, renderDone);
+    if (r == VK_ERROR_DEVICE_LOST) {
+        _deviceLost = true;
+        ENGINE_LOG_ERROR("[VK] DEVICE LOST (present); rendering stopped");
+    }
 }
 
 void VulkanDevice::onResize(int width, int height) {
@@ -934,6 +949,7 @@ void VulkanDevice::waitIdle() {
 // 资源创建
 // ============================================================
 BufferHandle VulkanDevice::createBuffer(const BufferDesc& desc) {
+    if (_deviceLost) return {};
     VkBufferRes res;
     res.size = desc.size;
 
@@ -1042,6 +1058,7 @@ void VulkanDevice::destroyUniformBlock(UniformBlockHandle h) {
 
 // ---- B4：离屏渲染目标 ----
 RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc) {
+    if (_deviceLost) return {};
     if (desc.width == 0 || desc.height == 0) {
         ENGINE_LOG_ERROR("[VK] createRenderTarget: zero-sized target");
         return {};
@@ -1317,6 +1334,7 @@ void VulkanDevice::recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTarge
 }
 
 TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
+    if (_deviceLost) return {};
     VkTextureRes t;
     t.width = desc.width; t.height = desc.height;
     const uint32_t layerCount = desc.cubemap ? 6u : 1u;
@@ -1832,6 +1850,7 @@ void VulkanDevice::commandListChurnTest() {
 
 // V3-3：管线创建/缓存交给 VkPipelines；设备只保留句柄表
 PipelineHandle VulkanDevice::createPipeline(const GraphicsPipelineDesc& desc) {
+    if (_deviceLost) return {};
     VkPipelineRes res;
     if (!_pipes.create(desc, res)) {
         return {};

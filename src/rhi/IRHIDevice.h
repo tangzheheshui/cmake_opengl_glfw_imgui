@@ -141,6 +141,8 @@ public:
 
     // 等待 GPU 完成（调试/销毁前用；GL: glFinish；Vulkan: vkDeviceWaitIdle）
     virtual void waitIdle() = 0;
+    // 设备丢失（驱动重置/TDR）：true 后渲染停止，上层应保存现场并重建设备。
+    virtual bool deviceLost() const { return false; }
 
     // ---- 逃生舱（按类型拆分，消除 nativeHandle(RhiHandle) 的跨类型歧义）----
     // 返回后端原生句柄：GL → GLuint；Vulkan → VkBuffer/VkImage/VkPipeline 等。
