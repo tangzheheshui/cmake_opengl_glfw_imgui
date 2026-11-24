@@ -104,8 +104,20 @@ public:
     // 提交顺序：所有用到的附加列表（按创建顺序）→ 主列表。主列表最后执行，
     // 负责最终呈现前的收尾（现在的 UI 叠加就在主列表里）。
     // 语义保证：最终画面与"按上述顺序录在同一个列表上"完全一致。
+    // 硬约束一：录制顺序必须等于提交顺序。GL 后端返回主列表、命令立即执行，
+    //   只有"先录附加列表、再录主列表"才与 Vulkan 的提交顺序等价；不等价不崩
+    //   不报错，只是画面顺序错。
+    // 硬约束二：多线程并行录制只对 Vulkan 后端成立（一条列表只给一个线程用）。
+    //   GL 后端天然串行，上层不得据此假设两端等价。
     // OpenGL 后端没有"延迟提交"，这里返回主列表本身，命令按调用顺序立即执行。
     virtual IRHICommandList* createCommandList() { return commandList(); }
+
+    // 结束一条附加列表的生命周期（必须是 createCommandList 的返回值；传主列表无效）。
+    // 硬约束：附加列表由上层显式创建、显式销毁，不允许每帧隐式累积。
+    // 若上层按帧创建，必须在该帧录制结束后配对调用本函数；设备会等 GPU 用完
+    // 再真正释放（与资源销毁同一套延迟回收）。
+    // OpenGL 后端：没有附加列表（createCommandList 返回主列表），本函数 no-op。
+    virtual void destroyCommandList(IRHICommandList* /*list*/) {}
 
     // ---- 原生句柄（app 层接入第三方库用，如 ImGui Vulkan backend）----
     struct NativeHandles {

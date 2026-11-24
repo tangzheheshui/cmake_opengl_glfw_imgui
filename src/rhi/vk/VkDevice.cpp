@@ -713,6 +713,7 @@ bool VulkanDevice::beginFrame() {
         if (_commandList) _commandList->beginFrameSlot(_frames.index());
         for (auto& l : _extraLists) l->beginFrameSlot(_frames.index());
         multListSelfTest();
+        commandListChurnTest();
     }
     return _frameActive;
 }
@@ -1676,6 +1677,65 @@ IRHICommandList* VulkanDevice::createCommandList() {
     VkCommandList* raw = list.get();
     _extraLists.push_back(std::move(list));
     return raw;
+}
+
+// 附加列表销毁：从列表集合摘除，对象（含命令缓冲）等 GPU 用完再释放。
+// 放在延迟队列里是为了覆盖"销毁发生在录制中途/本帧尚未提交"的情况。
+void VulkanDevice::destroyCommandList(IRHICommandList* list) {
+    if (!list) return;
+    if (_commandList && list == _commandList.get()) {
+        ENGINE_LOG_WARN_ONCE("[VK] destroyCommandList: primary list is device-owned, ignored");
+        return;
+    }
+    for (auto it = _extraLists.begin(); it != _extraLists.end(); ++it) {
+        if (it->get() != list) continue;
+        VkCommandList* raw = it->release();
+        _extraLists.erase(it);
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                       [raw] { delete raw; });
+        return;
+    }
+    ENGINE_LOG_WARN_ONCE("[VK] destroyCommandList: unknown list (ignored)");
+}
+
+// RHI_CMDLIST_CHURN=<N>：验证"创建→录制→销毁"不会累积。
+// 第一帧跑 N 轮，之后报告附加列表数量（应为 0），退出时看分配器 live。
+void VulkanDevice::commandListChurnTest() {
+    static const char* env = std::getenv("RHI_CMDLIST_CHURN");
+    static const uint32_t rounds = env ? static_cast<uint32_t>(std::atoi(env)) : 0;
+    if (rounds == 0 || _churnDone) return;
+    _churnDone = true;
+
+    // 压测用的落点缓冲（避免 fill 到未初始化的句柄）
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size        = sizeof(uint32_t);
+    bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer scratch = VK_NULL_HANDLE;
+    VkMemAlloc mem;
+    if (vkCreateBuffer(_device, &bci, nullptr, &scratch) != VK_SUCCESS) return;
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(_device, scratch, &req);
+    mem = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                              | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(vkBindBufferMemory(_device, scratch, mem.memory, mem.offset));
+
+    for (uint32_t i = 0; i < rounds; ++i) {
+        IRHICommandList* l = createCommandList();
+        if (!l || l == commandList()) break;   // 后退路径：拿不到独立列表
+        auto* vkl = static_cast<VkCommandList*>(l);
+        vkl->beginFrameSlot(_frames.index());
+        vkCmdFillBuffer(vkl->commandBuffer(), scratch, 0, sizeof(uint32_t), i);
+        destroyCommandList(l);
+    }
+    ENGINE_LOG_INFO("[VK][churn] command list rounds=%u, live extra lists=%zu",
+                    rounds, _extraLists.size());
+
+    // 落点缓冲本身不急着销毁：走延迟队列，避免和压测里未提交的命令抢生命周期
+    _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames, [this, scratch, mem] {
+        vkDestroyBuffer(_device, scratch, nullptr);
+        _memAlloc.free(mem);
+    });
 }
 
 // V3-3：管线创建/缓存交给 VkPipelines；设备只保留句柄表

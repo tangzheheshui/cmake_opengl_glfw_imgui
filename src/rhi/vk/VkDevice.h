@@ -82,6 +82,8 @@ public:
     IRHICommandList* commandList() override;
     // V3-6：附加命令列表（先于主列表提交；GL 后端返回主列表本身）
     IRHICommandList* createCommandList() override;
+    // V3-9：结束附加列表生命周期（延迟到 GPU 用完再释放）
+    void destroyCommandList(IRHICommandList* list) override;
     // 命令池（命令列表按槽位分配命令缓冲用）
     VkCommandPool commandPool() const { return _commandPool; }
     uint64_t nativeBuffer(BufferHandle h)   const override;
@@ -260,7 +262,9 @@ private:
     void*          _mlMapped = nullptr;
     VkCommandList* _mlList   = nullptr;
     uint32_t       _mlFrames = 0;
+    bool           _churnDone = false;
     void multListSelfTest();
+    void commandListChurnTest();   // RHI_CMDLIST_CHURN=<N>：创建/录制/销毁压测
     std::string _adapterName;
 };
 
