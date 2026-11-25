@@ -252,6 +252,10 @@ void RenderSystem::drawRhiSceneContents() {
     if (!m_rhiDevice || !mCurScene) return;
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd) return;
+
+    // V3-18：先画阴影深度图（独立 Pass），再画主场景
+    recordShadowPass(cmd);
+
     rhi::RenderPassDesc rp;
     rp.clearColor = true;
     rp.clearDepth = true;
@@ -609,6 +613,89 @@ void RenderSystem::ensurePickResources() {
     if (m_pickRT.valid()) {
         ENGINE_LOG_INFO("[PICK] pick RT %dx%d + pipeline ready", fbW, fbH);
     }
+}
+
+// V3-18：光空间矩阵 → Vulkan 深度约定
+// 与 VkCommandList 的 Reversed-Z 修正同式：z' = 0.5*(w - z)，近平面 → 1、远平面 → 0。
+// 阴影贴图按这个矩阵写入，采样比较时按同一约定（存得越大越近）。
+static Matrix correctedLightVP() {
+    glm::mat4 m = Matrix::toMatrix(Scene::GetLightVPMatrix());
+    for (int c = 0; c < 4; ++c) {
+        float* z = &m[c][2];
+        const float w = m[c][3];
+        *z = 0.5f * (w - *z);
+    }
+    return Matrix::toMatrix(m);
+}
+
+void RenderSystem::ensureShadowResources() {
+    auto* device = m_rhiDevice;
+    if (!device) return;
+    if (m_shadowInitTried) return;   // 建过一次就不再重试（着色器缺失属于构建期问题）
+    m_shadowInitTried = true;
+
+    rhi::GraphicsPipelineDesc sd;
+    sd.shaders = {
+        { rhi::ShaderStage::Vertex,   "vert_shadow_rhi" },
+        { rhi::ShaderStage::Fragment, "frag_shadow_rhi" },
+    };
+    sd.vertexLayout.stride = 8 * sizeof(float);
+    sd.vertexLayout.instanceStride = sizeof(Matrix);
+    sd.vertexLayout.attributes = {
+        { 0, rhi::VertexFormat::Float3, 0,  false },
+        { 1, rhi::VertexFormat::Float3, 12, false },
+        { 2, rhi::VertexFormat::Float2, 24, false },
+        { 3, rhi::VertexFormat::Float4, 0,  true },
+        { 4, rhi::VertexFormat::Float4, 16, true },
+        { 5, rhi::VertexFormat::Float4, 32, true },
+        { 6, rhi::VertexFormat::Float4, 48, true },
+    };
+    sd.primitive = rhi::PrimitiveType::Triangles;
+    sd.cull      = rhi::CullMode::Back;
+    sd.depth     = { true, true };
+    sd.attachment.colorCount  = 0;                 // 纯深度管线
+    sd.attachment.depthFormat = rhi::Format::Depth32F;
+    m_shadowPipeline = device->createPipeline(sd);
+
+    rhi::RenderTargetDesc rtd;
+    rtd.width  = 1024;
+    rtd.height = 1024;
+    rtd.hasColor = false;                          // 纯深度目标
+    rtd.hasDepth = true;
+    rtd.depthFormat = rhi::Format::Depth32F;
+    m_shadowRT = device->createRenderTarget(rtd);
+    if (!m_shadowRT.valid()) {
+        ENGINE_LOG_ERROR("[SHADOW] shadow target create failed");
+    } else {
+        ENGINE_LOG_INFO("[SHADOW] 1024x1024 depth target + depth-only pipeline ready");
+    }
+}
+
+void RenderSystem::recordShadowPass(rhi::IRHICommandList* cmd) {
+    if (!m_settings.drawShadowPass || !cmd || !mCurScene) return;
+    ensureShadowResources();
+    if (!m_shadowRT.valid() || !m_shadowPipeline.valid()) return;
+
+    rhi::RenderPassDesc sp;
+    sp.renderTarget = m_shadowRT;
+    sp.clearColor   = false;   // 纯深度目标无颜色附件
+    sp.clearDepth   = true;
+    cmd->beginRenderPass(sp);
+    cmd->pushDebugLabel("Shadow");
+    const Matrix lightVP = correctedLightVP();
+    uint32_t drawn = 0;
+    for (auto& obj : mCurScene->GetObjs()) {
+        if (auto model = std::dynamic_pointer_cast<Model>(obj)) {
+            if (model->drawShadowRHI(cmd, m_shadowPipeline, lightVP)) ++drawn;
+        }
+    }
+    static bool logged = false;
+    if (!logged && drawn > 0) {
+        logged = true;
+        ENGINE_LOG_INFO("[SHADOW] shadow pass recording %u model(s) into 1024x1024 depth map", drawn);
+    }
+    cmd->popDebugLabel();
+    cmd->endRenderPass();
 }
 
 void RenderSystem::requestPick(double x, double y, bool isHover) {

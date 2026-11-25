@@ -541,6 +541,17 @@ void Model::getWorldAABB(float& minX, float& minY, float& minZ,
     }
 }
 
+// V3-18：RHI 阴影绘制——所有网格经深度专用管线画进阴影贴图
+bool Model::drawShadowRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle shadowPipeline,
+                          const Matrix& lightVP) {
+    for (auto mesh : m_mesh) {
+        if (!mesh->DrawShadowRHI(cmd, shadowPipeline, lightVP, m_vec_modelMat)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // D2: RHI 拾取绘制——所有网格经 pick 管线直出本对象 ID 色
 bool Model::drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj) {
     Matrix mtx;

@@ -120,7 +120,9 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     // B4：离屏 RenderTarget 分支（dynamic rendering 附件来自 RT 资源）
     if (desc.renderTarget.valid()) {
         const VkRenderTargetRes& rt = _device->renderTargetRes(desc.renderTarget);
-        if (!rt.alive || !rt.colorTex.valid()) {
+        // V3-18：纯深度目标没有颜色纹理，只要有深度附件就是合法目标
+        const bool hasAnyAttachment = rt.colorTex.valid() || rt.depthTex.valid() || rt.depthView;
+        if (!rt.alive || !hasAnyAttachment) {
             ENGINE_LOG_WARN_ONCE("[VK] beginRenderPass: dead/invalid render target");
             return;
         }

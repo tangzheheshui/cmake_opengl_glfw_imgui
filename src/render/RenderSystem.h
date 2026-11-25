@@ -110,6 +110,13 @@ private:
 	void runPickPass();
 	rhi::PipelineHandle m_pickPipeline;
 	rhi::RenderTargetHandle m_pickRT;
+
+	// V3-18：阴影 Pass——纯深度目标（1024²）+ 深度专用管线
+	rhi::PipelineHandle     m_shadowPipeline;
+	rhi::RenderTargetHandle m_shadowRT;
+	bool                    m_shadowInitTried = false;
+	void ensureShadowResources();
+	void recordShadowPass(rhi::IRHICommandList* cmd);
 	struct PickRequest {
 		bool  pending = false;   // 已请求、待渲染
 		bool  rendered = false;  // 渲染完成、待回读

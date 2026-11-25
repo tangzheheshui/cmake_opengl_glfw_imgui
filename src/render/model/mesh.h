@@ -35,6 +35,11 @@ public:
                      const Matrix& viewProj, const std::vector<Matrix>& matModel, uint16_t pickID) {
         return m_pass ? m_pass->DrawPickRHI(cmd, pickPipeline, viewProj, matModel, pickID) : false;
     }
+    // V3-18：阴影 Pass 绘制（经 MeshPass 的深度专用管线）
+    bool DrawShadowRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle shadowPipeline,
+                       const Matrix& lightVP, const std::vector<Matrix>& matModel) {
+        return m_pass ? m_pass->DrawShadowRHI(cmd, shadowPipeline, lightVP, matModel) : false;
+    }
 private:
     unsigned int _texture;
     std::shared_ptr<MeshPass> m_pass;

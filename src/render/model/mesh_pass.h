@@ -47,6 +47,9 @@ public:
     bool DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
                      const Matrix& viewProj, const std::vector<Matrix>& matModel,
                      uint16_t pickID);
+    // V3-18：阴影 Pass 绘制（深度专用管线 + 光空间矩阵）
+    bool DrawShadowRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle shadowPipeline,
+                       const Matrix& lightVP, const std::vector<Matrix>& matModel);
 protected:
     virtual Shader* getShader(uint32_t flags) { return nullptr; }
     virtual bool isTextured() const { return false; }   // PassTexture 覆写为 true

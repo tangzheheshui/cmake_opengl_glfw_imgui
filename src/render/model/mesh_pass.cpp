@@ -634,6 +634,36 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
 // ================= D2: RHI 拾取绘制 =================
 // pick 管线（vert_pick_rhi/frag_pick_rhi）：ID 编码色经 push constant 直出，
 // 无光照/纹理/FrameData。顶点布局与绘制管线一致（同一套 VB/IB/实例缓冲复用）。
+bool MeshPass::DrawShadowRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle shadowPipeline,
+                             const Matrix& lightVP, const std::vector<Matrix>& matModel) {
+    auto& rs = RenderSystem::getInstance();
+    auto* device = rs.rhiDevice();
+    if (!device || !cmd || !shadowPipeline.valid()) return false;
+
+    ensureRHIResources(device);
+    if (!m_rhiVB.valid() || !m_rhiIB.valid()) return false;
+    const auto& md = m_mesh_data;
+
+    const uint32_t instBytes = static_cast<uint32_t>(matModel.size() * sizeof(Matrix));
+    if (matModel.size() * sizeof(Matrix) > 64 * 4) {
+        ENGINE_LOG_WARN_ONCE("[RHI] shadow: instance count exceeds buffer capacity");
+        return false;
+    }
+    device->updateBuffer(m_rhiInstanceVB, matModel.data(), instBytes);
+
+    cmd->bindPipeline(shadowPipeline);
+    // 矩阵已在渲染侧做过 Reversed-Z 修正（与深度比较约定一致）
+    glm::mat4 lvp = Matrix::toMatrix(lightVP);
+    cmd->setUniform("uLightMat", rhi::UniformValue::fromMat4(glm::value_ptr(lvp)));
+
+    cmd->bindVertexBuffer(m_rhiVB, 0);
+    cmd->bindVertexBuffer(m_rhiInstanceVB, 1);
+    cmd->bindIndexBuffer(m_rhiIB);
+    cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
+                     static_cast<uint32_t>(matModel.size()));
+    return true;
+}
+
 bool MeshPass::DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
                            const Matrix& viewProj, const std::vector<Matrix>& matModel,
                            uint16_t pickID) {
