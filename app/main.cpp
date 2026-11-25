@@ -2,12 +2,13 @@
 //  main.cpp —— 示例宿主（C5：启动编排 → 主循环 → 关闭，无场景/资源细节）
 //
 //  宿主职责（docs/ARCHITECTURE_INTERFACES.md §3.1）：
-//    窗口与 GL 上下文（GlfwHost）→ 设备创建（RHIFactory + DeviceDesc）
+//    窗口与 GL 上下文（GlfwHost）→ 组装 DeviceDesc → 引擎自建设备
 //    → RenderSystem::init（借用设备）→ 每帧 renderFrame() → 显式关闭
 //
 //  生命周期约定（C1b）：
-//    窗口创建 → 设备创建 → renderer.init → 每帧 renderer.renderFrame()
-//    → renderer.shutdown() → 设备销毁 → 窗口销毁（glfwTerminate）
+//    窗口创建 → 组装 DeviceDesc → renderer.init（引擎内建设备）
+//    → 每帧 renderer.renderFrame() → renderer.shutdown()（含设备销毁）
+//    → 窗口销毁（glfwTerminate）
 //
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -58,8 +59,8 @@ int main() {
         glfwTerminate();
         return -1;
     }
-    if (!host.createDevice(useVulkan, &err)) {
-        std::cout << "Failed to create RHI device: " << err << std::endl;
+    if (!host.buildDeviceDesc(useVulkan, &err)) {
+        std::cout << "Failed to build device desc: " << err << std::endl;
         glfwTerminate();
         return -1;
     }
@@ -75,7 +76,7 @@ int main() {
     }
 
     RenderSystem::InitDesc initDesc;
-    initDesc.device       = host.device();
+    initDesc.deviceDesc   = host.deviceDesc();   // 引擎自建设备（app 不再持有）
     initDesc.assetRoot    = proPath;
     initDesc.frameWidth   = static_cast<uint32_t>(fbW);
     initDesc.frameHeight  = static_cast<uint32_t>(fbH);
@@ -146,10 +147,9 @@ int main() {
         glfwPollEvents();
     }
 
-    // ---- 关闭（顺序即契约）：UI → 引擎 → 设备 → 窗口 ----
+    // ---- 关闭（顺序即契约）：UI → 引擎（含设备）→ 窗口 ----
     host.shutdownImGui(useVulkan);
-    renderSys.shutdown();          // 只销毁引擎资源，不销毁设备
-    host.takeDevice().reset();     // 宿主销毁设备（GL 上下文/窗口仍存活）
+    renderSys.shutdown();          // 销毁引擎资源 + 引擎自建的设备（上下文仍存活）
     glfwTerminate();
     return 0;
 }

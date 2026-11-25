@@ -14,6 +14,7 @@
 #define GlfwHost_h
 
 #include <memory>
+#include "rhi/RhiTypes.h"
 #include <string>
 
 #ifndef ENGINE_HAS_VULKAN
@@ -44,8 +45,8 @@ public:
     // 上下文设为 current。失败返回 false（窗口创建失败时内部已 terminate）。
     bool createWindow(int width, int height, bool useVulkan, std::string* outError = nullptr);
 
-    // 组装 DeviceDesc 并创建 RHI 设备（宿主持有；引擎经 InitDesc 借用）
-    bool createDevice(bool useVulkan, std::string* outError = nullptr);
+    // 组装 DeviceDesc 交给 RenderSystem（设备由引擎自建自毁，app 不再持有）
+    bool buildDeviceDesc(bool useVulkan, std::string* outError = nullptr);
 
     // ---- ImGui（UI 是 app 层职责，含 CJK 字体加载）----
     bool initImGui(bool useVulkan);
@@ -53,9 +54,8 @@ public:
     void shutdownImGui(bool useVulkan);
 
     GLFWwindow* window() const { return _window; }
-    rhi::IRHIDevice* device() const { return _device.get(); }
-    // 所有权转移（退出路径：引擎 shutdown 之后宿主显式销毁设备）
-    std::unique_ptr<rhi::IRHIDevice> takeDevice() { return std::move(_device); }
+    // 设备生命周期归 RenderSystem（见 InitDesc 两种所有权模式）
+    const rhi::DeviceDesc& deviceDesc() const { return _deviceDesc; }
 
 private:
     static void framebufferSizeCallback(GLFWwindow* w, int width, int height);
@@ -67,7 +67,7 @@ private:
     static void swapAdapter(void* user);
 
     GLFWwindow* _window = nullptr;
-    std::unique_ptr<rhi::IRHIDevice> _device;
+    rhi::DeviceDesc _deviceDesc;
 #if ENGINE_HAS_VULKAN
     VkDescriptorPool _imguiDescriptorPool = VK_NULL_HANDLE;
 #endif

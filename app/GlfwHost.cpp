@@ -88,14 +88,14 @@ bool GlfwHost::createWindow(int width, int height, bool useVulkan, std::string* 
     return true;
 }
 
-bool GlfwHost::createDevice(bool useVulkan, std::string* outError) {
+bool GlfwHost::buildDeviceDesc(bool useVulkan, std::string* outError) {
     int width = 0, height = 0, winW = 0, winH = 0;
     glfwGetFramebufferSize(_window, &width, &height);
     glfwGetWindowSize(_window, &winW, &winH);
 
     // ---- C1b/C5：DeviceDesc 组装（宿主职责）----
     // 窗口类型按平台（VK 建面在下方回调提供；GL 只用交换回调）
-    rhi::DeviceDesc desc;
+    rhi::DeviceDesc& desc = _deviceDesc;
     desc.backend = useVulkan ? rhi::Backend::Vulkan : rhi::Backend::OpenGL;
     desc.appName = "my_app";
     desc.width   = static_cast<uint32_t>(width);
@@ -140,12 +140,7 @@ bool GlfwHost::createDevice(bool useVulkan, std::string* outError) {
                             + "shaders" + (useVulkan ? "_vk" : "") + sep;
     }
 
-    std::string err;
-    _device = rhi::RHIFactory::createDevice(desc, &err);
-    if (!_device) {
-        if (outError) *outError = err.empty() ? "createDevice failed" : err;
-        return false;
-    }
+    (void)outError;
     return true;
 }
 

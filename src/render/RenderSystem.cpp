@@ -1,5 +1,6 @@
 #include "log/LogMacros.h"
 #include "RenderSystem.h"
+#include "rhi/RHIFactory.h"
 #include "render/scene.h"
 #include "render/Light.h"
 #include <glm/gtc/type_ptr.hpp>
@@ -76,22 +77,32 @@ void RenderSystem::shutdown() {
     m_fontMng.reset();
     mCurScene.reset();
     mRenderContent.reset();
-    m_rhiDevice = nullptr;   // 只清借用指针，不销毁设备
+    // 模式 2：设备由引擎创建 → 在这里销毁（调用方保证仍在窗口/上下文存活期内）
+    m_ownedDevice.reset();
+    m_rhiDevice = nullptr;
 }
 
 bool RenderSystem::init(const InitDesc& desc, std::string* outError) {
-    if (!desc.device) {
-        if (outError) *outError = "InitDesc.device is null";
-        return false;
+    // 两种所有权模式：宿主给设备（借用），或给 DeviceDesc 由引擎自建
+    if (desc.device) {
+        m_rhiDevice = desc.device;
+    } else {
+        std::string devErr;
+        m_ownedDevice = rhi::RHIFactory::createDevice(desc.deviceDesc, &devErr);
+        if (!m_ownedDevice) {
+            if (outError) *outError = devErr.empty() ? "createDevice failed" : devErr;
+            return false;
+        }
+        m_rhiDevice = m_ownedDevice.get();
     }
-    m_rhiDevice = desc.device;
-    _backend    = desc.device->backend();
+    _backend    = m_rhiDevice->backend();
     m_frameW  = desc.frameWidth;
     m_frameH  = desc.frameHeight;
     m_windowW = desc.windowWidth  ? desc.windowWidth  : desc.frameWidth;
     m_windowH = desc.windowHeight ? desc.windowHeight : desc.frameHeight;
-    ENGINE_LOG_INFO("[RHI] backend = %s (device provided by host)",
-                    _backend == rhi::Backend::Vulkan ? "Vulkan" : "OpenGL");
+    ENGINE_LOG_INFO("[RHI] backend = %s (%s)",
+                    _backend == rhi::Backend::Vulkan ? "Vulkan" : "OpenGL",
+                    m_ownedDevice ? "device: engine-owned" : "device: borrowed from host");
 
     // E4：LOD 演示开关（默认关，不影响既有画面）
     if (const char* e = std::getenv("RHI_LOD")) {

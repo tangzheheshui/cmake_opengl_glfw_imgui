@@ -42,7 +42,12 @@ public:
 
 	// ---- C1b：门面初始化（宿主拥有设备与窗口，引擎只借用）----
 	struct InitDesc {
-		rhi::IRHIDevice* device = nullptr;   // 宿主创建并持有；引擎不销毁
+		// 两种所有权模式（二选一）：
+		//  1) device != nullptr：宿主已建好设备并持有，引擎只借用、不销毁；
+		//  2) device == nullptr：引擎用下面的 deviceDesc 自建设备并负责销毁。
+		// 宿主通常用 2，app 层不再需要认识 RHIFactory / IRHIDevice 生命周期。
+		rhi::IRHIDevice* device = nullptr;
+		rhi::DeviceDesc  deviceDesc;         // 模式 2 使用（窗口/后端/着色器路径）
 		std::string assetRoot;               // 含 res/ 的根目录（UTF-8）
 		uint32_t frameWidth  = 0;            // 帧缓冲像素尺寸
 		uint32_t frameHeight = 0;
@@ -159,7 +164,8 @@ private:
     // ---- RHI（C1b 门面）----
     rhi::Backend _backend = rhi::Backend::OpenGL;   // 由 device->backend() 得到
     RenderSettings m_settings;
-    rhi::IRHIDevice* m_rhiDevice = nullptr;   // 借用（宿主持有，引擎不销毁）
+    rhi::IRHIDevice* m_rhiDevice = nullptr;   // 借用或自持（见 InitDesc 两种模式）
+    std::unique_ptr<rhi::IRHIDevice> m_ownedDevice;   // 模式 2：引擎自建并销毁
     // 窗口→帧缓冲坐标换算（拾取；InitDesc 提供逻辑尺寸）
     uint32_t m_frameW = 0, m_frameH = 0;
     uint32_t m_windowW = 0, m_windowH = 0;

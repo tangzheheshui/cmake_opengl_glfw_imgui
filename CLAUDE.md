@@ -8,6 +8,7 @@ C++17 跨平台渲染引擎，**双后端（OpenGL 3.3 / Vulkan）**，通过自
 
 ```
 app 层（可执行 my_app）   main.cpp + DebugPanel —— 唯一允许使用 ImGui 的地方
+                          只负责窗口/DeviceDesc/UI；设备由 RenderSystem 创建并销毁
 engine 层（静态库）        src/ 下的 RHI + 渲染系统，禁止依赖任何 UI 库
 third-party 层            3rdparty/ 各自独立 target
 依赖方向：app → engine → third-party，禁止反向
