@@ -114,6 +114,19 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         engine::fs::utf8FromPath(skyboxPath / "back.jpg")
     });
 
+    // V3-20 阴影演示（RHI_SHADOW_DEMO=1）：在光源下方放一个投影物，
+    // 让它的影子落在 VK 模式的地面上。默认场景不变。
+    std::shared_ptr<Model> objShadowCaster;
+    if (std::getenv("RHI_SHADOW_DEMO")) {
+        objShadowCaster = std::make_shared<Model>();
+        objShadowCaster->LoadFile(engine::fs::utf8FromPath(
+            engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+        objShadowCaster->setCount(1);
+        objShadowCaster->setPosition(0, {0, 5, 0});
+        objShadowCaster->setScale(0, 0.3f);
+        pScene->AddObj(objShadowCaster);
+    }
+
     pScene->AddObj(objDuck);
     pScene->AddObj(objLight);
     pScene->AddObj(line_x);

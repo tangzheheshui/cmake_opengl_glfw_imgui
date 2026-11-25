@@ -123,6 +123,10 @@ private:
 	void ensureShadowResources();
 	void recordShadowPass(rhi::IRHICommandList* cmd);
 	rhi::TextureHandle m_shadowTex;
+	// V3-20：阴影接收面（VK 模式的地面；GL 模式仍用遗留 ImageRectangle）
+	rhi::BufferHandle   m_groundVB;
+	rhi::PipelineHandle m_groundPipeline;
+	void recordGroundRHI(rhi::IRHICommandList* cmd, const Matrix& viewProj);
 	struct PickRequest {
 		bool  pending = false;   // 已请求、待渲染
 		bool  rendered = false;  // 渲染完成、待回读

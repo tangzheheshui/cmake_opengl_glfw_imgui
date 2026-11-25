@@ -97,7 +97,7 @@ void main()
                 for (int dy = -1; dy <= 1; ++dy) {
                     for (int dx = -1; dx <= 1; ++dx) {
                         float d = texture(uShadowMap, uv + vec2(dx, dy) * texel).r;
-                        litAcc += (proj.z - bias <= d) ? 1.0 : 0.0;
+                        litAcc += (proj.z >= d - bias) ? 1.0 : 0.0;   // Reversed-Z：越大越近
                     }
                 }
                 float lit = litAcc / 9.0;

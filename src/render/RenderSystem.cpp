@@ -2,6 +2,7 @@
 #include "RenderSystem.h"
 #include "render/scene.h"
 #include "render/Light.h"
+#include <glm/gtc/type_ptr.hpp>
 #include "object/Sky.h"
 #include "model/model.h"
 #include "pass/SkyPass.h"
@@ -294,6 +295,8 @@ void RenderSystem::drawRhiSceneContents() {
 
             auto drawSceneContent = [&](const Matrix& tileVP,
                                         const std::shared_ptr<Camera>& tileCam) {
+                // V3-20：阴影接收面（VK 模式的地面），每个 tile 各画一次
+                recordGroundRHI(cmd, tileVP);
                 // D3：透明排序 + E3：视锥剔除——按 tile 相机计算（多相机下
                 // 各 tile 的可见集不同，剔除与排序必须逐 tile 做）
                 const auto drawList = mCurScene->getSortedDrawList(tileCam->getPossition(),
@@ -671,6 +674,54 @@ void RenderSystem::ensureShadowResources() {
         m_shadowTex = device->renderTargetDepthTexture(m_shadowRT);
         ENGINE_LOG_INFO("[SHADOW] 1024x1024 depth target + depth-only pipeline ready");
     }
+
+    // V3-20：阴影接收面——20x20 地面（世界 y=0），棋盘格 + PCF
+    {
+        const float half = 20.0f;
+        // 相机在 y=0 水平看，地面必须低于相机才可见（否则与视线共面）
+        const float gy = -2.0f;
+        const float verts[] = {
+            -half, gy, -half,   half, gy, -half,   half, gy,  half,
+            -half, gy, -half,   half, gy,  half,  -half, gy,  half,
+        };
+        rhi::BufferDesc vbd;
+        vbd.size = sizeof(verts);
+        vbd.usage = rhi::BUF_VERTEX;
+        vbd.initialData = verts;
+        m_groundVB = device->createBuffer(vbd);
+
+        rhi::GraphicsPipelineDesc gd;
+        gd.shaders = {
+            { rhi::ShaderStage::Vertex,   "vert_ground_rhi" },
+            { rhi::ShaderStage::Fragment, "frag_ground_rhi" },
+        };
+        gd.vertexLayout.stride = 3 * sizeof(float);
+        gd.vertexLayout.attributes = { { 0, rhi::VertexFormat::Float3, 0, false } };
+        gd.primitive = rhi::PrimitiveType::Triangles;
+        gd.cull      = rhi::CullMode::None;
+        gd.depth     = { true, true };
+        m_groundPipeline = device->createPipeline(gd);
+        if (!m_groundPipeline.valid()) {
+            ENGINE_LOG_ERROR("[SHADOW] ground pipeline create failed");
+        }
+    }
+}
+
+// V3-20：地面绘制（阴影接收面）。放在主场景 Pass 内，先于其它不透明物体。
+void RenderSystem::recordGroundRHI(rhi::IRHICommandList* cmd, const Matrix& viewProj) {
+    if (!m_groundPipeline.valid() || !m_groundVB.valid() || !m_shadowTex.valid()) return;
+    if (!m_settings.drawShadowPass) return;
+
+    cmd->pushDebugLabel("ShadowGround");
+    cmd->bindPipeline(m_groundPipeline);
+    glm::mat4 vp = Matrix::toMatrix(viewProj);
+    cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
+    glm::mat4 lm = Matrix::toMatrix(correctedLightVP());
+    cmd->setUniform("uLightMat", rhi::UniformValue::fromMat4(glm::value_ptr(lm)));
+    cmd->bindTexture(m_shadowTex, 4);
+    cmd->bindVertexBuffer(m_groundVB);
+    cmd->draw(6);
+    cmd->popDebugLabel();
 }
 
 // V3-19：主场景绘制用的光空间矩阵（与阴影 Pass 完全一致）
