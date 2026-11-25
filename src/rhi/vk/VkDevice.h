@@ -70,6 +70,7 @@ public:
     RenderTargetHandle createRenderTarget(const RenderTargetDesc& desc) override;
     void destroyRenderTarget(RenderTargetHandle) override;
     TextureHandle renderTargetColorTexture(RenderTargetHandle) const override;
+    TextureHandle renderTargetDepthTexture(RenderTargetHandle) const override;
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 

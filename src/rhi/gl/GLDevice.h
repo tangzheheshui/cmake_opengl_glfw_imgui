@@ -46,6 +46,7 @@ struct GLTexture {
 struct GLRenderTarget {
     GLuint         fbo = 0;
     TextureHandle  colorTex;
+    TextureHandle  depthTex;    // 可采样深度（纯深度目标/阴影贴图）
     GLuint         depthRbo = 0;
     uint32_t       width  = 0;
     uint32_t       height = 0;
@@ -110,6 +111,7 @@ public:
     RenderTargetHandle createRenderTarget(const RenderTargetDesc& desc) override;
     void destroyRenderTarget(RenderTargetHandle) override;
     TextureHandle renderTargetColorTexture(RenderTargetHandle) const override;
+    TextureHandle renderTargetDepthTexture(RenderTargetHandle) const override;
     bool readbackTexture(TextureHandle, void* outData, size_t outSize,
                          const ReadbackDesc& = {}) override;
 

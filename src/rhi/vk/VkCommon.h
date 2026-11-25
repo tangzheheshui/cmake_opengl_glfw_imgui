@@ -74,6 +74,8 @@ struct VkTextureRes {
 // （storeOp=DONT_CARE + 每次 begin CLEAR，跨 Pass 不保内容）。
 struct VkRenderTargetRes {
     TextureHandle  colorTex;                            // 颜色附件（VkTextureRes）
+    TextureHandle  depthTex;                            // 可采样深度（纯深度目标用）
+    bool           hasColor    = true;
     Format         colorFormat = Format::BGRA8_SRGB;    // 颜色附件格式（Pass 校验用）
     Format         depthFormat = Format::Depth32F;      // 深度附件格式（无深度时无效）
     VkImage        depthImage  = VK_NULL_HANDLE;
@@ -118,6 +120,8 @@ struct VkPipelineRes {
     Format depthFormat = Format::Depth32F;
     // V3-15：管线声明的采样数（必须与 Pass 实际附件采样数一致）
     uint32_t samples = 1;
+    // V3-17：管线声明的颜色附件数（0 = 纯深度管线，阴影 Pass 用）
+    uint32_t colorCount = 1;
 };
 
 // push constant 布局常量（与 res/shaders_vk/*.vert|.frag 中的 PC 块一致）

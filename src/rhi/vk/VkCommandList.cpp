@@ -126,28 +126,38 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         }
         const VkExtent2D extent{rt.width, rt.height};
 
+        // V3-17：纯深度目标（阴影贴图）没有颜色附件
+        const bool hasColor = rt.hasColor && rt.colorTex.valid();
+        const VkImageView depthView = rt.depthTex.valid()
+                                          ? _device->textureRes(rt.depthTex).view
+                                          : rt.depthView;
+
         VkRenderingAttachmentInfo colorAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        colorAtt.imageView   = _device->textureRes(rt.colorTex).view;
-        colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAtt.loadOp      = desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-        colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAtt.clearValue.color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
-                                       desc.clearColorValue[2], desc.clearColorValue[3] }};
+        if (hasColor) {
+            colorAtt.imageView   = _device->textureRes(rt.colorTex).view;
+            colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAtt.loadOp      = desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+            colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAtt.clearValue.color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
+                                           desc.clearColorValue[2], desc.clearColorValue[3] }};
+        }
 
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
         ri.renderArea.offset = {0, 0};
         ri.renderArea.extent = extent;
         ri.layerCount        = 1;
-        ri.colorAttachmentCount = 1;
-        ri.pColorAttachments    = &colorAtt;
+        ri.colorAttachmentCount = hasColor ? 1u : 0u;
+        ri.pColorAttachments    = hasColor ? &colorAtt : nullptr;
 
         VkRenderingAttachmentInfo depthAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        if (rt.depthView) {
-            depthAtt.imageView   = rt.depthView;
+        if (depthView) {
+            depthAtt.imageView   = depthView;
             // 1.0 布局（DEPTH_ATTACHMENT_OPTIMAL 需 1.2 扩展，见 recordRenderTargetBeginBarriers）
             depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             depthAtt.loadOp      = desc.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-            depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            // 可采样深度（阴影贴图）必须保留内容，其余 RT 深度用完即弃
+            depthAtt.storeOp     = rt.depthTex.valid() ? VK_ATTACHMENT_STORE_OP_STORE
+                                                       : VK_ATTACHMENT_STORE_OP_DONT_CARE;
             // B3b：VK 后端深度语义反转，清屏值固定 0（最远），与 swapchain 路径一致
             depthAtt.clearValue.depthStencil = {0.0f, 0};
             ri.pDepthAttachment = &depthAtt;
@@ -157,8 +167,8 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         _device->beginRenderingFn()(commandBuffer(), &ri);
         _inRenderPass    = true;
         _curRenderTarget = desc.renderTarget;
-        recordPassFormats(true, rt.colorFormat,
-                          rt.depthView != VK_NULL_HANDLE, rt.depthFormat, 1);   // RT 暂不支持 MSAA
+        recordPassFormats(hasColor, rt.colorFormat,
+                          depthView != VK_NULL_HANDLE, rt.depthFormat, 1);   // RT 暂不支持 MSAA
 
         // 与 swapchain 路径相同的负高度 viewport（B3a）+ scissor
         setViewport(0, static_cast<float>(extent.height),
@@ -260,12 +270,15 @@ void VkCommandList::bindPipeline(PipelineHandle pipeline) {
         const VkPipelineRes& pr = _device->pipelineRes(pipeline);
         const bool depthOk = !_passHasDepth || pr.depthFormat == _passDepthFormat;
         const bool samplesOk = pr.samples == _passSamples;
-        if (!_passHasColor || pr.colorFormat != _passColorFormat || !depthOk || !samplesOk) {
+        // 颜色附件数必须与 Pass 一致：纯深度 Pass 只能接纯深度管线
+        const bool colorOk = _passHasColor ? (pr.colorCount >= 1 && pr.colorFormat == _passColorFormat)
+                                           : (pr.colorCount == 0);
+        if (!colorOk || !depthOk || !samplesOk) {
             _formatMismatch = true;
-            ENGINE_LOG_ERROR("[VK] pass attachment mismatch: pipeline(color=%d depth=%d samples=%u) "
+            ENGINE_LOG_ERROR("[VK] pass attachment mismatch: pipeline(color=%u/%d depth=%d samples=%u) "
                              "vs pass(color=%d/%d depth=%d/%d samples=%u) — draws skipped",
-                             static_cast<int>(pr.colorFormat), static_cast<int>(pr.depthFormat),
-                             pr.samples,
+                             pr.colorCount, static_cast<int>(pr.colorFormat),
+                             static_cast<int>(pr.depthFormat), pr.samples,
                              _passHasColor ? 1 : 0, static_cast<int>(_passColorFormat),
                              _passHasDepth ? 1 : 0, static_cast<int>(_passDepthFormat),
                              _passSamples);

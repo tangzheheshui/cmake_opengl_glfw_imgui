@@ -145,11 +145,13 @@ void VkPipelines::saveAndDestroy() {
 
 bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkPipelineRes& res) {
     // ---- 附件格式：按管线声明烘焙（MRT / MSAA 尚未实现，显式拒绝而非静默降级）----
-    if (desc.attachment.colorCount != 1) {
+    // V3-17：0 = 纯深度管线（阴影 Pass）；1 = 普通；>1 为 MRT（未实现）
+    if (desc.attachment.colorCount > 1) {
         ENGINE_LOG_ERROR("[VK] createPipeline: MRT not implemented (colorCount=%u)",
                          desc.attachment.colorCount);
         return false;
     }
+    res.colorCount = desc.attachment.colorCount;
     // MSAA：采样数必须是 2 的幂且设备支持（framebufferColorSampleCounts）
     const uint32_t samples = desc.attachment.samples;
     if (samples != 1) {
@@ -162,11 +164,14 @@ bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkPipelineRes& res) {
         }
     }
     res.samples = samples;
+    const bool hasColor = desc.attachment.colorCount >= 1;
     const Format colorFormat = desc.attachment.colorFormats[0];
     const Format depthFormat = desc.attachment.depthFormat;
-    const VkFormat colorFmt = static_cast<VkFormat>(FormatInfo::of(colorFormat).vkFormat());
+    const VkFormat colorFmt = hasColor
+                                  ? static_cast<VkFormat>(FormatInfo::of(colorFormat).vkFormat())
+                                  : VK_FORMAT_UNDEFINED;
     const VkFormat depthFmt = static_cast<VkFormat>(FormatInfo::of(depthFormat).vkFormat());
-    if (colorFmt == VK_FORMAT_UNDEFINED || depthFmt == VK_FORMAT_UNDEFINED) {
+    if ((hasColor && colorFmt == VK_FORMAT_UNDEFINED) || depthFmt == VK_FORMAT_UNDEFINED) {
         ENGINE_LOG_ERROR("[VK] createPipeline: unusable attachment format");
         return false;
     }
@@ -329,8 +334,8 @@ bool VkPipelines::create(const GraphicsPipelineDesc& desc, VkPipelineRes& res) {
     // B1：dynamic rendering —— 管线经 PipelineRenderingCreateInfo 绑定附件格式，
     // 不再引用 VkRenderPass → swapchain 重建无需重建 PSO
     VkPipelineRenderingCreateInfo prci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    prci.colorAttachmentCount    = 1;
-    prci.pColorAttachmentFormats = &colorFmt;   // 来自 desc.attachment（V3-12）
+    prci.colorAttachmentCount    = hasColor ? 1u : 0u;
+    prci.pColorAttachmentFormats = hasColor ? &colorFmt : nullptr;   // 来自 desc.attachment（V3-12）
     prci.depthAttachmentFormat   = depthFmt;
     gpi.pNext               = &prci;
     gpi.renderPass          = VK_NULL_HANDLE;

@@ -453,36 +453,66 @@ RenderTargetHandle GLDevice::createRenderTarget(const RenderTargetDesc& desc) {
     rt.height = desc.height;
 
     // 颜色纹理：复用 createTexture（可采样、可回读；GL 下附件绑定到 FBO）
-    TextureDesc td;
-    td.width  = desc.width;
-    td.height = desc.height;
-    td.format = desc.colorFormat;
-    td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
-    td.mipLevels = desc.mipLevels;
-    td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
-    rt.colorTex = createTexture(td);
-    if (!rt.colorTex.valid()) return {};
+    if (desc.hasColor) {
+        TextureDesc td;
+        td.width  = desc.width;
+        td.height = desc.height;
+        td.format = desc.colorFormat;
+        td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
+        td.mipLevels = desc.mipLevels;
+        td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
+        rt.colorTex = createTexture(td);
+        if (!rt.colorTex.valid()) return {};
+    }
 
     glGenFramebuffers(1, &rt.fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, texture(rt.colorTex).id, 0);
+    if (rt.colorTex.valid()) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, texture(rt.colorTex).id, 0);
+    }
 
     if (desc.hasDepth) {
-        GLenum depthInternal = GL_DEPTH_COMPONENT32F;
-        if (desc.depthFormat == Format::D24S8) depthInternal = GL_DEPTH24_STENCIL8;
-        glGenRenderbuffers(1, &rt.depthRbo);
-        glBindRenderbuffer(GL_RENDERBUFFER, rt.depthRbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, depthInternal, desc.width, desc.height);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                  GL_RENDERBUFFER, rt.depthRbo);
+        if (!desc.hasColor) {
+            // V3-17：纯深度目标（阴影贴图）——深度用纹理，事后可采样
+            TextureDesc dd;
+            dd.width  = desc.width;
+            dd.height = desc.height;
+            dd.format = desc.depthFormat;
+            dd.usage  = TEX_DEPTH_ATTACHMENT | TEX_SAMPLED;
+            dd.sampler.minFilter = FilterMode::Nearest;
+            dd.sampler.magFilter = FilterMode::Nearest;
+            dd.sampler.wrapU = dd.sampler.wrapV = dd.sampler.wrapW = WrapMode::ClampToEdge;
+            rt.depthTex = createTexture(dd);
+            if (!rt.depthTex.valid()) {
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(1, &rt.fbo);
+                return {};
+            }
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                   GL_TEXTURE_2D, texture(rt.depthTex).id, 0);
+        } else {
+            GLenum depthInternal = GL_DEPTH_COMPONENT32F;
+            if (desc.depthFormat == Format::D24S8) depthInternal = GL_DEPTH24_STENCIL8;
+            glGenRenderbuffers(1, &rt.depthRbo);
+            glBindRenderbuffer(GL_RENDERBUFFER, rt.depthRbo);
+            glRenderbufferStorage(GL_RENDERBUFFER, depthInternal, desc.width, desc.height);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                      GL_RENDERBUFFER, rt.depthRbo);
+        }
+    }
+    if (!rt.colorTex.valid()) {
+        // 纯深度 FBO：不写颜色
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
     }
 
     const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         ENGINE_LOG_ERROR("[GL] createRenderTarget: incomplete FBO (0x%x)", status);
-        destroyTexture(rt.colorTex);
+        if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
+        if (rt.depthTex.valid()) destroyTexture(rt.depthTex);
         if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
         glDeleteFramebuffers(1, &rt.fbo);
         return {};
@@ -500,7 +530,8 @@ void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
     if (!_renderTargets.alive(h)) return;
     GLRenderTarget& rt = _renderTargets.get(h.id);
     if (rt.fbo) {
-        destroyTexture(rt.colorTex);
+        if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
+        if (rt.depthTex.valid()) destroyTexture(rt.depthTex);
         GLuint fbo = rt.fbo, rbo = rt.depthRbo;
         // FBO/RBO 同走延迟队列（Pass 可能仍在帧内引用）
         _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames, [fbo, rbo] {
@@ -509,6 +540,11 @@ void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
         });
     }
     _renderTargets.free(h.id);   // 标记 dead + gen++（槽位可复用）
+}
+
+TextureHandle GLDevice::renderTargetDepthTexture(RenderTargetHandle h) const {
+    if (!_renderTargets.alive(h)) return {};
+    return _renderTargets.get(h.id).depthTex;
 }
 
 TextureHandle GLDevice::renderTargetColorTexture(RenderTargetHandle h) const {

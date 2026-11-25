@@ -273,6 +273,9 @@ struct TextureDesc {
 struct RenderTargetDesc {
     uint32_t width  = 0;
     uint32_t height = 0;
+    // false = 纯深度目标（阴影贴图）：不建颜色附件，深度可采样。
+    // 这时 colorFormat 不参与创建；depthFormat 必须有。
+    bool     hasColor    = true;
     Format   colorFormat = Format::RGBA8_UNorm;
     bool     hasDepth    = true;
     Format   depthFormat = Format::Depth32F;

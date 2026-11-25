@@ -1066,24 +1066,41 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
     VkRenderTargetRes rt;
     rt.width = desc.width;
     rt.height = desc.height;
+    rt.hasColor = desc.hasColor;
     rt.colorFormat = desc.colorFormat;
     rt.depthFormat = desc.depthFormat;
 
     // 颜色附件走纹理机制：采样（bindTexture/描述符）、附件、回读（TRANSFER_SRC）一体
-    TextureDesc td;
-    td.width  = desc.width;
-    td.height = desc.height;
-    td.format = desc.colorFormat;
-    td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
-    td.mipLevels = desc.mipLevels;
-    td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
-    rt.colorTex = createTexture(td);
-    if (!rt.colorTex.valid()) {
-        return {};
+    if (desc.hasColor) {
+        TextureDesc td;
+        td.width  = desc.width;
+        td.height = desc.height;
+        td.format = desc.colorFormat;
+        td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
+        td.mipLevels = desc.mipLevels;
+        td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
+        rt.colorTex = createTexture(td);
+        if (!rt.colorTex.valid()) {
+            return {};
+        }
     }
 
-    // 深度附件：独立 image/view（storeOp=DONT_CARE，跨 Pass 不保内容）
-    if (desc.hasDepth) {
+    // 深度附件：纯深度目标（阴影贴图）走可采样纹理；普通 RT 保留独立 image
+    if (desc.hasDepth && !desc.hasColor) {
+        TextureDesc dd;
+        dd.width  = desc.width;
+        dd.height = desc.height;
+        dd.format = desc.depthFormat;
+        dd.usage  = TEX_DEPTH_ATTACHMENT | TEX_SAMPLED;
+        dd.sampler.minFilter = FilterMode::Nearest;   // 深度按最近点采样，比较逻辑在着色器
+        dd.sampler.magFilter = FilterMode::Nearest;
+        dd.sampler.wrapU = dd.sampler.wrapV = dd.sampler.wrapW = WrapMode::ClampToEdge;
+        rt.depthTex = createTexture(dd);
+        if (!rt.depthTex.valid()) {
+            ENGINE_LOG_ERROR("[VK] depth-only RT: depth texture create failed");
+            return {};
+        }
+    } else if (desc.hasDepth) {
         VkFormat depthFmt = VK_FORMAT_UNDEFINED;
         switch (desc.depthFormat) {
             case Format::Depth32F: depthFmt = VK_FORMAT_D32_SFLOAT; break;
@@ -1103,7 +1120,7 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (vkCreateImage(_device, &ici, nullptr, &rt.depthImage) != VK_SUCCESS) {
             ENGINE_LOG_ERROR("[VK] RT depth vkCreateImage failed");
-            destroyTexture(rt.colorTex);
+            if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
             return {};
         }
         VkMemoryRequirements req;
@@ -1157,7 +1174,8 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
 void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
     if (!_renderTargets.alive(h)) return;
     VkRenderTargetRes& rt = _renderTargets.get(h.id);
-    destroyTexture(rt.colorTex);   // V3-0：颜色附件走纹理延迟销毁
+    if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
+    if (rt.depthTex.valid()) destroyTexture(rt.depthTex);
     if (rt.depthView || rt.depthImage) {
         VkImageView view = rt.depthView;
         VkImage img = rt.depthImage;
@@ -1175,6 +1193,11 @@ void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
 TextureHandle VulkanDevice::renderTargetColorTexture(RenderTargetHandle h) const {
     if (!_renderTargets.alive(h)) return {};
     return _renderTargets.get(h.id).colorTex;
+}
+
+TextureHandle VulkanDevice::renderTargetDepthTexture(RenderTargetHandle h) const {
+    if (!_renderTargets.alive(h)) return {};
+    return _renderTargets.get(h.id).depthTex;
 }
 
 // ---- B4：同步回读（契约 ReadbackDesc；submitOneTime 等待完成）----
@@ -1290,6 +1313,30 @@ void VulkanDevice::recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTar
             t.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
     }
+    // V3-17：可采样深度（阴影贴图）——SHADER_READ_ONLY / UNDEFINED → 深度附件
+    if (r.depthTex.valid()) {
+        VkTextureRes& t = _textures.get(r.depthTex.id);
+        if (t.image && t.layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            bar.srcAccessMask = (t.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                    ? VK_ACCESS_SHADER_READ_BIT : 0;
+            bar.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                              | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            bar.oldLayout = t.layout;
+            bar.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.image = t.image;
+            bar.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cb,
+                                 t.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                     ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &bar);
+            t.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        }
+    }
+
     if (r.depthImage && r.depthLayout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
         // 首次使用：UNDEFINED → DEPTH_STENCIL_ATTACHMENT（loadOp 恒 CLEAR，内容本就丢弃）。
         // 注意用 1.0 时代的 DEPTH_STENCIL_ATTACHMENT_OPTIMAL：DEPTH_ATTACHMENT_OPTIMAL
@@ -1312,6 +1359,27 @@ void VulkanDevice::recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTar
 
 void VulkanDevice::recordRenderTargetEndBarriers(VkCommandBuffer cb, RenderTargetHandle rt) {
     VkRenderTargetRes& r = _renderTargets.get(rt.id);
+
+    // V3-17：可采样深度出 Pass → SHADER_READ_ONLY（阴影贴图随后被采样）
+    if (r.depthTex.valid()) {
+        VkTextureRes& dt = _textures.get(r.depthTex.id);
+        if (dt.image && dt.layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            bar.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            bar.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            bar.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            bar.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.image = dt.image;
+            bar.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &bar);
+            dt.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+    }
+
     if (!r.colorTex.valid()) return;
     VkTextureRes& t = _textures.get(r.colorTex.id);
     if (!t.image || t.layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) return;
@@ -1371,11 +1439,20 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     if (desc.cubemap) ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
     // B4：TRANSFER_SRC 恒开（readbackTexture 回读）；COLOR_ATTACHMENT 按 desc
+    const bool isDepth = fi.isDepth();
     ici.usage         = VK_IMAGE_USAGE_SAMPLED_BIT
                       | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
                       | (desc.initialData ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0)
                       | (generateMips ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0)
-                      | ((desc.usage & TEX_COLOR_ATTACHMENT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
+                      | ((desc.usage & TEX_COLOR_ATTACHMENT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0)
+                      // V3-17：深度附件（阴影贴图）。采样与附件位可以同时存在
+                      | ((desc.usage & TEX_DEPTH_ATTACHMENT) ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : 0);
+    if (isDepth) {
+        // 深度图不做颜色上传/mip 生成
+        ici.usage &= ~static_cast<VkImageUsageFlags>(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+        generateMips = false;
+        mipLevels = 1;
+    }
     ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VK_CHECK_RET(vkCreateImage(_device, &ici, nullptr, &t.image));
@@ -1561,7 +1638,10 @@ TextureHandle VulkanDevice::createTexture(const TextureDesc& desc) {
     vci.image    = t.image;
     vci.viewType = desc.cubemap ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     vci.format   = vkFmt;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, layerCount};
+    // V3-17：深度格式的视图用 DEPTH 切面
+    vci.subresourceRange = {static_cast<VkImageAspectFlags>(
+                                isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT),
+                            0, mipLevels, 0, layerCount};
     if (vkCreateImageView(_device, &vci, nullptr, &t.view) != VK_SUCCESS) {
         ENGINE_LOG_ERROR("[VK] vkCreateImageView failed at %s:%d", __FILE__, __LINE__);
         vkDestroyImage(_device, t.image, nullptr);

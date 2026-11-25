@@ -162,13 +162,24 @@ void GLCommandList::bindPipeline(PipelineHandle pipeline) {
     _formatMismatch = false;
     if (_inPass && _curRenderTarget.valid()) {
         const GLRenderTarget& rt = _device->renderTarget(_curRenderTarget);
-        const GLTexture& colorTex = _device->texture(rt.colorTex);
-        if (colorTex.format != desc.attachment.colorFormats[0]) {
+        // V3-17：纯深度 FBO 只能接纯深度管线；带颜色 FBO 要求格式一致
+        if (!rt.colorTex.valid()) {
+            if (desc.attachment.colorCount != 0) {
+                _formatMismatch = true;
+                ENGINE_LOG_ERROR("[GL] pass is depth-only but pipeline writes color — draws skipped");
+            }
+        } else if (desc.attachment.colorCount == 0) {
             _formatMismatch = true;
-            ENGINE_LOG_ERROR("[GL] pass attachment mismatch: pipeline colorFormat=%d "
-                             "vs FBO %d — draws skipped",
-                             static_cast<int>(desc.attachment.colorFormats[0]),
-                             static_cast<int>(colorTex.format));
+            ENGINE_LOG_ERROR("[GL] pass has color but pipeline is depth-only — draws skipped");
+        } else {
+            const GLTexture& colorTex = _device->texture(rt.colorTex);
+            if (colorTex.format != desc.attachment.colorFormats[0]) {
+                _formatMismatch = true;
+                ENGINE_LOG_ERROR("[GL] pass attachment mismatch: pipeline colorFormat=%d "
+                                 "vs FBO %d — draws skipped",
+                                 static_cast<int>(desc.attachment.colorFormats[0]),
+                                 static_cast<int>(colorTex.format));
+            }
         }
     }
     // MSAA：管线声明的采样数必须与 Pass 目标一致

@@ -49,6 +49,8 @@ public:
     virtual RenderTargetHandle createRenderTarget(const RenderTargetDesc&) { return {}; }
     virtual void destroyRenderTarget(RenderTargetHandle) {}
     virtual TextureHandle renderTargetColorTexture(RenderTargetHandle) const { return {}; }
+    // 离屏目标的深度纹理（纯深度目标 / 可采样深度时有效）。V3-17 阴影贴图用。
+    virtual TextureHandle renderTargetDepthTexture(RenderTargetHandle) const { return {}; }
 
     // ---- v2 同步回读（B4 实现；outSize 必须 ≥ 区域字节数）----
     virtual bool readbackTexture(TextureHandle, void* /*outData*/, size_t /*outSize*/,
