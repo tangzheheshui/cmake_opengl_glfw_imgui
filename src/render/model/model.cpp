@@ -118,14 +118,10 @@ void Model::LoadFile(const std::string &path) {
     m_clock = clock();
 }
 
-// E5：后台预解析（VK 后端专用；GL 后端同步退化——BaseDraw 构造在 GL 模式
-// 需要 GL 上下文，后台线程不允许触碰）。解析体 = 局部 Model 实例跑解析内核，
+// E5：后台预解析（两端通用——去后端化后构造/解析全程纯 CPU，GPU 资源
+// 仍在主线程绘制期经 RHI 惰性创建）。解析体 = 局部 Model 实例跑解析内核，
 // 完成后经 future 交给主线程 LoadFile 汇合。
 void Model::prefetchAsync(const std::string &path) {
-    auto* dev = RenderSystem::getInstance().rhiDevice();
-    if (!dev || dev->backend() != rhi::Backend::Vulkan) {
-        return;   // GL：保持同步加载（注释见上）
-    }
     {
         std::lock_guard<std::mutex> lk(s_parseCacheMutex);
         if (s_parseFutures.count(path)) return;   // 已在队列
@@ -489,26 +485,6 @@ void Model::genMesh() {
     
 }
 
-bool Model::drawShadow() {
-    uint32_t flags = 0;
-    flags |= DrawOption::DRAW_SHADOW;
-    Matrix mtx;
-    for (auto mesh : m_mesh) {
-        mesh->Draw(m_vec_modelMat, mtx, flags);
-    }
-    return true;
-}
-
-bool Model::drawPick() {
-    uint32_t flags = 0;
-    flags |= DrawOption::DRAW_PICK;
-    Matrix mtx;
-    for (auto mesh : m_mesh) {
-        mesh->DrawPick(m_vec_modelMat, mtx, GetID());
-    }
-    return true;
-}
-
 // D3：透明排序深度键 = 第一个实例的世界平移（Matrix 列主序，平移在 [12..14]）
 glm::vec3 Model::worldCenter() const {
     if (m_vec_modelMat.empty()) return glm::vec3(0.0f);
@@ -607,21 +583,10 @@ void Model::update() {
 }
 
 bool Model::draw(const Matrix &mtx) {
-    // Vulkan 模式：裁剪状态由管线描述符管理，跳过 GL 状态调用
-    auto* device = RenderSystem::getInstance().rhiDevice();
-    bool vkMode = device && device->backend() == rhi::Backend::Vulkan;
-    if (!vkMode) {
-        glEnable(GL_CULL_FACE);
-        glCullFace(GL_BACK);
-    }
-
+    // 去后端化：裁剪/混合状态由管线描述符管理（blend 变体），无 GL 状态调用
     uint32_t flags = 0;
     if (getLightOpen()) {
         flags |= DrawOption::LIGHT_OPEN;
-    }
-
-    if (m_nMultiViewport > 1) {
-        flags |= DrawOption::MULTI_VIEWPORT;
     }
 
     // D8：本对象被选中（拾取命中 → settings().selectedId）
@@ -635,8 +600,7 @@ bool Model::draw(const Matrix &mtx) {
         }
     }
 
-    // D3：透明对象（alpha < 1）——GL 遗留路径开 blend + 关深度写（画完恢复；
-    // RHI 路径由 blend 管线变体管理，VK 模式无 GL 状态）
+    // D3：透明对象（alpha < 1）走 blend 管线变体。
     // X-ray：全部模型按设定不透明度走透明管线（幻影透视）
     float opacity = getAlpha();
     {
@@ -645,23 +609,10 @@ bool Model::draw(const Matrix &mtx) {
             opacity = std::min(opacity, rs.settings().xrayOpacity);
         }
     }
-    const bool blend = !vkMode && opacity < 0.999f;
-    if (blend) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
-    }
 
     for (auto mesh : m_mesh) {
         mesh->setBoneMat(m_FinalBoneMatrices);
         mesh->Draw(m_vec_modelMat, mtx, flags, m_nMultiViewport, opacity);
-    }
-    if (blend) {
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
-    }
-    if (!vkMode) {
-        glDisable(GL_CULL_FACE);
     }
     return true;
 }

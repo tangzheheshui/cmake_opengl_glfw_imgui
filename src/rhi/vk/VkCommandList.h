@@ -29,8 +29,10 @@ public:
     void setDrawUniforms(UniformBlockHandle block, const void* data, uint32_t size) override;
     void bindVertexBuffer(BufferHandle buffer, uint32_t binding = 0) override;
     void bindIndexBuffer(BufferHandle buffer) override;
-    void bindTexture(TextureHandle texture, uint32_t slot = 0) override;
+    void bindTexture(TextureHandle texture, uint32_t slot = 0,
+                     const char* samplerName = nullptr) override;
     void setViewport(float x, float y, float w, float h) override;
+    void viewportSize(uint32_t& w, uint32_t& h) const override { w = _vpW; h = _vpH; }
     void setScissor(int x, int y, int w, int h) override;   // C2：VK 帧缓冲即左上原点，直接透传
 
     void draw(uint32_t vertexCount, uint32_t firstVertex = 0) override;
@@ -77,6 +79,7 @@ private:
     std::vector<VkDescriptorSet> _frameSets;
     uint32_t _slot = 0;
     bool     _used = false;
+    uint32_t _vpW = 0, _vpH = 0;   // 最近一次视口（viewportSize 查询）
 
     // 调试期线程归属检查：一条列表同时只能被一个线程录制
     std::thread::id _ownerThread;

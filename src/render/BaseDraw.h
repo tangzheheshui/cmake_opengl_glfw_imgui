@@ -8,7 +8,6 @@
 #ifndef BaseDraw_h
 #define BaseDraw_h
 
-#include <glad/glad.h>
 #include <atomic>
 #include <vector>
 #include <glm/glm.hpp>
@@ -19,35 +18,15 @@
 // E5：后台解析线程也会构造 Model（BaseDraw 子类），ID 分配需原子
 inline static std::atomic<uint16_t> _staticID{0};
 
+// 可绘制对象基类。去后端化：GPU 资源由子类经 RHI 惰性创建，
+// 构造/析构不再触碰任何图形 API（无上下文的后端模式安全）。
 class BaseDraw {
 public:
     BaseDraw() {
         _ID = _staticID.fetch_add(1, std::memory_order_relaxed);
-        // 引擎原则：构造函数禁止在非 GL 后端触碰 GL（Vulkan 模式无 GL 上下文，
-        // glad 函数指针为空，任何 gl* 调用都会跳空地址）
-        auto* device = RenderSystem::getInstance().rhiDevice();
-        if (!device || device->backend() == rhi::Backend::OpenGL) {
-            glGenVertexArrays(1, &_VAO);
-            glGenBuffers(1, &_VBO);
-            glGenBuffers(1, &_EBO);
-        }
     }
-    virtual ~BaseDraw() {
-        if (_VAO > 0) {
-            glDeleteVertexArrays(1, &_VAO);
-        }
-
-        if (_VBO > 0) {
-            glDeleteBuffers(1, &_VBO);
-        }
-
-        if (_EBO > 0) {
-            glDeleteBuffers(1, &_EBO);
-        }
-    }
+    virtual ~BaseDraw() = default;
     virtual bool draw(const Matrix &mtx) = 0;
-    virtual bool drawShadow() { return false; }
-    virtual bool drawPick() { return false; }
     virtual void update() {}
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) { return false; }
 public:
@@ -57,19 +36,14 @@ public:
     // D4：overlay 对象（文字等）在天空盒之后绘制——自身不写深度，
     // 先画会被天空的深度测试覆盖（两端绘制顺序契约的一段）
     virtual bool isOverlayDraw() const { return false; }
-    
+
     bool getLightOpen() const { return _lightOpen; }
     void setLightOpen(const bool &b) { _lightOpen = b; }
-    
+
     void setAlpha(float alpha) { _alpha = alpha; }
     float getAlpha() { return _alpha; }
-    
+
     uint16_t GetID() { return _ID; }
-protected:
-    unsigned int _VAO = 0;
-    unsigned int _VBO = 0;
-    unsigned int _EBO = 0;
-    bool _has_bind_vbo = false;
 private:
     bool _lightOpen = true;
     float _alpha = 1.0f;

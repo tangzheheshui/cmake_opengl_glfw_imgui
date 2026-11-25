@@ -6,9 +6,7 @@
 //
 
 #include "Sky.h"
-#include "render/shader.h"
 #include "render/camera/camera.h"
-#include "render/image.h"
 #include "render/RenderSystem.h"
 #include "rhi/IRHIDevice.h"
 #include "rhi/IRHICommandList.h"
@@ -37,87 +35,6 @@ static const float kSkyVertices[] = {
 
 bool Sky::draw(const Matrix &mtx) {
     return false;
-}
-
-bool Sky::draw(const Matrix &viewMat, const Matrix &projMat) {
-    float skyboxVertices[] = {
-        // positions          
-        -1.0f,  1.0f, -1.0f,
-        -1.0f, -1.0f, -1.0f,
-        1.0f, -1.0f, -1.0f,
-        1.0f, -1.0f, -1.0f,
-        1.0f,  1.0f, -1.0f,
-        -1.0f,  1.0f, -1.0f,
-        
-        -1.0f, -1.0f,  1.0f,
-        -1.0f, -1.0f, -1.0f,
-        -1.0f,  1.0f, -1.0f,
-        -1.0f,  1.0f, -1.0f,
-        -1.0f,  1.0f,  1.0f,
-        -1.0f, -1.0f,  1.0f,
-        
-        1.0f, -1.0f, -1.0f,
-        1.0f, -1.0f,  1.0f,
-        1.0f,  1.0f,  1.0f,
-        1.0f,  1.0f,  1.0f,
-        1.0f,  1.0f, -1.0f,
-        1.0f, -1.0f, -1.0f,
-        
-        -1.0f, -1.0f,  1.0f,
-        -1.0f,  1.0f,  1.0f,
-        1.0f,  1.0f,  1.0f,
-        1.0f,  1.0f,  1.0f,
-        1.0f, -1.0f,  1.0f,
-        -1.0f, -1.0f,  1.0f,
-        
-        -1.0f,  1.0f, -1.0f,
-        1.0f,  1.0f, -1.0f,
-        1.0f,  1.0f,  1.0f,
-        1.0f,  1.0f,  1.0f,
-        -1.0f,  1.0f,  1.0f,
-        -1.0f,  1.0f, -1.0f,
-        
-        -1.0f, -1.0f, -1.0f,
-        -1.0f, -1.0f,  1.0f,
-        1.0f, -1.0f, -1.0f,
-        1.0f, -1.0f, -1.0f,
-        -1.0f, -1.0f,  1.0f,
-        1.0f, -1.0f,  1.0f
-    };
-    
-    if (!_has_bind_vbo) {
-        glBindVertexArray(_VAO);
-        glBindBuffer(GL_ARRAY_BUFFER, _VBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 18 * 6, skyboxVertices, GL_STATIC_DRAW);
-        // position attribute
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        glBindVertexArray(0);
-        _has_bind_vbo = true;
-    }
-    
-    auto shader = ShaderCache::GetInstance().GetShader(ShaderType::Sky);
-    if (!shader) {
-        return false;
-    }
-    shader->use();
-    
-    if (_textureID == 0) {
-        _textureID = TextureMng::getInstance().getCubeTexture(_arrImage);
-    }
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, _textureID);
-    shader->setInt("uTexture", 0);
-    
-    // 矩阵
-    shader->setMat4("uViewMat", viewMat);
-    shader->setMat4("uProjMat", projMat);
-    
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
-    glBindVertexArray(_VAO);
-    glDrawArrays(GL_TRIANGLES, 0, 36);
-    return true;
 }
 
 void Sky::setCubeImage(const std::array<std::string, 6> &imgs) {
@@ -215,7 +132,7 @@ bool Sky::drawRHI(rhi::IRHICommandList* cmd, const Matrix &viewMat, const Matrix
     glm::mat4 p = Matrix::toMatrix(projMat);
     cmd->setUniform("uViewMat", rhi::UniformValue::fromMat4(glm::value_ptr(v)));
     cmd->setUniform("uProjMat", rhi::UniformValue::fromMat4(glm::value_ptr(p)));
-    cmd->bindTexture(m_rhiCubeTex, 3);   // 槽 3 = cubemap（VK binding4）
+    cmd->bindTexture(m_rhiCubeTex, 3, "uTexture");   // 槽 3 = cubemap（VK binding4）
     cmd->bindVertexBuffer(m_rhiVB);
     cmd->draw(36);
     return true;

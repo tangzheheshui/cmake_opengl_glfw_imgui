@@ -17,6 +17,7 @@
 #include "image.h"
 #include "Light.h"
 
+#include "camera/camera.h"
 #include "camera/CameraController.h"
 
 Scene::Scene() {

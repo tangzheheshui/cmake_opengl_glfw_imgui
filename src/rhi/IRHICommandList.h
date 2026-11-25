@@ -47,9 +47,12 @@ public:
 
     // ---- 纹理绑定 ----
     // 绑定纹理到采样槽位（描述符槽 / GL 纹理单元）。
-    // GL 后端：绑到 GL_TEXTURE0+slot；采样器 uniform 由业务侧 setInt 关联。
-    // Vulkan 后端：写入 combined image sampler 描述符集的对应 binding。
-    virtual void bindTexture(TextureHandle texture, uint32_t slot = 0) = 0;
+    // GL 后端：绑到 GL_TEXTURE0+slot；samplerName 非空时同步把该采样器 uniform
+    //          指向 slot（GL 没有"描述符集"，采样器 unit 必须由 uniform 指定）。
+    // Vulkan 后端：写入 combined image sampler 描述符集的对应 binding；
+    //          samplerName 忽略（set 索引就是槽位）。
+    virtual void bindTexture(TextureHandle texture, uint32_t slot = 0,
+                             const char* samplerName = nullptr) = 0;
 
     virtual void setViewport(float x, float y, float w, float h) = 0;
 
@@ -57,6 +60,15 @@ public:
     virtual void setScissor(int x, int y, int w, int h) {
         (void)x; (void)y; (void)w; (void)h;
     }
+
+    // 颜色空间写编码开关（GL：GL_FRAMEBUFFER_SRGB；VK 由附件格式驱动 → no-op）。
+    // render 层不直接出现 gl*：场景 pass 默认编码（beginRenderPass 打开），
+    // 宿主 UI（ImGui 保持 sRGB 字节外观）在 overlay 前关掉。
+    virtual void setSrgbWrite(bool /*enabled*/) {}
+
+    // 当前视口像素尺寸（最近一次 setViewport / beginRenderPass 的值）。
+    // 屏幕空间展开类对象（宽线）据此换算像素→NDC，render 层不直接查 GL。
+    virtual void viewportSize(uint32_t& w, uint32_t& h) const { w = 0; h = 0; }
 
     // ---- 绘制 ----
     virtual void draw(uint32_t vertexCount, uint32_t firstVertex = 0) = 0;

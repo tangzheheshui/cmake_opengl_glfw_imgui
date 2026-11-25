@@ -1,9 +1,6 @@
 
 
 #include "Text.h"
-#include "shader.h"
-#include "camera.h"
-#include "image.h"
 #include "FontManager.h"
 #include "RenderSystem.h"
 #include "rhi/IRHICommandList.h"
@@ -19,28 +16,7 @@ constexpr float    kTextScale = 0.5f;      // 与 GL 遗留路径一致的世界
 
 CText::CText(std::weak_ptr<FontManager> fontMng) {
     _fontMng = fontMng;
-
-    // 引擎原则：VK 后端无 GL 上下文（glad 函数指针为空，任何 gl* 调用跳空地址）。
-    // legacy 顶点对象只在 GL 后端设置；RHI 路径资源走 ensureRHIResources。
-    auto* device = RenderSystem::getInstance().rhiDevice();
-    if (device && device->backend() == rhi::Backend::Vulkan) {
-        return;
-    }
-
-    glBindVertexArray(_VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, _VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 30, nullptr, GL_DYNAMIC_DRAW);  // 先分配空间
-
-    // 位置属性 (vec3)
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-
-    // 纹理坐标 (vec2)
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
+    // 去后端化：几何/纹理/管线全部在 RHI 路径惰性创建（构造函数禁止 GL 调用）
 }
 
 // ---- D4: SDF 文字 RHI 路径 ----
@@ -174,7 +150,7 @@ bool CText::drawRHI(const Matrix &mtx) {
     // VK：切专属块再绑图集（同贴图四边形的隔离约定）；GL 按名直传不受影响
     static const unsigned char zeroBlock[256] = {};
     cmd->setDrawUniforms(m_rhiUB, zeroBlock, sizeof(zeroBlock));
-    cmd->bindTexture(m_rhiAtlas, 0);
+    cmd->bindTexture(m_rhiAtlas, 0, "uAtlas");
     cmd->bindVertexBuffer(m_rhiVB);
     cmd->bindIndexBuffer(m_rhiIB);
     const uint32_t chars = static_cast<uint32_t>(m_str.size());
@@ -183,78 +159,8 @@ bool CText::drawRHI(const Matrix &mtx) {
 }
 
 bool CText::draw(const Matrix &mtx) {
-    // D4：VK 后端 / GL 开关走 SDF RHI 路径（文字 RHI 迁移，双端一致）
-    {
-        auto* device = RenderSystem::getInstance().rhiDevice();
-        if (device && (device->backend() == rhi::Backend::Vulkan
-                       || RenderSystem::getInstance().settings().textUseRHI)) {
-            return drawRHI(mtx);
-        }
-    }
-
-    auto pFontMng = _fontMng.lock();
-    if (!pFontMng) {
-        return false;
-    }
-
-    auto shader = ShaderCache::GetInstance().GetShader(ShaderType::Text);
-    if (!shader) {
-        return false;
-    }
-
-    shader->use();
-
-    // 矩阵
-    shader->setMat4("uMatrixMVP", mtx);
-
-    // 颜色
-    shader->setFloat3("uColor", 1, 0, 0);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindVertexArray(_VAO);
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    float x = 0;
-    float y = 0;
-    float scale = 0.5f;
-    // 遍历字符串并绘制每个字符
-    for (char c : m_str) {
-        auto ch = pFontMng->GetCharacter(c);  // 获取字符的字形信息
-
-        float xpos = x + ch->bearingX * scale;
-        float ypos = y - (ch->height - ch->bearingY) * scale;
-
-        float w = ch->width * scale;
-        float h = ch->height * scale;
-
-        // 设置当前字符的顶点数据
-        float z = 0.5;
-        float vertices[6][5] = {
-            { xpos,     ypos + h, z, 0.0f, 0.0f },
-            { xpos + w, ypos,     z, 1.0f, 1.0f },
-            { xpos,     ypos,     z, 0.0f, 1.0f },
-
-            { xpos,     ypos + h, z, 0.0f, 0.0f },
-            { xpos + w, ypos + h, z, 1.0f, 0.0f },
-            { xpos + w, ypos,     z, 1.0f, 1.0f }
-        };
-
-        // 更新VBO数据
-        glBindBuffer(GL_ARRAY_BUFFER, _VBO);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-        // 绑定字符的纹理并绘制
-        glBindTexture(GL_TEXTURE_2D, ch->textureID);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        // 更新下一个字符的x位置
-        x += (ch->advance >> 6) * scale;  // 以像素为单位更新位置
-    }
-
-    return true;
+    // 两端同一实现：SDF 图集 RHI 路径
+    return drawRHI(mtx);
 }
 
 void CText::SetText(const std::string &str) {

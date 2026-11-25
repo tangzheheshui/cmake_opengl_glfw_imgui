@@ -6,10 +6,6 @@
 #include <glm/gtc/type_ptr.hpp>
 #include "object/Sky.h"
 #include "model/model.h"
-#include "pass/SkyPass.h"
-#include "pass/ShadowPass.h"
-#include "pass/NormalPass.h"
-#include "pass/PickPass.h"
 #include "image.h"
 #include "camera/camera.h"
 #include "camera/CameraController.h"
@@ -49,7 +45,6 @@ RenderSystem& RenderSystem::getInstance() {
 
 RenderSystem::RenderSystem() {
     mCurScene = std::make_shared<Scene>();
-    mRenderContent = std::make_shared<RenderContext>();
     m_fontMng = std::make_shared<FontManager>();
 }
 
@@ -72,11 +67,9 @@ void RenderSystem::shutdown() {
             m_rtTestTarget = {};
         }
     }
-    // 依赖 GL 上下文的对象（Pass 的 FBO、字体纹理等）在此释放
-    m_vec_renderpass.clear();
+    // 依赖 GL 上下文的对象（字体纹理等）在此释放
     m_fontMng.reset();
     mCurScene.reset();
-    mRenderContent.reset();
     // 模式 2：设备由引擎创建 → 在这里销毁（调用方保证仍在窗口/上下文存活期内）
     m_ownedDevice.reset();
     m_rhiDevice = nullptr;
@@ -112,24 +105,8 @@ bool RenderSystem::init(const InitDesc& desc, std::string* outError) {
     // ������ɫ��
     // A4: rootPath 约定为 UTF-8；Windows 上 path(std::string) 按 ACP 解释会错，
     // 统一走 pathFromUtf8（引擎内路径字符串 = UTF-8）
-    auto shaderPath = engine::fs::pathFromUtf8(desc.assetRoot) / "res" / "shaders";
-    // 注意：GL 着色器缓存仅在 OpenGL 后端初始化（Vulkan 模式无 GL 上下文，
-    // glad 函数指针为空，任何 glCreate* 调用都会跳空地址）
-    if (_backend == rhi::Backend::OpenGL) {
-        ShaderCache::GetInstance().init(engine::fs::utf8FromPath(shaderPath) + std::string(1, std::filesystem::path::preferred_separator));
-    }
-
 	// ��ʼ������
     mCurScene->init();
-    
-    // 创建帧级 Pass（GL 专属实现：构造函数里就有 GL 调用如 FBO 创建，
-    // 因此 Vulkan 模式下不创建——M4 中 Pass 逐步迁移到 RHI 后解除此限制）
-    if (_backend == rhi::Backend::OpenGL) {
-        // V3-21：阴影改由 RHI 阴影 Pass 承担（recordShadowPass），不再建遗留 CShadowPass
-        m_vec_renderpass.push_back(std::make_shared<CNormalPass>(mRenderContent));
-        m_vec_renderpass.push_back(std::make_shared<CSkyPass>(mRenderContent));
-        m_vec_renderpass.push_back(std::make_shared<CPickPass>(mRenderContent));
-    }
 
     // C1b：设备由宿主创建并传入（DeviceDesc 契约，见 app/main.cpp）；
     // 引擎不读 RHI_BACKEND、不持有窗口
@@ -229,42 +206,21 @@ void RenderSystem::BeginDraw() {
 }
 
 // ---- C1b：统一帧流程。宿主每帧调用一次 renderFrame() ----
-//   beginFrame → (GL: 遗留 Pass + RHI 叠加 / VK: RHI 场景) → overlayFn → endFrame → present
-// GL/VK 主循环零后端分支（ImGui backend 初始化除外）；UI 合成点见 setOverlayRenderer。
+//   beginFrame → RHI 场景（含阴影/拾取/叠加/UI）→ endFrame → present
+// 零后端分支：GL 的 sRGB 等状态由 GLCommandList 在 Pass 边界处理。
 void RenderSystem::renderFrame() {
     if (!m_rhiDevice) {
-        // 设备创建失败的退化路径：遗留 GL Pass 照跑，宿主 UI 自行绘制
-        renderScenePasses();
+        // 设备创建失败的退化路径：宿主 UI 自行绘制
         if (m_overlayFn) m_overlayFn(nullptr);
         return;
     }
     // V3-0：beginFrame 失败（swapchain 过期/重建中）= 本帧跳过全部录制
     if (!m_rhiDevice->beginFrame()) return;
 
-    if (_backend == rhi::Backend::Vulkan) {
-        // B4/D2 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交）
-        runRenderTargetReadbackTest();
-        runPickPass();
-        drawRhiSceneContents();
-    } else {
-        // GL：线性工作流。默认帧缓冲以 GLFW_SRGB_CAPABLE 创建，写回时由硬件编码
-        glEnable(GL_FRAMEBUFFER_SRGB);
-        // V3-21：GL 端阴影——先录 RHI 阴影 Pass（GL 立即执行），再跑遗留 Pass
-        recordShadowPass(m_rhiDevice->commandList());
-        renderScenePasses();
-        // V3-21：RHI 地面（阴影接收面）画在遗留场景之后，深度测试正确遮挡
-        if (mCurScene && mCurScene->GetActiveCamera()) {
-            glDisable(GL_CULL_FACE);
-            recordGroundRHI(m_rhiDevice->commandList(), mCurScene->GetActiveCamera()->GetVPMatrix());
-        }
-        drawSceneOverlays();            // RHI 叠加内容（并入主帧，不再自建 frame）
-        selfTestAB();                   // M4.2 验证设施（GL 即时语义）
-        runRenderTargetReadbackTest();
-        runPickPass();
-        // UI 合成点：ImGui 等 UI 保持既有 gamma 空间外观（SRGB 编码关闭）
-        glDisable(GL_FRAMEBUFFER_SRGB);
-        if (m_overlayFn) m_overlayFn(m_rhiDevice->commandList());
-    }
+    // B4/D2 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交）
+    runRenderTargetReadbackTest();
+    runPickPass();
+    drawRhiSceneContents();
 
     m_rhiDevice->endFrame();
     m_rhiDevice->present();   // GL: 宿主 swapBuffers 回调 / VK: vkQueuePresentKHR
@@ -404,102 +360,13 @@ void RenderSystem::drawRhiSceneContents() {
     // 在同一个 render pass 内录制，不再自建 frame/pass
     if (m_settings.rhiSmokeTriangle) recordSmokeTriangle(cmd);
     if (m_settings.rhiTexQuad)       recordTexturedQuad(cmd);
-    // UI 层叠加（ImGui Vulkan 等）在 render pass 内渲染
+    // UI 层叠加（ImGui Vulkan 等）在 render pass 内渲染。
+    // GL：关 sRGB 写编码，保持 ImGui 既有字节外观（VK 由附件格式驱动，no-op）
     if (m_overlayFn) {
+        cmd->setSrgbWrite(false);
         m_overlayFn(cmd);
     }
     cmd->endRenderPass();
-}
-
-// M4.2 验证设施：同帧 A/B 对比（调试用）
-void RenderSystem::selfTestAB() {
-    static int frame = 0;
-    if (++frame != 120) return;
-    if (!m_rhiDevice) return;
-    const auto fb = m_rhiDevice->framebufferSize();   // C1b：设备尺寸，不查窗口
-    const int w = static_cast<int>(fb.width);
-    const int h = static_cast<int>(fb.height);
-    if (w <= 0 || h <= 0) return;
-
-    static std::vector<unsigned char> fbA, fbB;
-    auto grabFB = [&]() {
-        fbA.swap(fbB);
-        fbB.resize(static_cast<size_t>(w) * h * 4);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, fbB.data());
-    };
-
-    const bool original = m_settings.modelUseRHI;
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    m_settings.modelUseRHI = true;
-    renderScenePasses();
-    grabFB();
-    const std::vector<unsigned char> frameRHI = fbB;
-    m_settings.modelUseRHI = false;
-    renderScenePasses();
-    grabFB();
-    const std::vector<unsigned char> frameGL = fbB;
-
-    // 差异统计
-    int diffCount = 0;
-    int minX = w, minY = h, maxX = -1, maxY = -1;
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const size_t i = (static_cast<size_t>(y) * w + x) * 4;
-            if (memcmp(&frameRHI[i], &frameGL[i], 4) != 0) {
-                ++diffCount;
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-            }
-        }
-    }
-    printf("[SELFTEST] model A/B diff pixels=%d bbox=(%d,%d)-(%d,%d) frame=%dx%d\n",
-           diffCount, minX, minY, maxX, maxY, w, h);
-    // 调试设施：导出 RHI 分支帧供目视检查（A2：跨平台临时目录，不写死 /tmp）
-    {
-        std::error_code ec;
-        auto tmpDir = std::filesystem::temp_directory_path(ec);
-        if (ec) tmpDir = ".";
-        // A4: 保持 path 对象直接打开（临时目录可能含中文用户名，Windows ACP fopen 会失败）
-        FILE* fp = engine::fs::openWrite(tmpDir / "frame_rhi.ppm");
-        if (fp) {
-            fprintf(fp, "P6\n%d %d\n255\n", w, h);
-            for (int y = h - 1; y >= 0; --y) {
-                for (int x = 0; x < w; ++x) {
-                    const size_t i = (static_cast<size_t>(y) * w + x) * 4;
-                    fwrite(&frameRHI[i], 1, 3, fp);
-                }
-            }
-            fclose(fp);
-        }
-        fp = engine::fs::openWrite(tmpDir / "frame_gl.ppm");
-        if (fp) {
-            fprintf(fp, "P6\n%d %d\n255\n", w, h);
-            for (int y = h - 1; y >= 0; --y) {
-                for (int x = 0; x < w; ++x) {
-                    const size_t i = (static_cast<size_t>(y) * w + x) * 4;
-                    fwrite(&frameGL[i], 1, 3, fp);
-                }
-            }
-            fclose(fp);
-        }
-    }
-    int printed = 0;
-    for (int y = 0; y < h && printed < 6; ++y) {
-        for (int x = 0; x < w && printed < 6; ++x) {
-            const size_t i = (static_cast<size_t>(y) * w + x) * 4;
-            if (memcmp(&frameRHI[i], &frameGL[i], 4) != 0) {
-                printf("[SELFTEST]   sample (%d,%d) RHI=%d,%d,%d,%d GL=%d,%d,%d,%d\n",
-                       x, y,
-                       frameRHI[i], frameRHI[i+1], frameRHI[i+2], frameRHI[i+3],
-                       frameGL[i], frameGL[i+1], frameGL[i+2], frameGL[i+3]);
-                ++printed;
-            }
-        }
-    }
-    m_settings.modelUseRHI = original;
-    std::fflush(stdout);
 }
 
 // ---- B4 验证设施（RHI_RT_TEST=1）：离屏 RT 渲染 → 同步回读 ----
@@ -518,13 +385,7 @@ void RenderSystem::runRenderTargetReadbackTest() {
     if (!cmd) return;
 
     if (stage == 0) {
-        // GL：sRGB RT 写入需 GL_FRAMEBUFFER_SRGB 开启才编码（VK 由格式驱动，无此状态）。
-        // 保存/恢复开关，保证 Pass 对周边状态中性。
-        GLboolean srgbWasOn = GL_FALSE;
-        if (_backend == rhi::Backend::OpenGL) {
-            srgbWasOn = glIsEnabled(GL_FRAMEBUFFER_SRGB);
-            if (!srgbWasOn) glEnable(GL_FRAMEBUFFER_SRGB);
-        }
+        // sRGB 写编码由 GLCommandList 在 Pass 边界处理（VK 由附件格式驱动）
         rhi::RenderTargetDesc rtd;
         rtd.width  = 128;
         rtd.height = 128;
@@ -555,9 +416,6 @@ void RenderSystem::runRenderTargetReadbackTest() {
         recordSmokeTriangleWith(cmd, m_rtMsaaSamples > 1 && m_smokePipelineMsaa.valid()
                                          ? m_smokePipelineMsaa : m_smokePipeline);
         cmd->endRenderPass();
-        if (_backend == rhi::Backend::OpenGL && !srgbWasOn) {
-            glDisable(GL_FRAMEBUFFER_SRGB);
-        }
         stage = 1;
         return;
     }
@@ -756,11 +614,7 @@ void RenderSystem::recordGroundRHI(rhi::IRHICommandList* cmd, const Matrix& view
     cmd->setUniform("uViewProj", rhi::UniformValue::fromMat4(glm::value_ptr(vp)));
     glm::mat4 lm = Matrix::toMatrix(correctedLightVP());
     cmd->setUniform("uLightMat", rhi::UniformValue::fromMat4(glm::value_ptr(lm)));
-    cmd->bindTexture(m_shadowTex, 4);
-    // GL 后端采样器按名字绑定到纹理单元 4；VK 后端 set 索引固定，不需要
-    if (_backend == rhi::Backend::OpenGL) {
-        cmd->setUniform("uShadowMap", rhi::UniformValue::fromInt(4));
-    }
+    cmd->bindTexture(m_shadowTex, 4, "uShadowMap");
     cmd->bindVertexBuffer(m_groundVB);
     cmd->draw(6);
     cmd->popDebugLabel();
@@ -857,12 +711,6 @@ void RenderSystem::runPickPass() {
             m_pickReq.pending = false;
             return;
         }
-        // GL：sRGB RT 写入需 GL_FRAMEBUFFER_SRGB（同 B4 harness，保存/恢复）
-        GLboolean srgbWasOn = GL_FALSE;
-        if (_backend == rhi::Backend::OpenGL) {
-            srgbWasOn = glIsEnabled(GL_FRAMEBUFFER_SRGB);
-            if (!srgbWasOn) glEnable(GL_FRAMEBUFFER_SRGB);
-        }
         rhi::RenderPassDesc rp;
         rp.renderTarget = m_pickRT;
         rp.clearColor   = true;
@@ -879,9 +727,6 @@ void RenderSystem::runPickPass() {
             }
         }
         cmd->endRenderPass();
-        if (_backend == rhi::Backend::OpenGL && !srgbWasOn) {
-            glDisable(GL_FRAMEBUFFER_SRGB);
-        }
         m_pickReq.pending  = false;
         m_pickReq.rendered = true;   // VK：下一帧（本帧命令已提交）再回读
         return;
@@ -984,17 +829,6 @@ void RenderSystem::runPickPass() {
     ENGINE_LOG_INFO("[PICK] HIT id=%u (unknown object)", hitId);
 }
 
-void RenderSystem::drawSceneOverlays() {
-    // RHI 冒烟测试三角形（开关在调试面板）
-    if (m_settings.rhiSmokeTriangle && m_rhiDevice) {
-        drawSmokeTriangle();
-    }
-    // RHI 贴图四边形（M4：纹理采样链路验证）
-    if (m_settings.rhiTexQuad && m_rhiDevice) {
-        drawTexturedQuad();
-    }
-}
-
 void RenderSystem::createTexturedQuad() {
     if (!m_rhiDevice) return;
 
@@ -1051,20 +885,6 @@ void RenderSystem::createTexturedQuad() {
     m_quadUB = m_rhiDevice->createUniformBlock(256);
 }
 
-// C1b：叠加内容并入主帧（renderFrame 已 beginFrame；GL 路径直接在默认帧缓冲
-// 录制 pass，beginRenderPass 的状态快照保证对遗留 GL 代码状态中性）
-void RenderSystem::drawTexturedQuad() {
-    auto* cmd = m_rhiDevice->commandList();
-    if (!cmd || !m_quadPipeline.valid() || !m_quadVB.valid() || !m_quadTex.valid()) return;
-
-    rhi::RenderPassDesc rp;
-    rp.clearColor = false;
-    rp.clearDepth = false;
-    cmd->beginRenderPass(rp);
-    recordTexturedQuad(cmd);
-    cmd->endRenderPass();
-}
-
 void RenderSystem::recordTexturedQuad(rhi::IRHICommandList* cmd) {
     if (!cmd || !m_quadPipeline.valid() || !m_quadVB.valid() || !m_quadIB.valid() || !m_quadTex.valid()) return;
 
@@ -1072,58 +892,19 @@ void RenderSystem::recordTexturedQuad(rhi::IRHICommandList* cmd) {
     cmd->bindPipeline(m_quadPipeline);
     cmd->setUniform("uMatrixMVP", rhi::UniformValue::fromMat4(kIdentityMat4));
     cmd->setUniform("uTex", rhi::UniformValue::fromInt(0));
-    // VK：切到四边形专属 uniform 块后再绑纹理。
-    // bindTexture 写入“当前块”的描述符集，沿用模型块会污染模型纹理槽。
-    // GL 后端按名直传，不需要此步骤。
-    auto* device = RenderSystem::getInstance().rhiDevice();
-    if (device && device->backend() == rhi::Backend::Vulkan) {
-        if (!m_quadUB.valid()) return;   // 无专属块时宁可不画，避免污染模型描述符集
-        static const unsigned char zeroBlock[256] = {};
-        cmd->setDrawUniforms(m_quadUB, zeroBlock, sizeof(zeroBlock));
-    }
-    cmd->bindTexture(m_quadTex, 0);
+    // 切到四边形专属 uniform 块后再绑纹理：bindTexture 写入"当前块"的
+    // 描述符集（VK），沿用模型块会污染模型纹理槽。GL 按名直传，
+    // 不存在的 uniform 被驱动忽略，两端同一调用。
+    if (!m_quadUB.valid()) return;
+    static const unsigned char zeroBlock[256] = {};
+    cmd->setDrawUniforms(m_quadUB, zeroBlock, sizeof(zeroBlock));
+    cmd->bindTexture(m_quadTex, 0, "uTex");
     cmd->bindVertexBuffer(m_quadVB);
     cmd->bindIndexBuffer(m_quadIB);
     cmd->drawIndexed(6);
     cmd->popDebugLabel();
 }
 
-void RenderSystem::renderScenePasses() {
-    // Vulkan 模式：旧 GL Pass 整体跳过（无 GL 上下文，任何 glad 调用都会跳空地址）。
-    // RHI 绘制的内容（冒烟三角形/已迁移对象）正常渲染；Pass 迁移在 M4 逐个进行。
-    if (_backend == rhi::Backend::Vulkan) {
-        return;
-    }
-    for (auto pass : m_vec_renderpass)
-    {
-        if (auto shadow = std::dynamic_pointer_cast<CShadowPass>(pass)) {
-            (void)shadow;
-            if (!m_settings.drawShadowPass) continue;
-        }
-        else if (auto sky = std::dynamic_pointer_cast<CSkyPass>(pass)) {
-            (void)sky;
-            if (!m_settings.drawSkyPass) continue;
-        }
-        else if (auto pick = std::dynamic_pointer_cast<CPickPass>(pass)) {
-            (void)pick;
-            if (!m_settings.drawPickPass) continue;
-        }
-        pass->draw(mCurScene.get());
-    }
-}
-
-
-void RenderSystem::drawSmokeTriangle() {
-    auto* cmd = m_rhiDevice->commandList();
-    if (!cmd || !m_smokePipeline.valid() || !m_smokeVB.valid()) return;
-
-    rhi::RenderPassDesc rp;
-    rp.clearColor = false;      // 叠加在主场景上，不清屏
-    rp.clearDepth = false;
-    cmd->beginRenderPass(rp);
-    recordSmokeTriangle(cmd);
-    cmd->endRenderPass();
-}
 
 void RenderSystem::recordSmokeTriangle(rhi::IRHICommandList* cmd) {
     recordSmokeTriangleWith(cmd, m_smokePipeline);
@@ -1192,10 +973,7 @@ void RenderSystem::onMouseLeftUp(double x, double y) {
     // 判断是否为 Click（时间短 & 移动距离小）
     if (duration < 200 && distance < 5) {  // 200ms内 & 移动距离 < 5 像素
         ENGINE_LOG_INFO("Click detected at (%.1f, %.1f)", x, y);
-        // D2: RHI 拾取（有 RHI 设备时走 ID 图回读；GL 遗留拾取并行保留）
-        if (_backend == rhi::Backend::Vulkan || m_settings.modelUseRHI) {
-            requestPick(x, y);
-        }
+        requestPick(x, y);   // D2: RHI 拾取（两端同一 ID 图路径）
     }
 }
 
@@ -1229,8 +1007,6 @@ void RenderSystem::onMouseMove(double x, double y) {
 }
 
 void RenderSystem::onWindowSizeChanged(int x, int y) {
-    mRenderContent->screenWidth = x;
-    mRenderContent->screenHeight = y;
     if (m_rhiDevice) {
         m_rhiDevice->onResize(x, y);   // Vulkan: swapchain 重建
     }

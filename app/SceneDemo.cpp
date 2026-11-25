@@ -147,11 +147,8 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         pScene->AddObj(objAlpha);
     }
 
-    // 文字（D4：两端走 SDF RHI 图集路径；GL 可经 textUseRHI 切回 legacy 逐字形）
+    // 文字（D4：两端同一 SDF RHI 图集路径）
     {
-        if (std::getenv("RHI_TEXT_RHI")) {   // GL 调试开关：强制文字走 RHI 路径
-            RenderSystem::getInstance().settings().textUseRHI = true;
-        }
         if (const char* m = std::getenv("RHI_DISPLAY_MODE")) {   // D5 验证开关：0/1/2
             RenderSystem::getInstance().settings().displayMode = std::atoi(m);
         }

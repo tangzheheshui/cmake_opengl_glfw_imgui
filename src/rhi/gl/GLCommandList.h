@@ -34,9 +34,12 @@ public:
     void setDrawUniforms(UniformBlockHandle block, const void* data, uint32_t size) override;
     void bindVertexBuffer(BufferHandle buffer, uint32_t binding = 0) override;
     void bindIndexBuffer(BufferHandle buffer) override;
-    void bindTexture(TextureHandle texture, uint32_t slot = 0) override;
+    void bindTexture(TextureHandle texture, uint32_t slot = 0,
+                     const char* samplerName = nullptr) override;
     void setViewport(float x, float y, float w, float h) override;
     void setScissor(int x, int y, int w, int h) override;   // C2：坐标 = 目标左上原点
+    void setSrgbWrite(bool enabled) override;               // 场景编码开 / UI 关
+    void viewportSize(uint32_t& w, uint32_t& h) const override;   // 宽线展开换算用
 
     void draw(uint32_t vertexCount, uint32_t firstVertex = 0) override;
     void drawIndexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0) override;
@@ -74,6 +77,9 @@ private:
         // D5：多边形模式 + 线偏移纳入 Pass 边界（线框模式不泄漏给遗留 GL 代码）
         GLint     polygonMode[2] = {GL_FILL, GL_FILL};
         GLboolean polyOffsetLine = GL_FALSE;
+        // Z（去后端化）：sRGB 写编码纳入 Pass 边界——场景 Pass 默认开、
+        // 宿主 UI 通过 setSrgbWrite(false) 关闭
+        GLboolean srgbWrite = GL_FALSE;
     };
     void saveState(GLStateSnapshot& s);
     void restoreState(const GLStateSnapshot& s);
@@ -103,6 +109,10 @@ private:
     bool               _inPass         = false;
     bool               _formatMismatch = false;
     uint32_t           _passSamples    = 1;
+    // 纯深度 Pass（阴影）：GL 后端内部改用 Reversed-Z（清 0 + GREATER），
+    // 与 VK 的深度语义一致——否则"无遮挡"区域清成 1 会被当成全遮挡
+    bool               _depthOnlyPass  = false;
+    uint32_t           _vpW = 0, _vpH = 0;   // 最近一次视口（viewportSize 查询）
 };
 
 } // namespace rhi

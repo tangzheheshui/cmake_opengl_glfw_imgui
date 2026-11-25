@@ -42,6 +42,7 @@ void GLCommandList::saveState(GLStateSnapshot& s) {
     glGetIntegerv(GL_SCISSOR_BOX, s.scissorBox);
     glGetIntegerv(GL_POLYGON_MODE, s.polygonMode);           // D5: 多边形模式纳入 Pass 边界
     s.polyOffsetLine = glIsEnabled(GL_POLYGON_OFFSET_LINE);  // D5: 线偏移纳入 Pass 边界
+    s.srgbWrite     = glIsEnabled(GL_FRAMEBUFFER_SRGB);      // Z: sRGB 编码纳入 Pass 边界
 }
 
 void GLCommandList::restoreState(const GLStateSnapshot& s) {
@@ -65,6 +66,7 @@ void GLCommandList::restoreState(const GLStateSnapshot& s) {
     glPolygonMode(GL_FRONT_AND_BACK, static_cast<GLenum>(s.polygonMode[0]));
     if (s.polyOffsetLine) glEnable(GL_POLYGON_OFFSET_LINE); else glDisable(GL_POLYGON_OFFSET_LINE);
     glPolygonOffset(0.0f, 0.0f);
+    if (s.srgbWrite) glEnable(GL_FRAMEBUFFER_SRGB); else glDisable(GL_FRAMEBUFFER_SRGB);
 }
 
 void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
@@ -74,6 +76,11 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
 
     // B2：采样器槽位跟踪表清零（只记录本 Pass 内的绑定，见 endRenderPass）
     for (uint32_t i = 0; i < 32; ++i) _samplerSlotsTouched[i] = false;
+
+    // Z（去后端化）：sRGB 颜色编码是 GL 的全局状态，VK 由附件格式驱动。
+    // Pass 期间默认打开（场景颜色写回按 sRGB 编码，与 VK 交换链一致）；
+    // 宿主 UI 在 Pass 内通过 setSrgbWrite(false) 关掉，保持既有字节外观。
+    glEnable(GL_FRAMEBUFFER_SRGB);
 
     // V3-12：记录本 Pass 目标（bindPipeline 用来比对附件格式）
     _curRenderTarget = desc.renderTarget;
@@ -85,6 +92,8 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
                            : _device->msaaSamples();
 
     // B4：离屏 RenderTarget（RHI 资源 FBO）优先于 v1 遗留 FBO 直通
+    _depthOnlyPass = desc.renderTarget.valid()
+                         && !_device->renderTarget(desc.renderTarget).colorTex.valid();
     if (desc.renderTarget.valid()) {
         const GLRenderTarget& rt = _device->renderTarget(desc.renderTarget);
         glBindFramebuffer(GL_FRAMEBUFFER, rt.alive ? rt.fbo : 0);
@@ -100,7 +109,9 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
         glClear(GL_COLOR_BUFFER_BIT);
     }
     if (desc.clearDepth) {
-        glClearDepth(desc.depthClearValue);
+        // 纯深度 Pass 走 Reversed-Z（清 0 = 最远，与 VK 一致）；普通 Pass 仍用
+        // GL 标准约定（desc.depthClearValue 默认 1 = 最远）。
+        glClearDepth(_depthOnlyPass ? 0.0f : desc.depthClearValue);
         glClear(GL_DEPTH_BUFFER_BIT);
     }
 
@@ -121,6 +132,8 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
     }
     glViewport(0, 0, w, h);
     _curTargetHeight = h;   // C2: scissor 坐标换算基准
+    _vpW = static_cast<uint32_t>(w);
+    _vpH = static_cast<uint32_t>(h);
 }
 
 // C2：裁剪矩形。契约坐标 = 当前 pass 目标的左上原点（与窗口/鼠标一致），
@@ -206,7 +219,12 @@ void GLCommandList::bindPipeline(PipelineHandle pipeline) {
     // 深度状态
     if (desc.depth.depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     glDepthMask(desc.depth.depthWrite ? GL_TRUE : GL_FALSE);
-    glDepthFunc(desc.depth.depthLessEqual ? GL_LEQUAL : GL_LESS);
+    if (_depthOnlyPass) {
+        // 纯深度 Pass：Reversed-Z（1=近/0=远），清 0 后 GREATER 保留最近表面
+        glDepthFunc(desc.depth.depthLessEqual ? GL_GEQUAL : GL_GREATER);
+    } else {
+        glDepthFunc(desc.depth.depthLessEqual ? GL_LEQUAL : GL_LESS);
+    }
 
     // 裁剪
     if (desc.cull == CullMode::Back) {
@@ -252,7 +270,7 @@ void GLCommandList::bindIndexBuffer(BufferHandle buffer) {
     _curIndexBuffer = buffer;
 }
 
-void GLCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
+void GLCommandList::bindTexture(TextureHandle texture, uint32_t slot, const char* samplerName) {
     if (!texture.valid() || slot >= 32) return;
     // 注意：不能用 nativeHandle（buffer/texture 的 GL id 空间独立，
     // 旧实现会把纹理句柄误判成缓冲句柄，绑定失败导致采样全黑）
@@ -272,11 +290,41 @@ void GLCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
         glBindSampler(slot, sid);
         if (sid) _samplerSlotsTouched[slot] = true;
     }
+
+    // GL 没有描述符集：采样器 uniform 必须显式指向纹理单元。
+    // 业务侧只需绑定一次（VK 忽略名字，set 索引就是槽位）。
+    if (samplerName && _curPipeline.valid()) {
+        const GLPipeline& pipe = _device->pipeline(_curPipeline);
+        if (pipe.program) {
+            pipe.program->use();
+            pipe.program->setInt(samplerName, static_cast<int>(slot));
+        }
+    }
 }
 
 void GLCommandList::setViewport(float x, float y, float w, float h) {
-    glViewport(static_cast<GLint>(x), static_cast<GLint>(y),
-               static_cast<GLsizei>(w), static_cast<GLsizei>(h));
+    // 契约坐标 = 目标左上原点。VK 侧负高度 viewport（y = tile 底 + 负高）
+    // 在 GL（原点左下）换算：glViewport y = 目标高 - y，高度取绝对值。
+    if (h < 0.0f) {
+        const int targetH = _curTargetHeight > 0 ? _curTargetHeight : 0;
+        glViewport(static_cast<GLint>(x), targetH - static_cast<GLint>(y),
+                   static_cast<GLsizei>(w), static_cast<GLsizei>(-h));
+    } else {
+        glViewport(static_cast<GLint>(x), static_cast<GLint>(y),
+                   static_cast<GLsizei>(w), static_cast<GLsizei>(h));
+    }
+    _vpW = static_cast<uint32_t>(w < 0 ? -w : w);
+    _vpH = static_cast<uint32_t>(h < 0 ? -h : h);
+}
+
+void GLCommandList::viewportSize(uint32_t& w, uint32_t& h) const {
+    w = _vpW;
+    h = _vpH;
+}
+
+void GLCommandList::setSrgbWrite(bool enabled) {
+    if (enabled) glEnable(GL_FRAMEBUFFER_SRGB);
+    else         glDisable(GL_FRAMEBUFFER_SRGB);
 }
 
 // V3-0：销毁后清理 VAO 缓存。VAO 固化的是 GL 对象名——源资源删除后驱动
@@ -413,6 +461,9 @@ void GLCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, 
     pipe.program->setBool("uMaterail.has_normal_tex", u->materialParams.z > 0.5f);
     pipe.program->setBool("uMaterail.has_specular_tex", u->materialParams.w > 0.5f);
     pipe.program->setFloat("uOpacity", u->misc.x);   // D3：不透明度
+    // V3-19：阴影——光空间矩阵 + 采样开关（VK 从 UBO 同布局字段读取，GL 按名拆解）
+    pipe.program->setMat4("uLightSpaceMatrix", &u->lightVP[0][0]);
+    pipe.program->setInt("uShadowEnabled", u->misc.y > 0.5f ? 1 : 0);
 }
 
 void GLCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {

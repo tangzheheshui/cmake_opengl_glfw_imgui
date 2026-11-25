@@ -5,7 +5,6 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
-#include <glad/glad.h>
 
 FontManager::FontManager() {
     if (FT_Init_FreeType(&ft)) {
@@ -14,17 +13,13 @@ FontManager::FontManager() {
 }
 
 FontManager::~FontManager() {
-    if (!m_textures.empty()) {
-        glDeleteTextures((GLsizei)m_textures.size(), m_textures.data());
-        m_textures.clear();
-    }
     if (face) {   // 未加载字体时（如 VK 模式）face 为空，不能调 FT_Done_Face
         FT_Done_Face(face);
     }
     FT_Done_FreeType(ft);
 }
 
-bool FontManager::LoadFont(const std::string& fontPath, unsigned int fontSize, bool legacyGlGlyphs) {
+bool FontManager::LoadFont(const std::string& fontPath, unsigned int fontSize) {
     // 加载字体。A4: UTF-8 路径读入内存后 FT_New_Memory_Face
     //（Windows 上 FT_New_Face 的 char 路径按 ACP 解释，中文路径失败；
     //  缓冲与 face 同生命周期，见 FontManager.h 说明）
@@ -44,37 +39,7 @@ bool FontManager::LoadFont(const std::string& fontPath, unsigned int fontSize, b
         ENGINE_LOG_ERROR("FREETYPE: Failed to set pixel size");
         return false;
     }
-    _legacyFontPx = fontSize;   // D4：legacy 惰性字形按此尺寸恢复
-
-    // D4：VK 模式（无 GL 上下文）只加载 face 供 SDF 图集用，跳过 legacy GL 字形纹理
-    if (!legacyGlGlyphs) {
-        return true;
-    }
-
-    // 加载常用字符（包括英文和部分符号）
-    for (uint32_t c = 32; c < 128; ++c) {
-        if (!LoadCharacter(c)) {
-            ENGINE_LOG_ERROR("FREETYPE: Failed to load character: %c", c);
-            return false;
-        }
-    }
-
     return true;
-}
-
-const Character* FontManager::GetCharacter(uint32_t unicode) {
-    auto it = characters.find(unicode);
-    if (it != characters.end()) {
-        return &it->second;
-    }
-
-    // 如果未找到该字符，尝试加载它
-    if (!LoadCharacter(unicode)) {
-        ENGINE_LOG_ERROR("FREETYPE: Failed to load character: %u", unicode);
-        return nullptr;
-    }
-
-    return &characters[unicode]; // 返回加载后的字符
 }
 
 // ==================== D4: SDF 图集 ====================
@@ -232,50 +197,4 @@ const SdfGlyph* FontManager::getSdfGlyph(uint32_t unicode) {
     if (!_sdfBuilt) buildSdfAtlas();
     auto it = _sdfGlyphs.find(unicode);
     return it != _sdfGlyphs.end() ? &it->second : nullptr;
-}
-
-bool FontManager::LoadCharacter(uint32_t unicode) {
-    // 如果该字符已加载，则直接返回
-    if (characters.find(unicode) != characters.end()) {
-        return true;
-    }
-
-    // D4：SDF 图集构建会改 face 的当前像素尺寸，legacy 字形恢复自己的尺寸
-    if (_legacyFontPx > 0) {
-        FT_Set_Pixel_Sizes(face, 0, _legacyFontPx);
-    }
-
-    // 加载字符的位图
-    if (FT_Load_Char(face, unicode, FT_LOAD_RENDER)) {
-        ENGINE_LOG_ERROR("FREETYPE: Failed to load Glyph for Unicode: %u", unicode);
-        return false;
-    }
-
-    FT_Bitmap& bitmap = face->glyph->bitmap;
-
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); //禁用字节对齐限制
-
-    // 创建纹理
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, bitmap.width, bitmap.rows, 0, GL_RED, GL_UNSIGNED_BYTE, bitmap.buffer);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // 存储字符数据
-    Character character = {
-        texture,
-        bitmap.width,
-        bitmap.rows,
-        face->glyph->bitmap_left,
-        face->glyph->bitmap_top,
-        face->glyph->advance.x // 转换为像素
-    };
-
-    characters[unicode] = character;
-    m_textures.push_back(texture);
-    return true;
 }

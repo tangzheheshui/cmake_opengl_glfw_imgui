@@ -12,8 +12,6 @@
 class TextureMng;
 class Scene;
 class MeshPass;
-class IRenderPass;
-class RenderContext;
 class FontManager;
 namespace rhi { class IRHIDevice; class IRHICommandList; }
 
@@ -100,17 +98,12 @@ private:
 	~RenderSystem();
 private:
 	void createSmokeTriangle();     // RHI 冒烟资源初始化
-	void drawSmokeTriangle();       // RHI 冒烟绘制（GL 叠加路径：自建 frame/pass）
 	void createTexturedQuad();      // M4 贴图四边形资源
-	void drawTexturedQuad();        // M4 贴图四边形绘制（GL 叠加路径：自建 frame/pass）
-	// 在当前已开启的 render pass 内录制（VK 场景路径复用，不自行 beginFrame）
+	// 在当前已开启的 render pass 内录制（场景路径复用，不自行 beginFrame）
 	void recordSmokeTriangle(rhi::IRHICommandList* cmd);
 	void recordTexturedQuad(rhi::IRHICommandList* cmd);
-	void renderScenePasses();       // 帧级 Pass 循环
-	void drawSceneOverlays();       // RHI 叠加内容（冒烟三角形/贴图四边形）
-	void drawRhiSceneContents();    // Vulkan 后端：RHI 场景内容（renderFrame 的 VK 分支）
+	void drawRhiSceneContents();    // 场景内容（GL/VK 同一套 RHI 序列）
 	std::function<void(rhi::IRHICommandList*)> m_overlayFn;
-	void selfTestAB();              // M4.2 验证设施：同帧 A/B 逐像素对比
 	// B4 验证设施（RHI_RT_TEST=1）：离屏 RT 渲染冒烟三角形 → 回读中心/角落像素。
 	// 两阶段状态机：第 N 帧渲染、第 N+1 帧回读（VK 上一帧已提交完成）
 	void runRenderTargetReadbackTest();
@@ -157,8 +150,6 @@ private:
     std::shared_ptr<TextureMng> m_texMng;
     std::shared_ptr<FontManager> m_fontMng;
 	std::shared_ptr<Scene> mCurScene;
-	std::vector<std::shared_ptr<IRenderPass>> m_vec_renderpass;
-    std::shared_ptr<RenderContext> mRenderContent;
     MouseState mMouseState;
 
     // ---- RHI（C1b 门面）----

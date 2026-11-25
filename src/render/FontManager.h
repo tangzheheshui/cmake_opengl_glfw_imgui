@@ -9,16 +9,6 @@
 #include <vector>
 #include <cstdint>
 
-// 字符位图信息结构（GL 遗留逐字形纹理路径）
-struct Character {
-    unsigned int textureID;   // 字符的纹理ID
-    unsigned int width;                // 字符的宽度
-    unsigned int height;               // 字符的高度
-    int bearingX;             // 字符的左边距
-    int bearingY;             // 字符的上边距
-    long advance;              // 字符的前进宽度
-};
-
 // ---- D4: SDF 文字图集（RHI 双后端路径）----
 // 有符号距离场：采样值 0.5 = 字形边缘（<0.5 外、>0.5 内），片元用
 // smoothstep(0.5-w, 0.5+w, d) 抗锯齿，w 随屏幕像素密度自适应 → 任意缩放清晰。
@@ -34,9 +24,7 @@ public:
     FontManager();
     ~FontManager();
 
-    bool LoadFont(const std::string& fontPath, unsigned int fontSize,
-                  bool legacyGlGlyphs = true);   // D4：VK 模式传 false（无 GL 上下文）
-    const Character* GetCharacter(uint32_t unicode); // 支持Unicode字符
+    bool LoadFont(const std::string& fontPath, unsigned int fontSize);
 
     // ---- D4: SDF 图集（ASCII 可打印区；惰性构建一次）----
     // 未 LoadFont 或字体缺失时返回 nullptr。图集数据 R8 单通道，
@@ -54,13 +42,9 @@ private:
                                  // 必须初始化为空：VK 模式不加载引擎字体时，
                                  // ~FontManager 若对未初始化指针调 FT_Done_Face 会段错误
                                  //（Windows 实机退出崩溃的根因，B3 验证期修复）
-    std::unordered_map<uint32_t, Character> characters; // 字符缓存
-    std::vector<unsigned int> m_textures; // 追踪所有分配的纹理用于清理
     // A4: 字体文件字节。FT_New_Memory_Face 不拷贝数据，缓冲必须与 face
     // 同生命周期（face 在析构时释放，故数据随对象常驻）
     std::vector<unsigned char> _fontFileData;
-    uint32_t _legacyFontPx = 0;   // D4：legacy 字形尺寸（SDF 构建改 face 尺寸后恢复用）
-    bool LoadCharacter(uint32_t unicode);     // 支持Unicode字符
 
     // ---- D4: SDF 图集构建 ----
     bool buildSdfAtlas();

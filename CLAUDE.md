@@ -143,8 +143,11 @@ docs/7-实现进度.md        做到哪了、下一步做什么
 
 ## 渲染管线
 
-**OpenGL 路径**：ShadowPass → NormalPass → SkyPass → PickPass（帧级 Pass，GL 代码）+ RHI 冒烟三角形
-**Vulkan 路径**：GL Pass 整体跳过（M4 逐个迁移），仅渲染已迁移到 RHI 的内容（冒烟三角形）
+**GL/VK 同一序列**（去后端化后 render 层零分支）：
+renderFrame → beginFrame → 阴影深度 Pass（RHI RT）→ 主场景 Pass（不透明 → 天空盒 → overlay/透明，
+含视锥剔除/透明排序/多视口 tile）→ 拾取/回读验证 → UI overlay（ImGui）→ endFrame → present。
+GL 的 sRGB 编码、视口换算、深度语义（纯深度 Pass 走 Reversed-Z）由 GLCommandList 在
+Pass 边界处理；业务层只调 RHI 接口。
 
 ### RHI 使用模式
 
@@ -168,19 +171,19 @@ device->endFrame();
 | 着色器 | res/shaders/（GLSL 直编） | res/shaders_vk/（GLSL→SPIR-V 构建期） |
 | uniform | glUniform 按名 | push constant 固定布局（MVP@0 mat4 / color@64 vec4）+ 绘制数据走 set0 帧内环 |
 | 纹理/描述符 | 绑纹理单元 | 每张纹理自带描述符集（set1..4 各一个槽），绘制期不更新描述符 |
-| 颜色空间 | 默认帧缓冲 `GL_FRAMEBUFFER_SRGB` + 颜色纹理 `GL_SRGB8_ALPHA8` | sRGB 交换链 + `Format::RGBA8_SRGB` 颜色纹理 |
-| Pass 边界状态 | 保存/恢复（GLCommandList） | 天然隔离 |
-| 遗留 GL Pass | 全部可用 | 跳过（M4 迁移） |
-| 字体/文字 | FreeType→GL 纹理 | 未迁移（M4） |
+| 颜色空间 | 默认帧缓冲 `GL_FRAMEBUFFER_SRGB`（Pass 边界自动开关）+ 颜色纹理 `GL_SRGB8_ALPHA8` | sRGB 交换链 + `Format::RGBA8_SRGB` 颜色纹理 |
+| Pass 边界状态 | 保存/恢复（GLCommandList，含 sRGB/视口） | 天然隔离 |
+| 深度语义 | 常规 Pass GL 约定；纯深度 Pass（阴影）内部转 Reversed-Z 与 VK 一致 | 全局 Reversed-Z（1=近/0=远） |
+| 字体/文字 | FreeType→SDF 图集→RHI 纹理（两端同一实现） | 同左 |
 
 ## 关键单例
 
-`RenderSystem::getInstance()` / `ShaderCache::GetInstance()`（GL 专用）/ `TextureMng::getInstance()` / `Light::GlobalLight()` / `TaskQueue::instance()`
+`RenderSystem::getInstance()` / `TextureMng::getInstance()` / `Light::GlobalLight()` / `TaskQueue::instance()`
 
 ## 重要约定
 
-- **构造函数禁止 GL/Vulkan 调用**：无图形上下文的后端模式下构造即崩
-  （纹理惰性创建模式见 TextureMng::getTexture 对 STR_DEPTH_TEXTURE 的处理）
+- **构造函数禁止 GL/Vulkan 调用**：GPU 资源一律绘制期经 RHI 惰性创建
+  （BaseDraw 构造只分配对象 ID；后台解析线程因此两端通用）
 - **销毁顺序**：main 必须在 `glfwTerminate()` 之前调用 `RenderSystem::shutdown()`；
   单例静态析构发生在窗口销毁之后，此时析构 Vulkan 设备会崩溃（A3 教训）
 - **GL Pass 边界状态保存/恢复**：Vulkan 语义的 Pass 不允许泄漏状态给周边
@@ -202,8 +205,8 @@ device->endFrame();
 
 ## 已知限制
 
-- Vulkan 模式渲染 RHI 迁移内容（模型/天空盒/线/验证叠加）；阴影、拾取、文字等 GL Pass 尚未迁移
+- 骨骼动画模型 RHI 路径未实现（动画模型不入解析缓存，绘制时跳过并告警）
 - ImGui Vulkan backend 已接入，VK 模式面板可见（B1 动态渲染模式）
-- Vulkan 仅 1 个全局平行光 / 无 PBR；阴影/拾取/文字 Pass 待迁移
+- 仅 1 个全局平行光 / 无 PBR
+- 回读行序差异：VK row0=画面顶 / GL row0=画面底，拾取与 RT 验证设施按后端镜像（契约层待统一）
 - 纹理资源 96MB 未用 Git LFS
-- RHI 对象级销毁已实现（buffer/texture/pipeline/uniform block）；离屏 RenderTarget 与 readback 未实现（B4）

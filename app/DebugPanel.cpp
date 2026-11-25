@@ -49,29 +49,10 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
     ImGui::Checkbox("RHI 冒烟三角形", &settings.rhiSmokeTriangle);
     ImGui::Checkbox("RHI 贴图四边形", &settings.rhiTexQuad);
 
-    // ---- M2/M4 迁移验证（双路径对比）----
-    if (ImGui::CollapsingHeader("迁移验证", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Checkbox("Line 走 RHI", &settings.lineUseRHI);
-        ImGui::Checkbox("模型走 RHI", &settings.modelUseRHI);
-        ImGui::Checkbox("文字走 RHI (SDF)", &settings.textUseRHI);
-        ImGui::TextDisabled("关闭 = 原 GL 路径，打开 = RHI 路径，可实时切换对比");
-    }
-    ImGui::Separator();
-
     // ---- 帧级 Pass 开关 ----
     if (ImGui::CollapsingHeader("帧级 Pass", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("阴影 Pass", &settings.drawShadowPass);
         ImGui::Checkbox("天空盒 Pass", &settings.drawSkyPass);
-        if (ImGui::Checkbox("拾取 Pass", &settings.drawPickPass)) {
-            if (!settings.drawPickPass) {
-                ImGui::OpenPopup("PickPassOff");
-            }
-        }
-        if (ImGui::BeginPopupModal("PickPassOff", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("注意：关闭拾取 Pass 后鼠标拾取将失效。");
-            if (ImGui::Button("知道了")) ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
     }
 
     // ---- CAD 显示（D7 剖切 / D8 选中高亮）----

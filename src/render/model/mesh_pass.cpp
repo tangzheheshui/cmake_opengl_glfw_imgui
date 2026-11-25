@@ -20,31 +20,14 @@
 #include "../Light.h"
 #include "image.h"
 
+static bool mathDataHasTexture(const std::shared_ptr<Material>& mat) {
+    return mat && !mat->textures.empty();
+}
+
 MeshPass::MeshPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData) {
     m_mesh_data = meshData;
     m_material = matData;
-}
-
-bool MeshPass::DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID) {
-    auto shader = ShaderCache::GetInstance().GetShader(ShaderType::Pick);   
-    if (!shader) {
-        return false;
-    }
-    
-    shader->use();
-    
-    shader->setInt("uPickID", pickID);
-    
-    setup(matModel, 0);
-  
-    // 绘制网格
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glBindVertexArray(_VAO);
-    glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)m_mesh_data->indices.size(), GL_UNSIGNED_INT, 0,  (int)matModel.size());
-    glBindVertexArray(0);
-    
-    return true;
+    m_textured = mathDataHasTexture(matData);
 }
 
 // D5：线框颜色（深灰蓝，CAD 常见边线观感；线性空间直出）
@@ -70,249 +53,12 @@ static glm::vec4 highlightValueOf(uint32_t flags) {
     return glm::vec4(0.25f, 0.55f, 1.0f, strength);
 }
 
-bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity) {
-    // M4.2: RHI 路由（Vulkan 后端必走；GL 后端可经 modelUseRHI 开关切换对比）
-    {
-        auto& rs = RenderSystem::getInstance();
-        auto* device = rs.rhiDevice();
-        bool useRHI = device && (device->backend() == rhi::Backend::Vulkan
-                                 || rs.settings().modelUseRHI);
-        if (useRHI) {
-            return DrawRHI(matModel, mtx, flags, opacity);
-        }
-    }
-
-    bool bDrawShadow = (flags & DrawOption::DRAW_SHADOW);
-    auto shader = getShader(flags);
-    if (!shader) {
-        return false;
-    }
-    
-    shader->use();
-
-    // D7：剖切平面（关闭时传 (0,0,0,1)，dot + 1 >= 0 不裁剪任何点）
-    {
-        auto& settings = RenderSystem::getInstance().settings();
-        glm::vec4 clipPlane = settings.clipPlaneEnabled
-            ? glm::vec4(settings.clipPlaneNormal[0], settings.clipPlaneNormal[1],
-                        settings.clipPlaneNormal[2], settings.clipPlaneDistance)
-            : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-        shader->setFloat4("uClipPlane", clipPlane.x, clipPlane.y, clipPlane.z, clipPlane.w);
-    }
-
-    // D8：选中高亮（未选中传全零，mix 无效果）
-    {
-        const glm::vec4 hl = highlightValueOf(flags);
-        shader->setFloat4("uHighlight", hl.x, hl.y, hl.z, hl.w);
-    }
-    {
-        const glm::vec4 hv = hoverValueOf(flags);
-        shader->setFloat4("uHover", hv.x, hv.y, hv.z, hv.w);
-    }
-
-    // D3：不透明度（GL 遗留路径的 blend 开关在 Model::draw，避免逐网格切状态）
-    shader->setFloat("uOpacity", opacity);
-
-    bool bDrawPick = (flags & DrawOption::DRAW_PICK);
- 
-    if (bDrawShadow) {
-        auto lightSpaceMatrix = Scene::GetLightVPMatrix();
-        shader->setMat4("lightSpaceMatrix", lightSpaceMatrix);
-    }
-    else if(bDrawPick) {
-        // 设置实体的ID
-        shader->setInt("uPickID", 0);
-    }
-    else {
-        bool has_normal_tex = false;
-        bool has_specular_tex = false;
-        
-        for (int i = 0; i < m_material->textures.size(); i++) {
-            auto tex = m_material->textures[i];
-            int texID = 0;
-            if (!tex.filepath.empty()) {
-                // B3c：diffuse/specular 是颜色贴图（sRGB 解码）；normal/height 是
-                // 线性数据贴图，必须保持非 sRGB 原值。
-                const bool colorTex = tex.name.rfind("texture_diffuse", 0) == 0
-                                   || tex.name.rfind("texture_specular", 0) == 0;
-                texID = TextureMng::getInstance().getTexture(tex.filepath, colorTex);
-                if(tex.name == "texture_diffuse0") {
-                    
-                }
-                else if(tex.name == "texture_specular0") {
-                    has_specular_tex = true;
-                }
-                else if(tex.name == "texture_normal0") {
-                    if (!m_mesh_data->tangents.empty()) {
-                        has_normal_tex = true;
-                    }
-                }
-                else if(tex.name == "texture_height0") {
-                }
-            }
-            glActiveTexture(GL_TEXTURE0 + i);
-            glBindTexture(GL_TEXTURE_2D, texID);
-            shader->setInt(tex.name, i);
-            shader->setBool("uMaterail.has_normal_tex", has_normal_tex);
-            shader->setBool("uMaterail.has_specular_tex", has_specular_tex);
-        }
-        
-        // V3-21：阴影贴图（RHI 纹理绑到 GL 纹理单元 4）+ 光空间矩阵
-        {
-            auto& rs = RenderSystem::getInstance();
-            const rhi::TextureHandle shadowTex = rs.shadowTexture();
-            if (shadowTex.valid() && rs.settings().drawShadowPass) {
-                auto* dev = rs.rhiDevice();
-                if (dev && dev->commandList()) {
-                    dev->commandList()->bindTexture(shadowTex, 4);
-                }
-                shader->setInt("uShadowMap", 4);
-                shader->setMat4("uLightSpaceMatrix", rs.shadowLightVP());
-                shader->setInt("uShadowEnabled", 1);
-            } else {
-                shader->setInt("uShadowEnabled", 0);
-            }
-        }
-
-        // 矩阵
-        shader->setMat4("uViewProj", mtx);
-        
-        if (numViewpoit > 1) {
-            shader->setMat4Array("uMatrixModel", matModel);
-            shader->setInt("uNumViewport", numViewpoit);
-        }
-        // 灯光
-        bool lightOpen = flags&DrawOption::LIGHT_OPEN;
-        shader->setBool("uLight.is_open", lightOpen);
-        auto light = Light::GlobalLight();
-        shader->setFloat4("uLight.position", light.position.x, light.position.y, light.position.z, 1);
-        shader->setFloat3("uLight.direction", light.direction.x, light.direction.y, light.direction.z);
-        shader->setFloat("uLight.cosTheta", light.cosTheta);
-        shader->setFloat3("uLight.ambient", light.ambient.x, light.ambient.y, light.ambient.z);
-        shader->setFloat3("uLight.diffuse", light.diffuse.x, light.diffuse.y, light.diffuse.z);
-        shader->setFloat3("uLight.specular", light.specular.x, light.specular.y, light.specular.z);
-        
-        // 材质
-        shader->setFloat3("uMaterail.ambient", m_material->ambient.r, m_material->ambient.g, m_material->ambient.b);
-        shader->setFloat3("uMaterail.diffuse", m_material->diffuse.r, m_material->diffuse.g, m_material->diffuse.b);
-        shader->setFloat3("uMaterail.specular", m_material->specular.r, m_material->specular.g, m_material->specular.b);
-        shader->setFloat("uMaterail.shininess", m_material->shininess);
-        shader->setFloat("uMaterail.shininess_strength", m_material->shininess_strength);
-        
-        // 相机位置
-        auto cam_pos = Camera::GetCamera().getPossition();
-        shader->setFloat3("uCameraPos", cam_pos.x, cam_pos.y, cam_pos.z);
-        
-        // boneMat
-        if (m_matBone && !m_matBone->empty()) {
-            for (int i = 0; i < m_matBone->size(); ++i) {
-                auto mat = Matrix::toMatrix(m_matBone->at(i));
-                shader->setMat4("uFinalBonesMatrices[" + std::to_string(i) + "]", mat);
-            }
-        }
-    }
-    
-    setup(matModel, flags);
-
-    // 绘制网格
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glBindVertexArray(_VAO);
-
-    // D5：显示模式（GL 遗留路径用 glPolygonMode；拾取/阴影 Pass 不受影响）
-    const int displayMode = RenderSystem::getInstance().settings().displayMode;
-    const bool wireOnly = (displayMode == 1) && !bDrawShadow && !bDrawPick;
-    if (wireOnly) {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-    }
-    glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)m_mesh_data->indices.size(), GL_UNSIGNED_INT, 0,  (int)matModel.size());
-    if (wireOnly) {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    }
-    else if ((displayMode == 2) && !bDrawShadow && !bDrawPick) {
-        // 着色+边线：第二遍线框（GL_POLYGON_OFFSET_LINE 深度偏移防 z-fighting）
-        glEnable(GL_POLYGON_OFFSET_LINE);
-        glPolygonOffset(2.0f, 2.0f);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)m_mesh_data->indices.size(), GL_UNSIGNED_INT, 0,  (int)matModel.size());
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glDisable(GL_POLYGON_OFFSET_LINE);
-        glPolygonOffset(0.0f, 0.0f);
-    }
-    glBindVertexArray(0);
-
-    return true;
+bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags,
+                    int /*numViewpoit*/, float opacity) {
+    // 去后端化：GL/VK 同一 RHI 路径。多视口由逐 tile viewport 重绘实现，
+    // 旧着色器的 MULTI_VIEWPORT 标志在 RHI 路径不再需要。
+    return DrawRHI(matModel, mtx, flags & ~DrawOption::MULTI_VIEWPORT, opacity);
 }
-
-void MeshPass::setup(const std::vector<Matrix> &matModel, bool hasTexture, bool hasAni) {
-    if (_VBO == 0) {
-        glGenVertexArrays(1, &_VAO);
-        glGenBuffers(1, &_VBO);
-        glGenBuffers(1, &_EBO);
-    }
-    
-    glBindVertexArray(_VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, _VBO);
-    
-    
-    size_t size1 = m_mesh_data->positions.size() * sizeof(glm::vec3);
-    size_t size2 = m_mesh_data->normals.size() * sizeof(glm::vec3);
-    size_t size3 = m_mesh_data->boneIDs.size() * sizeof(glm::ivec4);
-    size_t size4 = m_mesh_data->weights.size() * sizeof(glm::vec4);
-    size_t totalsize = size1 + size2;
-    if (hasAni) {
-        totalsize += (size3 + size4);
-    }
-    size_t size5 = sizeof(Matrix) * matModel.size();
-    totalsize += size5;
-    
-    glBufferData(GL_ARRAY_BUFFER, totalsize, nullptr , GL_STATIC_DRAW);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, size1, m_mesh_data->positions.data());
-    glBufferSubData(GL_ARRAY_BUFFER, size1, size2, m_mesh_data->normals.data());
-    
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
-    glEnableVertexAttribArray(0);
-    
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)size1);
-    glEnableVertexAttribArray(1);
-    
-    int bufferIndex = 2;
-    if (hasAni) {
-        glBufferSubData(GL_ARRAY_BUFFER, size1 + size2, size3, m_mesh_data->boneIDs.data());
-        glBufferSubData(GL_ARRAY_BUFFER, size1 + size2 + size3, size4, m_mesh_data->weights.data());
-        
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 4, GL_INT, GL_FALSE, sizeof(glm::ivec4), (void*)(size1 + size2));
-        
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(glm::vec4), (void*)(size1 + size2 + size3));
-        bufferIndex += 2;
-    }
-    
-    glBufferSubData(GL_ARRAY_BUFFER, totalsize - size5, size5, matModel.data());
-    glVertexAttribPointer(bufferIndex, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void*)(totalsize - size5));
-    glVertexAttribDivisor(bufferIndex, 1);
-    glEnableVertexAttribArray(bufferIndex++);
-    
-    glVertexAttribPointer(bufferIndex, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void*)(totalsize - size5 + sizeof(glm::vec4)));
-    glVertexAttribDivisor(bufferIndex, 1);
-    glEnableVertexAttribArray(bufferIndex++);
-    
-    glVertexAttribPointer(bufferIndex, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void*)(totalsize - size5 + 2 * sizeof(glm::vec4)));
-    glVertexAttribDivisor(bufferIndex, 1);
-    glEnableVertexAttribArray(bufferIndex++);
-    
-    glVertexAttribPointer(bufferIndex, 4, GL_FLOAT, GL_FALSE, sizeof(glm::mat4), (void*)(totalsize - size5 + 3 * sizeof(glm::vec4)));
-    glVertexAttribDivisor(bufferIndex, 1);
-    glEnableVertexAttribArray(bufferIndex++);
-
-    
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, m_mesh_data->indices.size() * sizeof(unsigned int), m_mesh_data->indices.data(), GL_STATIC_DRAW);
-    
-    glBindVertexArray(0);
-}
-
 
 // ================= M4.2: RHI 绘制路径 =================
 #include <glm/gtc/type_ptr.hpp>
@@ -366,8 +112,8 @@ void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
 
     rhi::GraphicsPipelineDesc desc;
     desc.shaders = {
-        { rhi::ShaderStage::Vertex,   isTextured() ? "vert_model" : "vert_model_color" },
-        { rhi::ShaderStage::Fragment, isTextured() ? "frag_model" : "frag_model_color" },
+        { rhi::ShaderStage::Vertex,   m_textured ? "vert_model" : "vert_model_color" },
+        { rhi::ShaderStage::Fragment, m_textured ? "frag_model" : "frag_model_color" },
     };
     desc.vertexLayout.stride = 8 * sizeof(float);          // pos3+normal3+uv2
     desc.vertexLayout.instanceStride = sizeof(Matrix);     // 实例矩阵 mat4
@@ -425,12 +171,8 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
         ENGINE_LOG_WARN_ONCE("[RHI] animated model not migrated yet (M4.3)");
         return false;
     }
-    if (flags & (DrawOption::DRAW_SHADOW | DrawOption::DRAW_PICK | DrawOption::MULTI_VIEWPORT)) {
-        ENGINE_LOG_WARN_ONCE("[RHI] shadow/pick/multiview paths not migrated yet (M4.3)");
-        return false;
-    }
-    if (!isTextured()) {
-        ENGINE_LOG_WARN_ONCE("[RHI] color model pipeline not migrated yet (M4.3)");
+    if (flags & (DrawOption::DRAW_SHADOW | DrawOption::DRAW_PICK)) {
+        ENGINE_LOG_WARN_ONCE("[RHI] shadow/pick use dedicated entry points (DrawShadowRHI/DrawPickRHI)");
         return false;
     }
 
@@ -641,7 +383,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
             }
         }
         if (th.valid()) {
-            cmd->bindTexture(th, slot);
+            cmd->bindTexture(th, slot, tex.name.c_str());
             if (tex.name == "texture_normal0")   hasNormalTex = true;
             if (tex.name == "texture_specular0") hasSpecularTex = true;
         }
@@ -655,7 +397,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
 
     // V3-19：阴影贴图固定占槽 4（set5），材质纹理只用槽 0..3
     if (shadowTex.valid()) {
-        cmd->bindTexture(shadowTex, 4);
+        cmd->bindTexture(shadowTex, 4, "uShadowMap");
     }
 
     cmd->bindVertexBuffer(drawVB);

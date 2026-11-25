@@ -16,9 +16,7 @@
 //  顶点着色器投影后在屏幕（像素）空间做法向扩展（详见 res/shaders/vert_line_rhi）。
 
 #include "Line.h"
-#include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
-#include "../shader.h"
 #include "../RenderSystem.h"
 #include "../scene.h"
 #include "rhi/IRHIDevice.h"
@@ -32,48 +30,28 @@ void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsig
 }
 
 bool Line::draw(const Matrix &mtx) {
-
-    // ---- RHI 路径：Vulkan 后端必须走（GL 路径依赖 ShaderCache，VK 模式未初始化）；
-    //      GL 后端可通过调试面板 "Line 走 RHI" 开关切换对比 ----
-    auto& renderSys = RenderSystem::getInstance();
-    auto* device = renderSys.rhiDevice();
-    if (device && (device->backend() == rhi::Backend::Vulkan
-                   || renderSys.settings().lineUseRHI)) {
-        return drawRHI(mtx);
-    }
-
-    // ---- 原 GL 路径（保持不变）----
-    auto shader = ShaderCache::GetInstance().GetShader(ShaderType::Color);
-    if (!shader) {
-        return false;
-    }
-
-    shader->use();
-
-    calculate();
-
-    // 矩阵
-    shader->setMat4("uMatrixMVP", mtx);
-
-    // 颜色
-    shader->setFloat3("uColor", m_color.r, m_color.g, m_color.b);
-
-    glLineWidth(m_fWidth);
-    glDrawElements(GL_LINES, (int)m_indices.size(), GL_UNSIGNED_INT, 0);
-    return true;
+    // 去后端化：GL/VK 同一条 RHI 路径（宽线屏幕空间展开）
+    return drawRHI(mtx);
 }
 
 void Line::refreshRhiViewport() {
     auto* device = RenderSystem::getInstance().rhiDevice();
     if (!device) return;
-    if (device->backend() == rhi::Backend::OpenGL) {
-        // GL：当前 GL 视口即像素真值（Pass 边界设满屏视口；C2 多视口时为当前 tile，
-        // 宽线在 tile 内按 tile 尺寸换算，行为正确）。Vulkan 模式无 GL 上下文，
-        // glad 函数指针为空，绝不进入本分支。
-        GLint vp[4] = { 0, 0, 0, 0 };
-        glGetIntegerv(GL_VIEWPORT, vp);
-        m_rhiViewportW = (vp[2] > 0) ? static_cast<uint32_t>(vp[2]) : m_rhiViewportHintW;
-        m_rhiViewportH = (vp[3] > 0) ? static_cast<uint32_t>(vp[3]) : m_rhiViewportHintH;
+    // 两端统一：问当前命令列表的视口像素尺寸（C2 多视口时即当前 tile）。
+    // 后端没记录时退回设置里的提示尺寸。
+    if (auto* cmd = device->commandList()) {
+        uint32_t vw = 0, vh = 0;
+        cmd->viewportSize(vw, vh);
+        if (vw > 0 && vh > 0) {
+            m_rhiViewportW = vw;
+            m_rhiViewportH = vh;
+            return;
+        }
+    }
+    const auto fb = device->framebufferSize();
+    if (fb.width > 0 && fb.height > 0) {
+        m_rhiViewportW = fb.width;
+        m_rhiViewportH = fb.height;
         return;
     }
     // Vulkan：B0 契约未提供视口/交换链尺寸查询，宽度换算以提示宽度为绝对基准，
@@ -217,22 +195,4 @@ void Line::ensureRHIResources(rhi::IRHIDevice* device) {
         desc.blend     = { true };   // D1 收尾：边缘 AA 的 alpha 渐变需要混合
         m_rhiPipeline = device->createPipeline(desc);
     }
-}
-
-void Line::calculate() {
-    // 注意：这里不能在结尾 glBindVertexArray(0) 解绑——
-    // 核心配置下 glDrawElements 配 VAO 0 是非法调用（静默不绘制），
-    // 修复前坐标轴从未真正显示过（该 bug 由 RHI A/B 对比测试发现）。
-    glBindVertexArray(_VAO);
-
-    // bind
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, _EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(GL_UNSIGNED_INT) * m_indices.size(), m_indices.data(), GL_STATIC_DRAW);
-
-
-    glBindBuffer(GL_ARRAY_BUFFER, _VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * m_points.size(), m_points.data(), GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
 }

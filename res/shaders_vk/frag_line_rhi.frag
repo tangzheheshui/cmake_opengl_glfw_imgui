@@ -10,9 +10,9 @@ layout(location = 0) out vec4 FragColor;
 
 void main()
 {
-    const float halfW = vLine.z;
-    const float along = vLine.y;
-    const bool  round = vLine.w > 0.0;
+    float halfW = vLine.z;
+    float along = vLine.y;
+    bool  round = vLine.w > 0.0;
 
     float r = abs(vLine.x);                                   // 默认：侧向距离
     if (round) {
@@ -23,7 +23,7 @@ void main()
         }
     }
 
-    const float alpha = 1.0 - smoothstep(halfW - 1.0, halfW, r);
+    float alpha = 1.0 - smoothstep(halfW - 1.0, halfW, r);
     if (alpha <= 0.003) discard;
     FragColor = vec4(pc.uColor.rgb, alpha);
 }

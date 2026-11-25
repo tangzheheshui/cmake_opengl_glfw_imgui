@@ -691,24 +691,28 @@ void GLDevice::waitIdle() {
 // V3-0：帧号推进 + 到期延迟销毁。GL 路径 RenderSystem 每帧调用一次；
 // 遗留叠加路径（drawSmokeTriangle 等）的额外调用幂等（flush 空队列无副作用）。
 void GLDevice::endFrame() {
-    // RHI_PROBE：第 30 帧回读两个像素（调试链路/阴影验证用）
+    // RHI_PROBE / RHI_DUMP：第 30 帧回读验证（两者任一开启即触发）
     static bool probeEnabled = (std::getenv("RHI_PROBE") != nullptr);
+    static bool dumpEnabled  = (std::getenv("RHI_DUMP")  != nullptr);
     static int probeFrame = 0;
-    if (!probeEnabled || ++probeFrame != 30) return;
+    if ((!probeEnabled && !dumpEnabled) || ++probeFrame != 30) return;
     const int w = static_cast<int>(_size.width);
     const int h = static_cast<int>(_size.height);
     if (w <= 0 || h <= 0) return;
-    // 竖直中线扫 6 个点（地面阴影定位用）
-    char line[256]; int off = 0;
-    off += std::snprintf(line + off, sizeof(line) - off, "[GLPROBE]");
-    for (int i = 1; i <= 6; ++i) {
-        const int y = h * i / 8;
-        unsigned char p[4] = {0, 0, 0, 0};
-        glReadPixels(w / 2, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
-        off += std::snprintf(line + off, sizeof(line) - off,
-                             " y%d=%d,%d,%d", y, p[0], p[1], p[2]);
+    if (probeEnabled) {
+        // 竖直中线扫 6 个点（地面阴影定位用）
+        char line[256]; int off = 0;
+        off += std::snprintf(line + off, sizeof(line) - off, "[GLPROBE] srgb=%d",
+                             glIsEnabled(GL_FRAMEBUFFER_SRGB) ? 1 : 0);
+        for (int i = 1; i <= 6; ++i) {
+            const int y = h * i / 8;
+            unsigned char p[4] = {0, 0, 0, 0};
+            glReadPixels(w / 2, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+            off += std::snprintf(line + off, sizeof(line) - off,
+                                 " y%d=%d,%d,%d", y, p[0], p[1], p[2]);
+        }
+        ENGINE_LOG_INFO("%s", line);
     }
-    ENGINE_LOG_INFO("%s", line);
     // RHI_DUMP：整帧导出 PPM（与 VK 端同名设施；GL 原点是左下，导出时翻转行序）
     if (std::getenv("RHI_DUMP")) {
         std::vector<unsigned char> pix(static_cast<size_t>(w) * h * 4);

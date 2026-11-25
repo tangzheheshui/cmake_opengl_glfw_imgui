@@ -13,14 +13,11 @@ struct RenderSettings {
     // ---- RHI ----
     bool rhiSmokeTriangle = false;  // RHI 冒烟测试三角形（验证抽象层链路）
     bool rhiTexQuad = false;        // RHI 贴图四边形（M4：验证纹理采样 + 描述符链路）
-    bool lineUseRHI = true;         // Line 走 RHI 绘制（M2 迁移验证，已通过逐像素等价性对比）
-    bool modelUseRHI = true;        // 模型走 RHI 绘制（M4.2 迁移，GL 模式下默认走 RHI；可切回 false 对比）
-    bool textUseRHI = true;         // 文字走 RHI 绘制（D4 SDF；VK 后端强制走 RHI）
+    // 去后端化：模型/线/文字只有一条 RHI 路径，legacy 切换开关已删
 
     // ---- 帧级 Pass 开关 ----
     bool drawShadowPass = true;
     bool drawSkyPass    = true;
-    bool drawPickPass   = true;     // 关闭后鼠标拾取失效（PickPass 提供 ID 图）
 
     // ---- CAD 剖切平面（D7）----
     // 世界空间平面，保留满足 dot(normal, p) + distance >= 0 的一侧

@@ -20,14 +20,12 @@ public:
     Sky() {}
     ~Sky() {}
     virtual bool draw(const Matrix &mtx) override;
-    bool draw(const Matrix &viewMat, const Matrix &projMat);
     // M4.3: RHI 路径（在活跃 render pass 内录制；两后端通用）
     bool drawRHI(rhi::IRHICommandList* cmd, const Matrix &viewMat, const Matrix &projMat);
     void setCubeImage(const std::array<std::string, 6>& imgs);
 private:
     void ensureRHIResources(class rhi::IRHIDevice* device);
     std::array<std::string, 6> _arrImage;
-    unsigned int _textureID = 0;
 
     rhi::BufferHandle m_rhiVB;
     rhi::PipelineHandle m_rhiPipeline;

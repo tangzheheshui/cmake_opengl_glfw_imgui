@@ -55,13 +55,10 @@ class Model : public BaseDraw {
 public:
     using BaseDraw::BaseDraw;
     void LoadFile(const std::string &path);
-    // E5 流式加载：后台线程预解析进缓存（VK 后端专用；GL 后端同步退化——
-    // BaseDraw 构造在 GL 模式需要 GL 上下文）。主线程随后的 LoadFile 命中
-    // 缓存/等待解析完成，解析与主循环并行。
+    // E5 流式加载：后台线程预解析进缓存（两端通用；解析纯 CPU，GPU 资源
+    // 主线程惰性创建）。主线程随后的 LoadFile 命中缓存/等待解析完成。
     static void prefetchAsync(const std::string &path);
     virtual bool draw(const Matrix &mtx) override;
-    virtual bool drawShadow() override;
-    virtual bool drawPick() override;
     // D3：透明排序深度键 = 第一个实例的平移（多实例取代表；CAD 单件常用）
     glm::vec3 worldCenter() const override;
     // E3：世界空间 AABB（局部盒 8 角 × 全部实例矩阵变换取并集；视锥剔除用）

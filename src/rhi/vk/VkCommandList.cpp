@@ -400,7 +400,7 @@ void VkCommandList::bindIndexBuffer(BufferHandle buffer) {
                          0, VK_INDEX_TYPE_UINT32);
 }
 
-void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot) {
+void VkCommandList::bindTexture(TextureHandle texture, uint32_t slot, const char* /*samplerName*/) {
     claimThread();
     // V3-2：只记录槽位。纹理在创建期已写好自己的描述符集（sampler + view 不变），
     // draw 时直接绑 set1..4 —— 这里不再 vkUpdateDescriptorSets。
@@ -441,6 +441,8 @@ void VkCommandList::setViewport(float x, float y, float w, float h) {
     // ImGui 侧用自己的正高度 viewport 录制（动态状态，逐命令生效，互不影响）。
     VkViewport vp{x, y, w, h, 0.0f, 1.0f};
     vkCmdSetViewport(commandBuffer(), 0, 1, &vp);
+    _vpW = static_cast<uint32_t>(w < 0 ? -w : w);
+    _vpH = static_cast<uint32_t>(h < 0 ? -h : h);
 }
 
 // C2：裁剪矩形。VK 帧缓冲坐标即左上原点，与契约一致，直接透传。

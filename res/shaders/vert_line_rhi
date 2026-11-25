@@ -31,8 +31,8 @@ void main()
     vec2 dPx = (ndcB - ndcA) / aScreen;          // 像素空间方向向量
     float len = length(dPx);
     dPx = len > 1e-6 ? dPx / len : vec2(1.0, 0.0);
-    const float halfW = aLine.z * 0.5;
-    const float cap   = aLine.w > 0.5 ? halfW : 0.0f;   // D1：圆头端点沿切线外扩半宽
+    float halfW = aLine.z * 0.5;
+    float cap   = aLine.w > 0.5 ? halfW : 0.0f;   // D1：圆头端点沿切线外扩半宽
     vec2 offsetPx = vec2(-dPx.y, dPx.x) * (aLine.y * halfW)
                   + dPx * ((aLine.x > 0.5 ? cap : -cap));
     vec4 clip = mix(clipA, clipB, aLine.x);

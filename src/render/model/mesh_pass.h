@@ -12,9 +12,7 @@
 #include <map>
 #include "rhi/RhiTypes.h"
 #include "glm/glm.hpp"
-#include <glad/glad.h>
 #include "camera/camera.h"
-#include "shader.h"
 #include "model_data.h"
 #include "math/matrix.h"
 
@@ -24,23 +22,8 @@ namespace rhi { class IRHICommandList; }
 class MeshPass {
 public:
     MeshPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData);
-    virtual ~MeshPass() {
-        if (_VAO > 0) {
-            glDeleteVertexArrays(1, &_VAO);
-        }
-        
-        if (_VBO > 0) {
-            glDeleteBuffers(1, &_VBO);
-        }
-        
-        if (_EBO > 0) {
-            glDeleteBuffers(1, &_EBO);
-        }
-    }
-    
+    // 绘制入口（GL/VK 同一 RHI 路径）
     bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity = 1.0f);
-    bool DrawPick(const std::vector<Matrix> &matModel, const Matrix &mtx, uint16_t pickID);
-    // M4.2: RHI 绘制路径（Vulkan 必走；GL 可经 modelUseRHI 开关切换对比）
     // D3：opacity < 1 走 blend 管线变体（depthWrite 关 + srcAlpha 混合）
     bool DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity = 1.0f);
     // D2: RHI 拾取绘制（pick 管线 + ID 色直出；调用方管理 RT/pass）
@@ -51,17 +34,11 @@ public:
     bool DrawShadowRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle shadowPipeline,
                        const Matrix& lightVP, const std::vector<Matrix>& matModel);
 protected:
-    virtual Shader* getShader(uint32_t flags) { return nullptr; }
-    virtual bool isTextured() const { return false; }   // PassTexture 覆写为 true
-    virtual void setup(const std::vector<Matrix> &matModel, uint32_t flags) {}
-    void setup(const std::vector<Matrix> &matModel, bool hasTexture, bool hasAni);
     void ensureRHIResources(rhi::IRHIDevice* device);   // 惰性创建 RHI 资源
 public:
     std::shared_ptr<Material> m_material;
     std::shared_ptr<MeshData> m_mesh_data;
-    unsigned int _VAO = 0;
-    unsigned int _VBO = 0;
-    unsigned int _EBO = 0;
+    bool m_textured = false;   // 材质带纹理 → 贴图着色器；否则纯色着色器
     std::shared_ptr<std::vector<glm::mat4>> m_matBone;
 
     // ---- RHI 资源（M4.2 迁移）----
