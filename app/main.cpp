@@ -50,7 +50,8 @@ int main() {
         std::ifstream cfg("backend.cfg");
         std::string pref;
         if (cfg >> pref) {
-            useVulkan = (pref == "vulkan" || pref == "VULKAN");
+            // 0 = OpenGL，1 = Vulkan；也兼容 vulkan/opengl 字符串
+            useVulkan = (pref == "1" || pref == "vulkan" || pref == "VULKAN");
         }
     }
 #if !ENGINE_HAS_VULKAN

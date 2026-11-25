@@ -3,12 +3,10 @@
 //  ImGui 渲染调试面板（app 层，唯一允许使用 ImGui 的文件）
 //
 #include "DebugPanel.h"
-#include "log/LogMacros.h"
 #include "rhi/IRHIDevice.h"
 #include "imgui.h"
 #include "GLFW/glfw3.h"
 #include <cstdlib>
-#include <fstream>
 
 void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);   // 固定左上角，不悬浮居中
@@ -20,21 +18,6 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
         ImGui::Text("后端: %s", info.backendName.c_str());
         ImGui::Text("GPU: %s", info.adapterName.c_str());
         ImGui::Text("API: %s", info.apiVersion.c_str());
-
-        {
-            static int selected = -1;
-            if (selected < 0) {
-                selected = (device->backend() == rhi::Backend::Vulkan) ? 1 : 0;
-            }
-            const char* items[] = { "OpenGL", "Vulkan" };
-            if (ImGui::Combo("启动后端（重启生效）", &selected, items, 2)) {
-                std::ofstream cfg("backend.cfg", std::ios::trunc);
-                cfg << (selected == 1 ? "vulkan" : "opengl");
-                ENGINE_LOG_INFO("[UI] backend preference saved: %s (restart to apply)",
-                                selected == 1 ? "vulkan" : "opengl");
-            }
-            ImGui::TextDisabled("切换后端需重启；环境变量 RHI_BACKEND 优先于此处");
-        }
 
         // ---- 设备能力/运行状态（A3；启动时同一份内容已写入日志）----
         if (ImGui::CollapsingHeader("设备能力")) {
