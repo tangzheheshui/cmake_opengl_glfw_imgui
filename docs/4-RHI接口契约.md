@@ -17,6 +17,14 @@ RHI 是引擎内部统一两个后端的图形接口层。这份写它有哪些�
 | 离屏目标 | RenderTargetHandle | 渲染到纹理而不是屏幕 |
 | 数据块 | UniformBlockHandle | 每帧每个对象传的小数据（只记尺寸，不占显存） |
 
+命令列表上的三个「去后端化」中性接口（业务层据此不出现任何 GL 直调）：
+
+| 接口 | 干什么 | 两端行为 |
+|---|---|---|
+| `setSrgbWrite(bool)` | 颜色写编码开关 | GL：GL_FRAMEBUFFER_SRGB；VK：no-op（附件格式驱动） |
+| `viewportSize(w,h)` | 问当前视口像素尺寸 | 屏幕空间展开（宽线）换算用；GL/VK 各自记录最近一次 setViewport |
+| `bindTexture(tex, slot, name)` | 绑纹理 + 采样器名 | GL：绑单元并按名设 sampler uniform；VK：忽略名字，set 索引即槽位 |
+
 ## 保证什么
 
 - 一帧的命令，在「结束一帧」后才真正交给 GPU 执行。
@@ -38,8 +46,8 @@ RHI 是引擎内部统一两个后端的图形接口层。这份写它有哪些�
 |---|---|
 | 参数怎么传 | OpenGL 按名字，Vulkan 按固定位置，上层只管传值 |
 | 颜色空间细节 | 两端都用 sRGB，但内部实现不同 |
-| 回读行序 | OpenGL 第一行是画面底部，Vulkan 第一行是画面顶部 |
-| 文字渲染 | 目前只有 OpenGL 支持 |
+| 回读行序 | OpenGL 第一行是画面底部，Vulkan 第一行是画面顶部（拾取/RT 验证按后端镜像，待收进契约） |
+| 深度语义 | 常规 Pass 两端同为 GL 约定（1=远）；纯深度 Pass（阴影）GL 内部转 Reversed-Z（清 0 + GREATER）与 VK 一致，调用方无感 |
 
 ## 销毁顺序（硬规定）
 
