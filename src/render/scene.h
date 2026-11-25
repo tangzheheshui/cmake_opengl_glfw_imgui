@@ -17,7 +17,6 @@
 class BaseDraw;
 class Line;
 class Shader;
-class ImageRectangle;
 class Sky;
 class Camera;
 class CCameraController;

@@ -13,7 +13,6 @@
 #include "object/Line.h"
 #include "object/Sky.h"
 #include "object/Text.h"
-#include "object/ImageRectangle.h"
 #include "model/model.h"
 #include "Light.h"
 #include "taskQueue.h"
@@ -23,6 +22,7 @@
 namespace SceneDemo {
 
 void buildScene(const std::string& rootPath, bool useVulkan) {
+    (void)useVulkan;   // 地面已统一走 RHI（recordGroundRHI），此参数暂不再区分后端
     auto pScene = RenderSystem::getInstance().GetCurScene();
     if (!pScene) return;
 
@@ -58,25 +58,7 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     }
 
     const auto start = std::chrono::high_resolution_clock::now();
-    // 地面（GL 专属：calculate 混合 CPU/GPU 操作，VK 模式跳过）
-    std::shared_ptr<ImageRectangle> objGround = nullptr;
-    if (!useVulkan) {
-        objGround = std::make_shared<ImageRectangle>();
-    }
-    const float ground_width = 10;
     const auto texPath = engine::fs::pathFromUtf8(rootPath) / "res" / "textures";
-    if (objGround) {
-        objGround->setImagePath(engine::fs::utf8FromPath(texPath / "bricks2.jpg"),
-            engine::fs::utf8FromPath(texPath / "bricks2_normal.jpg"),
-            engine::fs::utf8FromPath(texPath / "bricks2_disp.jpg"));
-        objGround->setSetp(5, 5);
-        const glm::vec3 p1(-ground_width, 0,  ground_width);
-        const glm::vec3 p2( ground_width, 0,  ground_width);
-        const glm::vec3 p3( ground_width, 0, -ground_width);
-        const glm::vec3 p4(-ground_width, 0, -ground_width);
-        objGround->setPoints(p1, p2, p3, p4);
-        objGround->calculate();
-    }
 
     // 鸭子群
     auto objDuck = std::make_shared<Model>();

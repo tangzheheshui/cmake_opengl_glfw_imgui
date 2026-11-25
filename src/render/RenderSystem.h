@@ -135,7 +135,7 @@ private:
 	void recordSmokeTriangleWith(rhi::IRHICommandList* cmd, rhi::PipelineHandle pipeline);
 	void recordShadowPass(rhi::IRHICommandList* cmd);
 	rhi::TextureHandle m_shadowTex;
-	// V3-20：阴影接收面（VK 模式的地面；GL 模式仍用遗留 ImageRectangle）
+	// V3-20：阴影接收面（两端统一走 RHI，GL 不再用遗留 ImageRectangle）
 	rhi::BufferHandle   m_groundVB;
 	rhi::PipelineHandle m_groundPipeline;
 	void recordGroundRHI(rhi::IRHICommandList* cmd, const Matrix& viewProj);

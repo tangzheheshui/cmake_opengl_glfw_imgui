@@ -1,6 +1,5 @@
 #include "ShadowPass.h"
 #include "../scene.h"
-#include "../object/ImageRectangle.h"
 #include "../object/Line.h"
 #include "../object/Sky.h"
 #include "../model/model.h"
