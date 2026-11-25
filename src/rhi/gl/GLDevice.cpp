@@ -470,13 +470,75 @@ RenderTargetHandle GLDevice::createRenderTarget(const RenderTargetDesc& desc) {
 
     glGenFramebuffers(1, &rt.fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
+
+    // V3-22：MSAA——颜色改成多采样 renderbuffer，另建 resolve 纹理/FBO
+    const uint32_t wantSamples = desc.samples > 0 ? desc.samples : 1;
+    if (desc.hasColor && wantSamples > 1) {
+        GLint maxSamples = 0;
+        glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+        const GLsizei s = static_cast<GLsizei>(
+            std::min<uint32_t>(wantSamples, maxSamples > 0 ? static_cast<uint32_t>(maxSamples) : 1));
+        const GLenum internalFmt = static_cast<GLenum>(FormatInfo::of(desc.colorFormat).glInternalFormat());
+        glGenRenderbuffers(1, &rt.colorRbo);
+        glBindRenderbuffer(GL_RENDERBUFFER, rt.colorRbo);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, s, internalFmt, desc.width, desc.height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                  GL_RENDERBUFFER, rt.colorRbo);
+
+        TextureDesc td;
+        td.width  = desc.width;
+        td.height = desc.height;
+        td.format = desc.colorFormat;
+        td.usage  = TEX_SAMPLED | TEX_COLOR_ATTACHMENT;
+        td.sampler.wrapU = td.sampler.wrapV = td.sampler.wrapW = WrapMode::ClampToEdge;
+        rt.resolveTex = createTexture(td);
+        if (!rt.resolveTex.valid()) {
+            ENGINE_LOG_ERROR("[GL] MSAA RT resolve texture create failed");
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteRenderbuffers(1, &rt.colorRbo);
+            glDeleteFramebuffers(1, &rt.fbo);
+            return {};
+        }
+        glGenFramebuffers(1, &rt.resolveFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, rt.resolveFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, texture(rt.resolveTex).id, 0);
+        const GLenum resolveStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (resolveStatus != GL_FRAMEBUFFER_COMPLETE) {
+            ENGINE_LOG_ERROR("[GL] MSAA resolve FBO incomplete (0x%x)", resolveStatus);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            destroyTexture(rt.resolveTex);
+            glDeleteFramebuffers(1, &rt.resolveFbo);
+            glDeleteRenderbuffers(1, &rt.colorRbo);
+            glDeleteFramebuffers(1, &rt.fbo);
+            return {};
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, rt.fbo);
+        rt.multisample = true;
+        rt.samples = static_cast<uint32_t>(s);
+        ENGINE_LOG_INFO("[GL] MSAA RT %ux%u samples=%u", desc.width, desc.height, rt.samples);
+    }
+
     if (rt.colorTex.valid()) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, texture(rt.colorTex).id, 0);
     }
 
     if (desc.hasDepth) {
-        if (!desc.hasColor) {
+        if (rt.multisample) {
+            // V3-22：MSAA 深度用多采样 renderbuffer
+            GLint maxSamples = 0;
+            glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+            const GLsizei s = static_cast<GLsizei>(
+                std::min<uint32_t>(rt.samples, maxSamples > 0 ? static_cast<uint32_t>(maxSamples) : 1));
+            GLenum depthInternal = GL_DEPTH_COMPONENT32F;
+            if (desc.depthFormat == Format::D24S8) depthInternal = GL_DEPTH24_STENCIL8;
+            glGenRenderbuffers(1, &rt.depthRbo);
+            glBindRenderbuffer(GL_RENDERBUFFER, rt.depthRbo);
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, s, depthInternal, desc.width, desc.height);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                      GL_RENDERBUFFER, rt.depthRbo);
+        } else if (!desc.hasColor) {
             // V3-17：纯深度目标（阴影贴图）——深度用纹理，事后可采样
             TextureDesc dd;
             dd.width  = desc.width;
@@ -516,7 +578,10 @@ RenderTargetHandle GLDevice::createRenderTarget(const RenderTargetDesc& desc) {
         ENGINE_LOG_ERROR("[GL] createRenderTarget: incomplete FBO (0x%x)", status);
         if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
         if (rt.depthTex.valid()) destroyTexture(rt.depthTex);
-        if (rt.depthRbo) glDeleteRenderbuffers(1, &rt.depthRbo);
+        if (rt.resolveTex.valid()) destroyTexture(rt.resolveTex);
+        if (rt.depthRbo)  glDeleteRenderbuffers(1, &rt.depthRbo);
+        if (rt.colorRbo)  glDeleteRenderbuffers(1, &rt.colorRbo);
+        if (rt.resolveFbo) glDeleteFramebuffers(1, &rt.resolveFbo);
         glDeleteFramebuffers(1, &rt.fbo);
         return {};
     }
@@ -535,10 +600,13 @@ void GLDevice::destroyRenderTarget(RenderTargetHandle h) {
     if (rt.fbo) {
         if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
         if (rt.depthTex.valid()) destroyTexture(rt.depthTex);
-        GLuint fbo = rt.fbo, rbo = rt.depthRbo;
+        if (rt.resolveTex.valid()) destroyTexture(rt.resolveTex);
+        GLuint fbo = rt.fbo, rbo = rt.depthRbo, crbo = rt.colorRbo, rfbo = rt.resolveFbo;
         // FBO/RBO 同走延迟队列（Pass 可能仍在帧内引用）
-        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames, [fbo, rbo] {
-            if (rbo) glDeleteRenderbuffers(1, &rbo);
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames, [fbo, rbo, crbo, rfbo] {
+            if (rbo)  glDeleteRenderbuffers(1, &rbo);
+            if (crbo) glDeleteRenderbuffers(1, &crbo);
+            if (rfbo) glDeleteFramebuffers(1, &rfbo);
             glDeleteFramebuffers(1, &fbo);
         });
     }
@@ -552,7 +620,9 @@ TextureHandle GLDevice::renderTargetDepthTexture(RenderTargetHandle h) const {
 
 TextureHandle GLDevice::renderTargetColorTexture(RenderTargetHandle h) const {
     if (!_renderTargets.alive(h)) return {};
-    return _renderTargets.get(h.id).colorTex;
+    const GLRenderTarget& rt = _renderTargets.get(h.id);
+    // V3-22：MSAA 目标对外给 resolve 纹理（单采样、可采样）
+    return rt.multisample ? rt.resolveTex : rt.colorTex;
 }
 
 // B4：同步回读。glGetTexImage 直接把整级读出（mipLevel 参数原生支持），

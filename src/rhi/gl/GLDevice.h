@@ -47,6 +47,12 @@ struct GLRenderTarget {
     GLuint         fbo = 0;
     TextureHandle  colorTex;
     TextureHandle  depthTex;    // 可采样深度（纯深度目标/阴影贴图）
+    // V3-22：MSAA——颜色/深度用多采样 renderbuffer，Pass 结束 blit 到 resolveTex
+    GLuint         colorRbo   = 0;
+    GLuint         resolveFbo = 0;
+    TextureHandle  resolveTex;
+    uint32_t       samples    = 1;
+    bool           multisample = false;
     GLuint         depthRbo = 0;
     uint32_t       width  = 0;
     uint32_t       height = 0;

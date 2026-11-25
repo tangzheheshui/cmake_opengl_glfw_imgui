@@ -80,7 +80,9 @@ void GLCommandList::beginRenderPass(const RenderPassDesc& desc) {
     _inPass          = true;
     _formatMismatch  = false;
     // V3-15：主帧缓冲采样数来自设备；离屏 RT 暂不支持 MSAA（恒 1）
-    _passSamples     = desc.renderTarget.valid() ? 1 : _device->msaaSamples();
+    _passSamples     = desc.renderTarget.valid()
+                           ? _device->renderTarget(desc.renderTarget).samples
+                           : _device->msaaSamples();
 
     // B4：离屏 RenderTarget（RHI 资源 FBO）优先于 v1 遗留 FBO 直通
     if (desc.renderTarget.valid()) {
@@ -131,6 +133,18 @@ void GLCommandList::setScissor(int x, int y, int w, int h) {
 }
 
 void GLCommandList::endRenderPass() {
+    // V3-22：MSAA 离屏目标——Pass 结束 blit 到单采样 resolve 纹理
+    if (_inPass && _curRenderTarget.valid()) {
+        const GLRenderTarget& rt = _device->renderTarget(_curRenderTarget);
+        if (rt.multisample && rt.resolveFbo) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, rt.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rt.resolveFbo);
+            glBlitFramebuffer(0, 0, static_cast<GLint>(rt.width), static_cast<GLint>(rt.height),
+                              0, 0, static_cast<GLint>(rt.width), static_cast<GLint>(rt.height),
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+    }
     // B2：把本 Pass 内绑定过独立采样器的单元解绑（GL_SAMPLER_BINDING 也是
     // 全局状态），采样器不泄漏给 Pass 外的遗留 GL 代码——纹理对象上烘焙的
     // glTexParameteri 参数随即照常生效

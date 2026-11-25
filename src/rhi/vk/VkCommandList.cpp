@@ -134,12 +134,19 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
                                           ? _device->textureRes(rt.depthTex).view
                                           : rt.depthView;
 
+        // V3-22：MSAA RT——渲染进多采样附件，resolve 到单采样 colorTex
+        const bool msaaRt = (rt.samples > 1 && rt.msaaColorView != VK_NULL_HANDLE);
         VkRenderingAttachmentInfo colorAtt{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         if (hasColor) {
-            colorAtt.imageView   = _device->textureRes(rt.colorTex).view;
+            colorAtt.imageView   = msaaRt ? rt.msaaColorView : _device->textureRes(rt.colorTex).view;
             colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             colorAtt.loadOp      = desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-            colorAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAtt.storeOp     = msaaRt ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+            if (msaaRt) {
+                colorAtt.resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+                colorAtt.resolveImageView   = _device->textureRes(rt.colorTex).view;
+                colorAtt.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
             colorAtt.clearValue.color = {{ desc.clearColorValue[0], desc.clearColorValue[1],
                                            desc.clearColorValue[2], desc.clearColorValue[3] }};
         }
@@ -170,7 +177,7 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
         _inRenderPass    = true;
         _curRenderTarget = desc.renderTarget;
         recordPassFormats(hasColor, rt.colorFormat,
-                          depthView != VK_NULL_HANDLE, rt.depthFormat, 1);   // RT 暂不支持 MSAA
+                          depthView != VK_NULL_HANDLE, rt.depthFormat, rt.samples);
 
         // 与 swapchain 路径相同的负高度 viewport（B3a）+ scissor
         setViewport(0, static_cast<float>(extent.height),

@@ -127,6 +127,7 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
     rt.width = desc.width;
     rt.height = desc.height;
     rt.hasColor = desc.hasColor;
+    rt.samples = desc.samples > 0 ? desc.samples : 1;
     rt.colorFormat = desc.colorFormat;
     rt.depthFormat = desc.depthFormat;
 
@@ -143,6 +144,52 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
         if (!rt.colorTex.valid()) {
             return {};
         }
+    }
+
+    // V3-22：MSAA 颜色附件（不能直接采样），另建单采样 resolve 目标作为 colorTex
+    if (desc.hasColor && rt.samples > 1) {
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType     = VK_IMAGE_TYPE_2D;
+        ici.format        = static_cast<VkFormat>(FormatInfo::of(desc.colorFormat).vkFormat());
+        ici.extent        = {desc.width, desc.height, 1};
+        ici.mipLevels     = 1;
+        ici.arrayLayers   = 1;
+        ici.samples       = static_cast<VkSampleCountFlagBits>(rt.samples);
+        ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage         = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(_device, &ici, nullptr, &rt.msaaColorImage) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] MSAA RT color image create failed");
+            if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
+            return {};
+        }
+        VkMemoryRequirements req;
+        vkGetImageMemoryRequirements(_device, rt.msaaColorImage, &req);
+        rt.msaaColorMem = _memAlloc.alloc(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (!rt.msaaColorMem.valid() ||
+            vkBindImageMemory(_device, rt.msaaColorImage, rt.msaaColorMem.memory,
+                              rt.msaaColorMem.offset) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] MSAA RT color memory failed");
+            vkDestroyImage(_device, rt.msaaColorImage, nullptr);
+            rt.msaaColorImage = VK_NULL_HANDLE;
+            if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
+            return {};
+        }
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vci.image    = rt.msaaColorImage;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format   = ici.format;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(_device, &vci, nullptr, &rt.msaaColorView) != VK_SUCCESS) {
+            ENGINE_LOG_ERROR("[VK] MSAA RT color view create failed");
+            vkDestroyImage(_device, rt.msaaColorImage, nullptr);
+            _memAlloc.free(rt.msaaColorMem);
+            rt.msaaColorImage = VK_NULL_HANDLE;
+            if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
+            return {};
+        }
+        rt.msaaColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     }
 
     // 深度附件：纯深度目标（阴影贴图）走可采样纹理；普通 RT 保留独立 image
@@ -173,7 +220,8 @@ RenderTargetHandle VulkanDevice::createRenderTarget(const RenderTargetDesc& desc
         ici.extent        = {desc.width, desc.height, 1};
         ici.mipLevels     = 1;
         ici.arrayLayers   = 1;
-        ici.samples       = VK_SAMPLE_COUNT_1_BIT;
+        // V3-22：MSAA RT 的深度附件采样数必须与颜色一致
+        ici.samples       = static_cast<VkSampleCountFlagBits>(rt.samples);
         ici.tiling        = VK_IMAGE_TILING_OPTIMAL;
         ici.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
         ici.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
@@ -236,6 +284,17 @@ void VulkanDevice::destroyRenderTarget(RenderTargetHandle h) {
     VkRenderTargetRes& rt = _renderTargets.get(h.id);
     if (rt.colorTex.valid()) destroyTexture(rt.colorTex);
     if (rt.depthTex.valid()) destroyTexture(rt.depthTex);
+    if (rt.msaaColorImage || rt.msaaColorView) {
+        VkImage img = rt.msaaColorImage;
+        VkImageView view = rt.msaaColorView;
+        VkMemAlloc mem = rt.msaaColorMem;
+        _delQueue.push(_frameCount + detail::DeletionQueue::kLagFrames,
+                       [this, img, view, mem] {
+                           if (view) vkDestroyImageView(_device, view, nullptr);
+                           if (img)  vkDestroyImage(_device, img, nullptr);
+                           if (mem.valid()) _memAlloc.free(mem);
+                       });
+    }
     if (rt.depthView || rt.depthImage) {
         VkImageView view = rt.depthView;
         VkImage img = rt.depthImage;
@@ -371,6 +430,24 @@ void VulkanDevice::recordRenderTargetBeginBarriers(VkCommandBuffer cb, RenderTar
             t.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
     }
+    // V3-22：MSAA 颜色附件（每帧补同布局访问链；首帧从 UNDEFINED 转换）
+    if (r.msaaColorImage) {
+        VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        bar.srcAccessMask = (r.msaaColorLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                                ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        bar.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        bar.oldLayout = r.msaaColorLayout;
+        bar.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.image = r.msaaColorImage;
+        bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &bar);
+        r.msaaColorLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+
     // V3-17：可采样深度（阴影贴图）——SHADER_READ_ONLY / UNDEFINED → 深度附件
     if (r.depthTex.valid()) {
         VkTextureRes& t = _textures.get(r.depthTex.id);

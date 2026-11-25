@@ -121,9 +121,13 @@ private:
 
 	// V3-18：阴影 Pass——纯深度目标（1024²）+ 深度专用管线
 	rhi::PipelineHandle     m_shadowPipeline;
+	// MSAA RT 验证设施（RHI_RT_MSAA=<n>）：同款冒烟管线，采样数为 n
+	rhi::PipelineHandle     m_smokePipelineMsaa;
+	uint32_t                m_rtMsaaSamples = 1;
 	rhi::RenderTargetHandle m_shadowRT;
 	bool                    m_shadowInitTried = false;
 	void ensureShadowResources();
+	void recordSmokeTriangleWith(rhi::IRHICommandList* cmd, rhi::PipelineHandle pipeline);
 	void recordShadowPass(rhi::IRHICommandList* cmd);
 	rhi::TextureHandle m_shadowTex;
 	// V3-20：阴影接收面（VK 模式的地面；GL 模式仍用遗留 ImageRectangle）

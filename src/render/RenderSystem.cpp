@@ -147,6 +147,19 @@ void RenderSystem::createSmokeTriangle() {
     pipeDesc.blend       = { false };
     m_smokePipeline = m_rhiDevice->createPipeline(pipeDesc);
 
+    // MSAA RT 验证设施：RHI_RT_MSAA=<n> 时再建一条同款 n 采样管线
+    if (const char* e = std::getenv("RHI_RT_MSAA")) {
+        const uint32_t n = static_cast<uint32_t>(std::atoi(e));
+        if (n > 1) {
+            rhi::GraphicsPipelineDesc msaaDesc = pipeDesc;
+            msaaDesc.attachment.samples = n;
+            m_smokePipelineMsaa = m_rhiDevice->createPipeline(msaaDesc);
+            m_rtMsaaSamples = m_smokePipelineMsaa.valid() ? n : 1;
+            ENGINE_LOG_INFO("[RTTEST] MSAA pipeline samples=%u (%s)",
+                            n, m_smokePipelineMsaa.valid() ? "ok" : "failed");
+        }
+    }
+
     // B3c：顶点色是作者指定的 sRGB 值；sRGB 交换链写回时编码，故先转线性
     SmokeVertex smokeVerts[3];
     for (int i = 0; i < 3; ++i) {
@@ -509,6 +522,7 @@ void RenderSystem::runRenderTargetReadbackTest() {
         // （跨格式 RT 需要"管线格式集"，属 D5 显示模式阶段的管线变体工作）
         rtd.colorFormat = rhi::Format::BGRA8_SRGB;
         rtd.depthFormat = rhi::Format::Depth32F;
+        rtd.samples     = m_rtMsaaSamples;   // RHI_RT_MSAA 时 >1
         // 深度附件必须存在：冒烟管线开深度测试，Vulkan 要求 rendering
         // 提供兼容的深度附件（无深度附件 + 深度测试管线 = MoltenVK abort）
         rtd.hasDepth    = true;
@@ -527,7 +541,8 @@ void RenderSystem::runRenderTargetReadbackTest() {
         rp.clearColorValue[2] = 0.20f;
         rp.clearColorValue[3] = 1.0f;
         cmd->beginRenderPass(rp);
-        recordSmokeTriangle(cmd);
+        recordSmokeTriangleWith(cmd, m_rtMsaaSamples > 1 && m_smokePipelineMsaa.valid()
+                                         ? m_smokePipelineMsaa : m_smokePipeline);
         cmd->endRenderPass();
         if (_backend == rhi::Backend::OpenGL && !srgbWasOn) {
             glDisable(GL_FRAMEBUFFER_SRGB);
@@ -1100,10 +1115,14 @@ void RenderSystem::drawSmokeTriangle() {
 }
 
 void RenderSystem::recordSmokeTriangle(rhi::IRHICommandList* cmd) {
-    if (!cmd || !m_smokePipeline.valid() || !m_smokeVB.valid()) return;
+    recordSmokeTriangleWith(cmd, m_smokePipeline);
+}
+
+void RenderSystem::recordSmokeTriangleWith(rhi::IRHICommandList* cmd, rhi::PipelineHandle pipeline) {
+    if (!cmd || !pipeline.valid() || !m_smokeVB.valid()) return;
 
     cmd->pushDebugLabel("RHISmokeTriangle");
-    cmd->bindPipeline(m_smokePipeline);
+    cmd->bindPipeline(pipeline);
     cmd->setUniform("uMatrixMVP", rhi::UniformValue::fromMat4(kIdentityMat4));
     cmd->bindVertexBuffer(m_smokeVB);
     if (m_smokeIB.valid()) {

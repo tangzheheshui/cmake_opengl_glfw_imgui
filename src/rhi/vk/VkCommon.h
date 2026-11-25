@@ -73,8 +73,14 @@ struct VkTextureRes {
 // 采样/描述符/bindTexture 全部通用）；深度附件独立 image/view
 // （storeOp=DONT_CARE + 每次 begin CLEAR，跨 Pass 不保内容）。
 struct VkRenderTargetRes {
-    TextureHandle  colorTex;                            // 颜色附件（VkTextureRes）
+    TextureHandle  colorTex;                            // 颜色附件 / MSAA 的 resolve 目标
     TextureHandle  depthTex;                            // 可采样深度（纯深度目标用）
+    // V3-22：MSAA——多采样颜色附件（不能采样），渲染时 resolve 到 colorTex
+    VkImage        msaaColorImage = VK_NULL_HANDLE;
+    VkMemAlloc     msaaColorMem;
+    VkImageView    msaaColorView  = VK_NULL_HANDLE;
+    VkImageLayout  msaaColorLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    uint32_t       samples        = 1;
     bool           hasColor    = true;
     Format         colorFormat = Format::BGRA8_SRGB;    // 颜色附件格式（Pass 校验用）
     Format         depthFormat = Format::Depth32F;      // 深度附件格式（无深度时无效）

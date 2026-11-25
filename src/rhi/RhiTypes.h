@@ -281,6 +281,9 @@ struct RenderTargetDesc {
     Format   depthFormat = Format::Depth32F;
     uint32_t mipLevels   = 1;
     bool     sampleable  = true;   // 颜色附件可作纹理采样（缩略图/后处理）
+    // MSAA：>1 时颜色附件为多采样，渲染结束 resolve 到 colorTex（单采样可采样）。
+    // 使用该 RT 的管线必须声明相同的 samples，否则 Pass 报错并跳过绘制。
+    uint32_t samples     = 1;
 };
 
 // ---- 回读区域（v2；宽高为 0 = 全图。B4 实现，同步语义）----
