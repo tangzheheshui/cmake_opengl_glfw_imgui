@@ -1,0 +1,49 @@
+# ============================================================
+# ci.yml —— 构建门禁（F1 CI 基础版）
+#
+# 只做"能编过 + 分层检查过"：三平台 GL-only 构建。
+#  - 不跑 GPU 用例：CI 机器没有稳定显示/GPU，渲染回归仍走本地
+#    tools/rhi_gate.sh（见 docs/6）
+#  - Vulkan 后端需要 SDK，暂不在 CI 里装（另一台机器的 F1 门禁覆盖 VK）
+# ============================================================
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-gl:
+    name: ${{ matrix.os }} (GL-only)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux：GLFW 源码编译需要 X11 头文件
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev ninja-build
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENGINE_WITH_VULKAN=OFF
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build-ci --config Debug -j 4
+
+      - name: Layer check
+        run: cmake --build build-ci --target check_layers
