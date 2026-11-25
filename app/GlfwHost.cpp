@@ -180,7 +180,10 @@ bool GlfwHost::initImGui(bool useVulkan) {
             if (std::filesystem::exists(f)) {
                 ImFont* font = ImGui::GetIO().Fonts->AddFontFromFileTTF(
                     f, 17.0f, nullptr,
-                    ImGui::GetIO().Fonts->GetGlyphRangesChineseSimplifiedCommon());
+                    // 全 CJK 范围：GetGlyphRangesChineseSimplifiedCommon 只有 2500
+                    // 常用字，"渲"/"帧"等字缺失会显示成 ?。全范围代价是图集略大，
+                    // 对 demo 无所谓。
+                    ImGui::GetIO().Fonts->GetGlyphRangesChineseFull());
                 if (font) {
                     std::printf("[UI] CJK font loaded: %s\n", f);
                     fontLoaded = true;
