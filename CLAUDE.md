@@ -61,7 +61,9 @@ powershell -ExecutionPolicy Bypass -File scripts/package_win.ps1   # Windows：d
 DYLD_LIBRARY_PATH=/opt/homebrew/lib RHI_BACKEND=vulkan ./build/app/Debug/my_app
 
 # 环境变量
-#   RHI_BACKEND = opengl(默认) | vulkan
+#   RHI_BACKEND = opengl(默认) | vulkan（环境变量；优先级最高）
+#   backend.cfg  = vulkan | opengl（调试面板「启动后端」下拉框写入；重启生效，
+#                  优先级低于 RHI_BACKEND 环境变量；文件已 gitignore）
 #   RHI_SMOKE   = 1 强制显示 RHI 冒烟三角形（无 UI 场景验证用）
 #   RHI_PROBE   = 1 第 30 帧回读屏幕中心像素打印（渲染链路验证）
 #   RHI_ASYNC_DEMO = 1 后台预解析 duck.dae（E5 流式加载验证；VK 生效，GL 同步退化）

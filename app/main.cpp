@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #include "imgui.h"
@@ -39,9 +40,18 @@ int main() {
     }
 
     // ---- 后端选择（宿主职责；引擎不读环境变量）----
+    // 后端选择优先级：环境变量 RHI_BACKEND > backend.cfg（界面写入）> 默认 OpenGL
     bool useVulkan = false;
-    if (const char* b = std::getenv("RHI_BACKEND")) {
-        useVulkan = (std::strcmp(b, "vulkan") == 0 || std::strcmp(b, "VULKAN") == 0);
+    const char* envBackend = std::getenv("RHI_BACKEND");
+    if (envBackend) {
+        useVulkan = (std::strcmp(envBackend, "vulkan") == 0
+                     || std::strcmp(envBackend, "VULKAN") == 0);
+    } else {
+        std::ifstream cfg("backend.cfg");
+        std::string pref;
+        if (cfg >> pref) {
+            useVulkan = (pref == "vulkan" || pref == "VULKAN");
+        }
     }
 #if !ENGINE_HAS_VULKAN
     if (useVulkan) {
