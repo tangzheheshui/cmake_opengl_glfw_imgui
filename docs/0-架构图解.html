@@ -3,484 +3,951 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>架构图解：一个立方体怎么到屏幕上 · cmake_opengl_glfw_imgui</title>
+<title>架构图解：四层，一堵墙 · cmake_opengl_glfw_imgui</title>
 <style>
 :root{
   --bg:#0b0e13; --panel:#12161d; --panel2:#161c25;
   --line:#202733; --line2:#2b3441;
   --tx:#c9d1db; --tx2:#8b95a3; --tx3:#5e6876;
-  --l1:#8ecae6; --l2:#3ddc97; --l3:#f0b429; --l4:#4cc2ff; --l5:#a98bff; --l6:#ff8f6b;
+  --l1:#8ecae6; --l2:#3ddc97; --l3:#f0b429; --l4:#4cc2ff; --lv:#a98bff; --lr:#ff8f6b;
   --mono:"Cascadia Code","JetBrains Mono",Consolas,monospace;
   --sans:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:15.5px;line-height:1.8}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:15px;line-height:1.75}
 body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
   background:radial-gradient(900px 500px at 8% -10%,rgba(76,194,255,.07),transparent 62%),
              radial-gradient(700px 420px at 96% 2%,rgba(61,220,151,.05),transparent 62%)}
-.wrap{max-width:1080px;margin:0 auto;padding:0 26px 110px;position:relative;z-index:1}
+.wrap{max-width:1000px;margin:0 auto;padding:0 24px 90px;position:relative;z-index:1}
 
-nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:rgba(11,14,19,.86);border-bottom:1px solid var(--line)}
-.nav-in{max-width:1080px;margin:0 auto;padding:11px 26px;display:flex;gap:5px;flex-wrap:wrap;align-items:center}
-.nav-brand{font-family:var(--mono);font-size:12.5px;color:var(--tx2);margin-right:auto}
-.nav-brand b{color:var(--l2)}
-nav a{font-size:12.5px;color:var(--tx2);text-decoration:none;padding:4px 9px;border-radius:6px;border:1px solid transparent;transition:.16s;white-space:nowrap}
-nav a:hover{color:var(--tx);background:var(--panel);border-color:var(--line2)}
-
-header{padding:54px 0 30px;border-bottom:1px solid var(--line)}
-.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3);margin-bottom:14px}
-h1{font-size:34px;line-height:1.32;font-weight:650;letter-spacing:-.5px}
+header{padding:36px 0 16px}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--tx3);margin-bottom:10px}
+h1{font-size:27px;line-height:1.35;font-weight:650;letter-spacing:-.4px}
 h1 span{color:var(--l2)}
-.sub{margin-top:16px;font-size:16px;color:var(--tx2);max-width:760px}
-.meta{margin-top:22px;display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;color:var(--tx3)}
-.meta b{color:var(--tx2);font-weight:500}
+.sub{margin-top:9px;font-size:14.5px;color:var(--tx2);max-width:760px}
 
-main{padding-top:8px}
-section{padding:46px 0;border-bottom:1px solid var(--line)}
-.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:8px}
-.sec-num{font-family:var(--mono);font-size:12px;padding:2px 8px;border-radius:5px;border:1px solid var(--line2);color:var(--tx2);flex:none}
-.sec-title{font-size:23px;font-weight:600;letter-spacing:-.2px}
-.lead{color:var(--tx2);margin:10px 0 22px;max-width:820px}
-p{margin:0 0 14px}
+/* 标签栏 */
+.tabs{position:sticky;top:0;z-index:60;display:flex;gap:6px;overflow-x:auto;padding:9px 0;
+  background:rgba(11,14,19,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.tab{flex:none;cursor:pointer;font-family:var(--mono);font-size:12.5px;color:var(--tx2);
+  background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 12px;transition:.15s}
+.tab:hover{color:var(--tx);border-color:var(--line2)}
+.tab.on{color:#0b0e13;font-weight:700;background:var(--l2);border-color:transparent}
+
+/* 面板 */
+.panel{display:none;padding:24px 0 10px}
+.panel.on{display:block}
+.pan-head{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+.pnum{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:5px;border:1px solid var(--line2);color:var(--tx2);flex:none}
+.ptitle{font-size:21px;font-weight:600;letter-spacing:-.2px}
+.lead{color:var(--tx2);margin:8px 0 14px;max-width:820px}
+p{margin:0 0 11px}
 b{color:#e6ecf4}
-code{font-family:var(--mono);font-size:.9em;background:#0e131a;border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cfe3f2;white-space:nowrap}
+code{font-family:var(--mono);font-size:.88em;background:#0e131a;border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:#cfe3f2;white-space:nowrap}
 
-/* 层深度指示 */
-.depth{display:flex;gap:4px;margin:16px 0 22px}
-.depth span{flex:1;text-align:center;font-size:11px;font-family:var(--mono);color:var(--tx3);background:var(--panel);
-  border:1px solid var(--line);border-radius:5px;padding:5px 0;transition:.2s}
-.depth span.on{color:#0b0e13;font-weight:700;border-color:transparent}
+/* 堆栈 */
+.stack{display:flex;flex-direction:column;gap:6px;margin:14px 0}
+.lay{display:grid;grid-template-columns:54px 1fr 280px;gap:12px;align-items:center;
+  padding:10px 13px;border-radius:8px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--c)}
+.lnum{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--c)}
+.lname{font-size:14.5px;font-weight:600}
+.lduty{font-size:13px;color:var(--tx2)}
+.lout{font-family:var(--mono);font-size:11px;color:var(--tx3);border-left:1px solid var(--line2);padding-left:11px;line-height:1.55}
+.l1{--c:var(--l1)} .l2{--c:var(--l2)} .l3{--c:var(--l3)} .l4{--c:var(--l4)}
+.lay.wall{margin-left:60px;background:transparent;border:1px dashed var(--line2);border-left:1px dashed var(--line2)}
+.lay.wall .lnum{color:var(--tx3);font-weight:400}
+.lay.wall .lname{color:var(--tx2);font-weight:500}
+.lay.wall .lduty{color:var(--tx3)}
+.lay.base{--c:var(--tx3);background:rgba(22,28,37,.5)}
+@media(max-width:800px){.lay{grid-template-columns:48px 1fr;margin-left:0!important}
+  .lout{grid-column:1/-1;border-left:none;border-top:1px solid var(--line2);padding:6px 0 0}}
 
-/* 六层堆栈 */
-.stack{margin:26px 0 10px;display:flex;flex-direction:column;gap:7px}
-.lay{display:grid;grid-template-columns:52px 1fr 320px;gap:14px;align-items:center;
-  padding:12px 15px;border-radius:9px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--c)}
-.lay .lnum{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--c)}
-.lay .lname{font-size:15px;font-weight:600;margin-bottom:2px}
-.lay .lduty{font-size:13.5px;color:var(--tx2)}
-.lay .lout{font-family:var(--mono);font-size:11.5px;color:var(--tx3);border-left:1px solid var(--line2);padding-left:12px;line-height:1.6}
-.l1{--c:var(--l1);margin-left:0}
-.l2{--c:var(--l2);margin-left:18px}
-.l3{--c:var(--l3);margin-left:36px}
-.l4{--c:var(--l4);margin-left:54px}
-.l5{--c:var(--l5);margin-left:72px}
-.l6{--c:var(--l6);margin-left:90px}
-@media(max-width:820px){
-  .lay{grid-template-columns:44px 1fr;margin-left:0 !important}
-  .lay .lout{grid-column:1 / -1;border-left:none;border-top:1px solid var(--line2);padding:8px 0 0}
-}
+/* 四格 */
+.peel{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:13px 0}
+.pcell{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.plab{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx3);margin-bottom:5px}
+.ptxt{font-size:13px;line-height:1.65}
+.pcell:nth-child(1){border-top:2px solid var(--l1)}
+.pcell:nth-child(2){border-top:2px solid var(--l2)}
+.pcell:nth-child(3){border-top:2px solid var(--l3)}
+.pcell:nth-child(4){border-top:2px solid var(--lr)}
+@media(max-width:760px){.peel{grid-template-columns:1fr 1fr}}
 
-/* 剥层四格 */
-.peel{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0 18px}
-.pcell{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:13px 15px}
-.plab{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx3);margin-bottom:6px}
-.ptxt{font-size:14px;color:var(--tx);line-height:1.72}
-.ptxt code{font-size:12.5px}
-.peel .pcell:nth-child(1){border-left:2px solid var(--l1)}
-.peel .pcell:nth-child(2){border-left:2px solid var(--l2)}
-.peel .pcell:nth-child(3){border-left:2px solid var(--l3)}
-.peel .pcell:nth-child(4){border-left:2px solid var(--l6)}
-@media(max-width:760px){.peel{grid-template-columns:1fr}}
+/* 名册 */
+.roster{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin:13px 0;padding:11px;
+  border-radius:9px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--c,var(--line2))}
+.rc{background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:9px 11px}
+.rh{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx3);margin-bottom:6px}
+.rc ul{margin:0;padding-left:15px;font-size:12.5px;line-height:1.7}
+.rc li{margin-bottom:5px}
+@media(max-width:800px){.roster{grid-template-columns:1fr}}
 
-/* 提示块 */
-.note,.warn{border-radius:9px;padding:14px 17px;margin:18px 0;font-size:14px;line-height:1.75}
+/* 链 */
+.chain{margin:13px 0;display:flex;flex-direction:column;gap:7px}
+.cg{display:flex;gap:11px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px}
+.cn{font-family:var(--mono);font-size:11px;color:var(--tx3);border:1px solid var(--line2);border-radius:4px;padding:1px 7px;flex:none;margin-top:2px}
+.cb{font-size:13px;line-height:1.7}
+.tag{font-family:var(--mono);font-size:11.5px;color:var(--l2);border:1px solid var(--line2);border-radius:4px;padding:0 6px;margin-right:8px;white-space:nowrap}
+
+/* 折叠块 */
+details{margin:11px 0;border:1px solid var(--line);border-radius:9px;background:var(--panel);overflow:hidden}
+details summary{cursor:pointer;padding:10px 14px;font-size:14px;font-weight:600;color:#e6ecf4;list-style:none;display:flex;align-items:center;gap:8px}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:"\25B8";font-family:var(--mono);color:var(--tx3);transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg);color:var(--l2)}
+details summary .sm{font-family:var(--mono);font-size:11px;color:var(--tx3);font-weight:400;margin-left:auto}
+details .body{padding:2px 14px 14px;border-top:1px solid var(--line)}
+
+/* 提示 */
+.note,.warn{border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13.5px;line-height:1.7}
 .note{background:rgba(240,180,41,.06);border:1px solid rgba(240,180,41,.25);border-left:3px solid var(--l3)}
-.warn{background:rgba(255,143,107,.06);border:1px solid rgba(255,143,107,.22);border-left:3px solid var(--l6)}
-.note .nl,.warn .nl{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx3);display:block;margin-bottom:5px}
+.warn{background:rgba(255,143,107,.06);border:1px solid rgba(255,143,107,.22);border-left:3px solid var(--lr)}
+.note .nl,.warn .nl{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tx3);display:block;margin-bottom:4px}
 
-/* 代码示意 */
-pre{background:#0a0e14;border:1px solid var(--line);border-radius:9px;padding:15px 17px;overflow-x:auto;
-  font-family:var(--mono);font-size:13px;line-height:1.85;color:#b9c7d6;margin:16px 0}
+pre{background:#0a0e14;border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;
+  font-family:var(--mono);font-size:12.5px;line-height:1.8;color:#b9c7d6;margin:11px 0}
 pre .c{color:#4d5c6e}
-pre .k{color:#a98bff}
-pre .s{color:#8ecae6}
-pre .f{color:#3ddc97}
+pre .k{color:var(--lv)}
 
-/* 对照 */
-.two{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:18px 0}
-.col{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:14px 16px}
-.col .ch{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:9px}
-.vk .ch{color:var(--l5)}
-.gl .ch{color:var(--l2)}
-.col ol,.col ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--tx);line-height:1.78}
-.col li{margin-bottom:7px}
+table{width:100%;border-collapse:collapse;margin:11px 0;font-size:13px}
+th{text-align:left;font-weight:600;font-size:10.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:var(--tx3);padding:7px 10px;border-bottom:1px solid var(--line2)}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{font-family:var(--mono);font-size:11.5px;color:var(--tx2)}
+tr:last-child td{border-bottom:none}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:11px 0}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:11px 13px}
+.ch{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px}
+.vk .ch{color:var(--lv)} .gl .ch{color:var(--l2)}
+.col ol{margin:0;padding-left:17px;font-size:12.5px;line-height:1.72}
+.col li{margin-bottom:5px}
 @media(max-width:760px){.two{grid-template-columns:1fr}}
 
-/* 调用序列 */
-.seq{list-style:none;margin:18px 0;counter-reset:q}
-.seq li{counter-increment:q;position:relative;padding:9px 0 9px 40px;border-bottom:1px dashed var(--line);font-size:14px}
-.seq li::before{content:counter(q,decimal-leading-zero);position:absolute;left:0;top:9px;
-  font-family:var(--mono);font-size:11px;color:var(--tx3);background:var(--panel);border:1px solid var(--line);
-  border-radius:4px;padding:1px 6px}
+.seq{list-style:none;margin:11px 0;counter-reset:q}
+.seq li{counter-increment:q;position:relative;padding:7px 0 7px 36px;border-bottom:1px dashed var(--line);font-size:13px}
+.seq li::before{content:counter(q,decimal-leading-zero);position:absolute;left:0;top:7px;
+  font-family:var(--mono);font-size:10.5px;color:var(--tx3);background:var(--panel);border:1px solid var(--line);
+  border-radius:4px;padding:0 5px}
 .seq li.end{border-bottom:none}
-.seq code{background:none;border:none;padding:0;color:#bda9ff;font-size:13px}
-.seq .why{display:block;font-size:12.5px;color:var(--tx3);margin-top:2px}
+.seq code{background:none;border:none;padding:0;color:#bda9ff;font-size:12.5px}
+.seq .why{display:block;font-size:11.5px;color:var(--tx3)}
 
-/* 表 */
-table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
-th{text-align:left;font-weight:600;font-size:11.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  color:var(--tx3);padding:8px 12px;border-bottom:1px solid var(--line2)}
-td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--tx)}
-td:first-child{font-family:var(--mono);font-size:12px;color:var(--tx2);white-space:nowrap}
-tr:last-child td{border-bottom:none}
-td em{font-style:normal;color:var(--l6)}
+/* 目录 */
+.toc{margin:14px 0;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--panel)}
+.trow{display:grid;grid-template-columns:44px 148px 1fr;gap:12px;align-items:baseline;
+  padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--line);transition:.12s}
+.trow:last-child{border-bottom:none}
+.trow:hover{background:var(--panel2)}
+.tnum{font-family:var(--mono);font-size:11px;color:var(--tx3)}
+.tname{font-size:14px;font-weight:600}
+.tdesc{font-size:12.5px;color:var(--tx2);line-height:1.6}
+@media(max-width:760px){.trow{grid-template-columns:36px 1fr}.tdesc{grid-column:1/-1;padding-left:0}}
 
-/* 回程 */
-.go{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:22px 0}
-.gs{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:14px 13px;text-align:center}
-.gs .gn{font-family:var(--mono);font-size:11px;color:var(--tx3)}
-.gs .gt{font-size:15px;font-weight:600;margin:5px 0 4px}
-.gs .gd{font-size:12.5px;color:var(--tx2);line-height:1.6}
-.gs.down{border-top:2px solid var(--l4)}
-.gs.up{border-top:2px solid var(--l2)}
-@media(max-width:760px){.go{grid-template-columns:1fr 1fr}}
+/* 章内索引 */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}
+.chip{font-family:var(--mono);font-size:11.5px;color:var(--tx2);background:var(--panel);
+  border:1px solid var(--line);border-radius:20px;padding:3px 11px;cursor:pointer;transition:.12s}
+.chip:hover{color:#e6ecf4;border-color:var(--line2)}
+.fgrp{padding:14px 0 2px;scroll-margin-top:64px}
+.fg-h{font-size:15.5px;font-weight:600;margin-bottom:6px}
+.fg-h code{font-size:12px;margin-left:2px}
 
-footer{padding:40px 0 0;color:var(--tx3);font-size:13px;font-family:var(--mono)}
+.foot{padding:26px 0 0;color:var(--tx3);font-size:12px;font-family:var(--mono);border-top:1px solid var(--line)}
 </style>
 </head>
 <body>
-
-<nav>
-  <div class="nav-in">
-    <div class="nav-brand">cmake_opengl_glfw_imgui · <b>架构图解</b></div>
-    <a href="#s0">全景</a>
-    <a href="#s1">L1 宿主</a>
-    <a href="#s2">L2 编排</a>
-    <a href="#s3">L3 契约</a>
-    <a href="#s4">L4 后端</a>
-    <a href="#s5">L5 驱动</a>
-    <a href="#s6">L6 同步</a>
-    <a href="#s7">回程</a>
-    <a href="#s8">切片</a>
-    <a href="#s9">边界</a>
-  </div>
-</nav>
-
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">渲染引擎 · 分层详解</div>
-  <h1>一个立方体<br>是怎么<span>到屏幕上</span>的</h1>
-  <div class="sub">中间隔了六层。这一份从最外面开始，一层一层往里剥：每层只接收一件事、只决定一件事、只往下交一件事。剥到最里面的时候，你就已经在写 <code>vkCmdDrawIndexed</code> 了。</div>
-  <div class="meta">
-    <span><b>依据</b> 当前仓库代码</span>
-    <span><b>引用</b> 文件 + 符号名，不写行号</span>
-    <span><b>读法</b> 从上往下，别跳</span>
-  </div>
+  <div class="eyebrow">渲染引擎 · 分层</div>
+  <h1>一个立方体怎么<span>到屏幕上</span></h1>
+  <div class="sub">四层楼，一堵墙。点上面的标签逐层看——每层只接收一件事，只往下交一件事。</div>
 </header>
 
-<main>
+<div class="tabs">
+  <button class="tab on" data-p="toc">目录</button>
+  <button class="tab" data-p="p0">全景</button>
+  <button class="tab" data-p="p1">L1 应用</button>
+  <button class="tab" data-p="p2">L2 渲染系统</button>
+  <button class="tab" data-p="p3">L3 RHI 抽象</button>
+  <button class="tab" data-p="p4">L4 RHI 实现</button>
+  <button class="tab" data-p="p5">创建链</button>
+  <button class="tab" data-p="pdev">设备参数</button>
+  <button class="tab" data-p="p6">墙外</button>
+  <button class="tab" data-p="p7">排错</button>
+</div>
 
-<section id="s0">
-  <div class="sec-head"><span class="sec-num">00</span><span class="sec-title">先看全景：六层，一根竖线</span></div>
-  <p class="lead">不要先看目录式的功能清单。先记住这个堆栈的形状——它决定了后面所有代码为什么长那样。</p>
+<!-- ============ 目录 ============ -->
+<div class="panel on" id="toc">
+  <div class="pan-head"><span class="pnum">目录</span><span class="ptitle">九章，从上往下读一遍就是一条完整的链</span></div>
+  <p class="lead">点任意一行直接跳过去。前三章回答“有几层”，中间三章回答“每层干什么”，后三章回答“参数和命令怎么落到 GPU”。</p>
+
+  <div class="toc">
+    <div class="trow" data-p="p0"><div class="tnum">01</div><div class="tname">全景</div><div class="tdesc">四层楼 + 一堵墙 + 一个基座；为什么墙不是层；名册（含 / 持 / 不含）；依赖矩阵与三处越界</div></div>
+    <div class="trow" data-p="p1"><div class="tnum">02</div><div class="tname">L1 应用层</div><div class="tdesc">只填一张 DeviceDesc 的宿主；main 九步；关闭顺序为什么是这个反序</div></div>
+    <div class="trow" data-p="p2"><div class="tnum">03</div><div class="tname">L2 渲染系统</div><div class="tdesc">设备的真主人；一帧的形状（beginFrame 为什么返回 bool）；谁排四个 pass</div></div>
+    <div class="trow" data-p="p3"><div class="tnum">04</div><div class="tname">L3 RHI 抽象层</div><div class="tdesc">6 个句柄 + 8 个 Desc + 15 条方法；HandleTable 的 gen；两条写不进类型里的硬规则</div></div>
+    <div class="trow" data-p="p4"><div class="tnum">05</div><div class="tname">L4 RHI 实现</div><div class="tdesc">同一句 bindTexture 的两种落法；四个时刻（fence / renderDone / 延迟两帧 / layout）；GL 习惯在 VK 上为什么是错的</div></div>
+    <div class="trow" data-p="p5"><div class="tnum">06</div><div class="tname">创建链</div><div class="tdesc">L1 填表 → L2 建 device → L3 工厂选子类 → L2 create* → L4 vkCreate*；参数逐层放大，句柄逐层缩回</div></div>
+    <div class="trow" data-p="pdev"><div class="tnum">07</div><div class="tname">设备参数</div><div class="tdesc">11 个字段逐个追到底：window 的四样东西分别被谁用；三个 VK 逃生口与所有权规则；两个没人读的字段</div></div>
+    <div class="trow" data-p="p6"><div class="tnum">08</div><div class="tname">墙外</div><div class="tdesc">一帧 13 步 API 调用；真正算我们写的只有三样；三个症状九成在这边</div></div>
+    <div class="trow" data-p="p7"><div class="tnum">09</div><div class="tname">排错</div><div class="tdesc">症状对层；五个 RHI_* 开关从粗到细；最后一条最有用的自测</div></div>
+  </div>
+
+  <div class="note">
+    <span class="nl">读法</span>
+    <b>只看全景</b>就能对外讲清这个引擎的分层；<b>加看创建链 + 设备参数</b>就能上手改代码；<b>墙外 + 排错</b>是出问题时的索引，不用先读。
+  </div>
+</div>
+
+<!-- ============ 全景 ============ -->
+<div class="panel" id="p0">
+  <div class="pan-head"><span class="pnum">01</span><span class="ptitle">全景：四层 + 一堵墙 + 一个基座</span></div>
 
   <div class="stack">
-    <div class="lay l1">
-      <div class="lnum">L1</div>
-      <div><div class="lname">宿主 · <code>app/</code></div><div class="lduty">我有一扇窗，一双手。我决定什么时候画下一帧。</div></div>
-      <div class="lout">交出：一个 device 指针 + 一个 overlay 回调</div>
-    </div>
-    <div class="lay l2">
-      <div class="lnum">L2</div>
-      <div><div class="lname">编排 · <code>src/render/</code></div><div class="lduty">我决定这帧画几个 pass、每个 pass 画什么。</div></div>
-      <div class="lout">交出：一串绘制意图（目标+管线+流+纹理+矩阵）</div>
-    </div>
-    <div class="lay l3">
-      <div class="lnum">L3</div>
-      <div><div class="lname">契约 · <code>src/rhi/*.h</code></div><div class="lduty">我只做翻译：物体 → 句柄，「画」→ 命令。</div></div>
-      <div class="lout">交出：6 个句柄 + 8 个 Desc + 15 条录制方法</div>
-    </div>
-    <div class="lay l4">
-      <div class="lnum">L4</div>
-      <div><div class="lname">后端 · <code>src/rhi/vk</code> <code>src/rhi/gl</code></div><div class="lduty">我把参数翻成真实调用。一套接口，两套实现。</div></div>
-      <div class="lout">交出：vk* 或 gl* 函数调用</div>
-    </div>
-    <div class="lay l5">
-      <div class="lnum">L5</div>
-      <div><div class="lname">驱动 API</div><div class="lduty">我按你给的顺序执行。我不猜你的意图。</div></div>
-      <div class="lout">交出：GPU 命令流</div>
-    </div>
-    <div class="lay l6">
-      <div class="lnum">L6</div>
-      <div><div class="lname">同步与显存</div><div class="lduty">我只管谁还在用、什么时候能复用。</div></div>
-      <div class="lout">交出：一帧像素</div>
-    </div>
+    <div class="lay l1"><div class="lnum">L1</div>
+      <div><div class="lname">应用层 Application · <code>app/</code></div><div class="lduty">窗口、UI、帧的起止。只填一张 DeviceDesc。</div></div>
+      <div class="lout">交给 L2：DeviceDesc + 每帧一次 renderFrame()</div></div>
+    <div class="lay l2"><div class="lnum">L2</div>
+      <div><div class="lname">渲染系统 Rendering System · <code>src/render/</code></div><div class="lduty">建 device，排一帧四个 pass，决定画什么。</div></div>
+      <div class="lout">交给 L3：create* 的 Desc 与 draw 参数</div></div>
+    <div class="lay l3"><div class="lnum">L3</div>
+      <div><div class="lname">RHI 抽象层 · <code>src/rhi/*.h</code></div><div class="lduty">物体 → 句柄，「画」→ 命令录制。零状态。</div></div>
+      <div class="lout">交给 L4：6 句柄 + 8 Desc + 15 条方法</div></div>
+    <div class="lay l4"><div class="lnum">L4</div>
+      <div><div class="lname">RHI 实现 · <code>src/rhi/vk</code> <code>src/rhi/gl</code></div><div class="lduty">把参数翻成 vk* / gl*。一套接口，两套实现。</div></div>
+      <div class="lout">穿过墙：vk*/gl* 调用</div></div>
+    <div class="lay wall"><div class="lnum">墙外</div>
+      <div><div class="lname">图形 API / 驱动</div><div class="lduty">别人的代码，我们不写。只按顺序调它。</div></div>
+      <div class="lout">产出：GPU 命令流 → 像素</div></div>
+    <div class="lay base"><div class="lnum">基座</div>
+      <div><div class="lname">core · <code>src/core/</code></div><div class="lduty">log / math / fs / color / debug / taskQueue。</div></div>
+      <div class="lout">谁都能依赖我，我不依赖谁</div></div>
   </div>
 
   <div class="note">
-    <span class="nl">贯穿全篇的一条线</span>
-    每一层干的事都是同一件：<b>收窄 + 翻译</b>。上层给的是「意思」，下层收的是「参数」。所以判断分层对不对，只看一句：<b>这一层能不能在不知道下一层存在的情况下把自己的活干完</b>。能，就对了。
+    <span class="nl">为什么只有四层</span>
+    一个层要能被指认：<b>有目录、有类族、有 include 边、有生命周期</b>。<b>图形 API</b> 在仓库里 0 文件 0 边 → 是墙；<b>同步</b> 0 目录 0 类 → 是纪律（在 L4 的四个时刻里）。
   </div>
 
-  <p>下面的顺序就是往下剥的顺序。每一节的标题都是一个「这一层在做什么」。你随时可以回来看这个堆栈——每节开头也有一排小方块告诉你现在在第几层。</p>
-</section>
+  <details>
+    <summary>名册：包含 / 持有 / 不包含<span class="sm">6 行</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>层</th><th>包含</th><th>持久持有</th><th>不包含</th></tr>
+        <tr><td>L1 app/</td><td><code>GlfwHost</code>、<code>main.cpp</code>、<code>SceneDemo</code>、<code>DebugPanel</code></td><td>窗口、<code>_deviceDesc</code>、ImGui 上下文与 pool</td><td><b>device 本体</b>、Pass、句柄、<code>vk*</code>/<code>gl*</code></td></tr>
+        <tr><td>L2 render/</td><td><code>RenderSystem</code>、<code>RenderContext</code>、<code>Scene</code>、<code>TextureMng</code>、<code>FontManager</code>、4 个 Pass、<code>Model</code>/<code>Mesh</code>/<code>Light</code>/<code>camera</code>、<code>Line</code>/<code>Sky</code>/<code>Text</code></td><td><code>m_ownedDevice</code>（<code>unique_ptr</code>）、5 个 <code>shared_ptr</code>、十来个句柄</td><td>资源实体（只有句柄）、app / imgui / GLFW</td></tr>
+        <tr><td>L3 rhi/*.h</td><td><code>IRHIDevice</code>、<code>IRHICommandList</code>、<code>RhiTypes</code>、<code>RHIFactory</code>、<code>HandleTable</code>、<code>DeletionQueue</code>、<code>FrameUniformRing</code></td><td>接口零状态；工具持槽位表与待删闭包</td><td><code>Vk*</code>/<code>GLuint</code>（<code>FrameUniformRing</code> 一处例外）</td></tr>
+        <tr><td>L4 rhi/vk·gl</td><td>VK 九模块 + <code>VkDeviceInit</code>；GL 三个</td><td>instance→surface→swapchain→fence→描述符池→内存分配器</td><td>render 任何类型、GLFW、imgui</td></tr>
+        <tr><td>墙外</td><td><b>没有文件</b>。只写三样：函数指针表、SPIR-V 构建期编译、能力探测</td><td><code>_vkBeginRendering</code>/<code>_vkEndRendering</code>、<code>GLProgram</code> 的 location</td><td>我们自己的 GPU 命令</td></tr>
+        <tr><td>基座 core/</td><td><code>log</code>/<code>math</code>/<code>fs</code>/<code>color</code>/<code>debug</code>/<code>taskQueue</code></td><td>几乎零状态</td><td>rhi / render / app（门禁强制）</td></tr>
+      </table>
+    </div>
+  </details>
 
-<section id="s1">
-  <div class="sec-head"><span class="sec-num">L1</span><span class="sec-title">宿主层：我有一扇窗，一双手</span></div>
-  <div class="depth"><span class="on" style="background:var(--l1)">宿主</span><span>编排</span><span>契约</span><span>后端</span><span>驱动</span><span>同步</span></div>
+  <details>
+    <summary>依赖：箭头只能朝下<span class="sm">include 边</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>谁 ↓ 能 include →</th><th>app/</th><th>render/</th><th>rhi/</th><th>core/</th><th>GLFW·imgui</th></tr>
+        <tr><td>app/</td><td>—</td><td>✔</td><td>✔</td><td>✔</td><td>✔ 只有这里</td></tr>
+        <tr><td>render/</td><td>✘</td><td>—</td><td>✔</td><td>✔</td><td>✘ 门禁拦</td></tr>
+        <tr><td>rhi/</td><td>✘</td><td>✘</td><td>—</td><td>✔</td><td>✘ 门禁拦</td></tr>
+        <tr><td>core/</td><td>✘</td><td>✘</td><td>✘</td><td>—</td><td>✘</td></tr>
+      </table>
+      <p>实测：<code>render→rhi</code> 13 文件 · <code>rhi→core</code> 11 文件 · <code>app→rhi</code> 4 文件 · <code>rhi→render</code> <b>1 文件</b>（<code>GLCommandList.cpp</code> → <code>render/DrawUniforms.h</code>，门禁唯一例外）。</p>
+      <p>门禁 <code>tools/check_layers.cmake</code> 扫四个目录的 include 行，再查 <code>engine</code> 有没有链 glfw / imgui；命中即 <code>SEND_ERROR</code>。</p>
+      <div class="warn">
+        <span class="nl">门禁管不到的三处</span>
+        <b>一、</b><code>src/render</code> 里 9 个文件仍 include <code>&lt;glad/glad.h&gt;</code>（<code>BaseDraw.h</code>、<code>scene.h</code>、<code>mesh.cpp</code>、<code>mesh_pass.h</code>、<code>shader.cpp</code>、<code>image.cpp</code>、<code>FontManager.cpp</code>、<code>Line.cpp</code>、<code>IRenderPass.h</code>），遗留 GL 路径。<br>
+        <b>二、</b><code>detail/FrameUniformRing.h</code> include <code>vk/VkMemoryAllocator.h</code>：L3 指着 L4。<br>
+        <b>三、</b>上面那条 <code>GLCommandList.cpp</code> 上行边。
+      </div>
+      <p><b>依赖 ≠ 所有权。</b><code>app</code> 依赖 <code>IRHIDevice</code> 却不拥有它；<code>render</code> 依赖它、并且<b>拥有它</b>（模式 2）。</p>
+    </div>
+  </details>
+</div>
 
-  <p class="lead">你按下运行，第一个跑起来的是 <code>app/main.cpp</code>。它干的事非常朴素：解析环境变量，建窗口，拿一只手，然后进死循环。</p>
+<!-- ============ L1 ============ -->
+<div class="panel" id="p1">
+  <div class="pan-head"><span class="pnum">L1</span><span class="ptitle">应用层：我有一扇窗，一双手</span></div>
+  <p class="lead">第一个跑起来的是 <code>app/main.cpp</code>：建窗口、填 DeviceDesc、进死循环。</p>
 
   <div class="peel">
-    <div class="pcell"><div class="plab">输入</div><div class="ptxt">操作系统给的窗口、鼠标键盘、一个 surface（在 Windows 上就是 HWND 背后那块可绘制区域）。</div></div>
-    <div class="pcell"><div class="plab">决定</div><div class="ptxt">什么时候开始新的一帧（每圈循环调一次 <code>RenderSystem::renderFrame()</code>）；这一帧要不要画（窗口最小化就整帧跳过）。</div></div>
-    <div class="pcell"><div class="plab">输出</div><div class="ptxt">把 <code>IRHIDevice</code> 指针和场景数据交给编排层，再挂一个 overlay 回调让 UI 能在同一帧里画。</div></div>
-    <div class="pcell"><div class="plab">这一层不懂</div><div class="ptxt">顶点怎么排、矩阵怎么算、有没有阴影。它连「三角形」这个词都不该出现。</div></div>
+    <div class="pcell"><div class="plab">输入</div><div class="ptxt">窗口、鼠标键盘、原生 surface。</div></div>
+    <div class="pcell"><div class="plab">决定</div><div class="ptxt">何时开始一帧；这帧要不要画。</div></div>
+    <div class="pcell"><div class="plab">输出</div><div class="ptxt">一张 DeviceDesc + 每帧一次 <code>renderFrame()</code>。</div></div>
+    <div class="pcell"><div class="plab">不懂</div><div class="ptxt">顶点、矩阵、阴影。连「三角形」都不该提。</div></div>
   </div>
 
-  <p>看 <code>GlfwHost</code> 就知道这一层的边界感：它只做窗口、事件、以及把原生句柄递给需要的人。它是<b>唯一</b>知道自己跑在 Windows 上、句柄是 <code>HWND</code> 的地方。也是<b>唯一</b>允许用 ImGui 的地方——引擎层不认识 UI 这个东西。</p>
+  <div class="roster" style="--c:var(--l1)">
+    <div class="rc"><div class="rh">包含</div><ul>
+      <li><code>GlfwHost</code> —— 本层唯一有状态的类</li>
+      <li><code>main.cpp</code> —— 启动 + 主循环</li>
+      <li><code>SceneDemo</code> —— 函数，装配示例场景</li>
+      <li><code>DebugPanel</code> —— 纯 static</li>
+    </ul></div>
+    <div class="rc"><div class="rh">持有</div><ul>
+      <li><code>_window</code>：<code>GLFWwindow*</code></li>
+      <li><code>_deviceDesc</code>：<b>只是一张参数表</b></li>
+      <li><code>_imguiDescriptorPool</code>：仅 VK 构建</li>
+      <li>五个事件回调 + <code>swapAdapter</code></li>
+    </ul></div>
+    <div class="rc"><div class="rh">不包含</div><ul>
+      <li><b>不持有 device</b>（已上移给 RenderSystem）</li>
+      <li>Pass、句柄表、矩阵</li>
+      <li><code>vk*</code>/<code>gl*</code>（唯一例外：<code>createSurface</code> 回调里的 <code>glfwCreateWindowSurface</code>）</li>
+    </ul></div>
+  </div>
+
+  <div class="chain">
+    <div class="cg"><div class="cn">1</div><div class="cb"><code>GlfwHost::buildDeviceDesc(useVulkan)</code> 填 <code>_deviceDesc</code>：像素尺寸、原生窗口 + <code>swapBuffers</code>、VK 的 <code>createSurface</code> 回调、<code>shaderRootPath</code>。</div></div>
+    <div class="cg"><div class="cn">2</div><div class="cb"><code>main</code> 把它塞进 <code>RenderSystem::InitDesc.deviceDesc</code> 再 <code>init()</code>。<b>设备由引擎建、引擎销毁。</b></div></div>
+    <div class="cg"><div class="cn">3</div><div class="cb">要用原生句柄时（ImGui），宿主回头问 <code>RenderSystem::rhiDevice()</code> 拿 <code>nativeHandles(h)</code>，自己不存设备。</div></div>
+  </div>
+
+  <details>
+    <summary>main 的九步<span class="sm">别跳步</span></summary>
+    <div class="body">
+      <ol class="seq">
+        <li><code>installCrashBacktrace</code>（<code>RHI_DEBUG_LOG</code> 时）</li>
+        <li>读 <code>RHI_BACKEND</code> 定 <code>useVulkan</code>；<b>默认 OpenGL</b></li>
+        <li>编译期无 VK 时回退 GL</li>
+        <li><code>host.createWindow(1600,900,useVulkan)</code></li>
+        <li><code>host.buildDeviceDesc</code></li>
+        <li><code>RenderSystem::init(initDesc)</code> —— <b>device 在此出生</b> → <code>onWindowSizeChanged</code></li>
+        <li>预载纹理 / 字体，开关经 <code>settings()</code> 注入</li>
+        <li><code>host.initImGui</code>（必须在 device 之后）</li>
+        <li class="end"><code>SceneDemo::buildScene</code> + 主循环</li>
+      </ol>
+      <p>关闭顺序即契约：<code>shutdownImGui</code>（先 <code>waitIdle</code>）→ <code>RenderSystem::shutdown()</code>（含设备）→ <code>glfwTerminate</code>。</p>
+    </div>
+  </details>
 
   <div class="warn">
-    <span class="nl">这一层最容易踩的坑</span>
-    ImGui 的 Vulkan backend 初始化时需要<b>已经创建好的</b> instance、physicalDevice、device、queue。所以顺序必须是：先建 device，再 <code>ImGui_ImplVulkan_Init</code>。反过来不会报错，会在驱动里崩，栈还很浅，看起来像「Vulkan 装坏了」。
+    <span class="nl">坑</span>
+    ImGui 的 Vulkan backend 要<b>现成的</b> instance / device / queue。顺序反了不报错，在驱动里崩，栈还很浅。
   </div>
-</section>
+</div>
 
-<section id="s2">
-  <div class="sec-head"><span class="sec-num">L2</span><span class="sec-title">编排层：这一帧画什么</span></div>
-  <div class="depth"><span>宿主</span><span class="on" style="background:var(--l2)">编排</span><span>契约</span><span>后端</span><span>驱动</span><span>同步</span></div>
-
-  <p class="lead"><code>RenderSystem::renderFrame()</code> 是全场唯一一个「知道一帧长什么样」的函数。它不画，它排。</p>
+<!-- ============ L2 ============ -->
+<div class="panel" id="p2">
+  <div class="pan-head"><span class="pnum">L2</span><span class="ptitle">渲染系统：这一帧画什么</span></div>
+  <p class="lead"><code>RenderSystem::renderFrame()</code> 是唯一知道「一帧长什么样」的函数。它不画，它排。设备也在它手里。</p>
 
   <div class="peel">
-    <div class="pcell"><div class="plab">输入</div><div class="ptxt">一只手（device）+ 场景里的物体、相机、灯光。</div></div>
-    <div class="pcell"><div class="plab">决定</div><div class="ptxt">这帧切几个 pass（Shadow / Normal / Sky / Pick），每个 pass 的清屏色、渲染目标、管线、要画的物体清单；最后插一段 overlay。</div></div>
-    <div class="pcell"><div class="plab">输出</div><div class="ptxt">一串语义级意图：目标 + 管线 + 顶点流 + 索引流 + 纹理 + 一组矩阵。</div></div>
-    <div class="pcell"><div class="plab">这一层不懂</div><div class="ptxt">这些意图最后变成哪些 API 调用。它也不该懂——懂了就焊死了。</div></div>
+    <div class="pcell"><div class="plab">输入</div><div class="ptxt">DeviceDesc + 场景、相机、灯光。</div></div>
+    <div class="pcell"><div class="plab">决定</div><div class="ptxt">几个 pass、各自的目标/管线/清屏色、物体清单、overlay。</div></div>
+    <div class="pcell"><div class="plab">输出</div><div class="ptxt">语义级意图：目标+管线+流+纹理+矩阵。</div></div>
+    <div class="pcell"><div class="plab">不懂</div><div class="ptxt">这些意图变成哪些 API 调用。</div></div>
   </div>
 
-  <p>一帧的全部形状，去掉细节就这么点：</p>
+  <div class="roster" style="--c:var(--l2)">
+    <div class="rc"><div class="rh">包含</div><ul>
+      <li><code>RenderSystem</code>、<code>RenderContext</code>、<code>Scene</code>、<code>TextureMng</code>、<code>FontManager</code></li>
+      <li><code>IRenderPass</code> + Shadow / Normal / Sky / Pick</li>
+      <li><code>Model</code>/<code>Mesh</code>/<code>MeshPass</code>/<code>AABB</code>/<code>Light</code>/<code>camera</code></li>
+      <li><code>BaseDraw</code>/<code>Line</code>/<code>Sky</code>/<code>Text</code>/<code>ImageRectangle</code></li>
+    </ul></div>
+    <div class="rc"><div class="rh">持有</div><ul>
+      <li><code>m_ownedDevice</code>：<code>unique_ptr&lt;IRHIDevice&gt;</code>，<b>设备的真主人</b></li>
+      <li><code>m_rhiDevice</code>：裸指针别名（可能借用）</li>
+      <li>5 个 <code>shared_ptr</code> + <code>RenderSettings</code></li>
+      <li>十几个句柄：阴影 / 拾取 / 冒烟 / 四边形</li>
+    </ul></div>
+    <div class="rc"><div class="rh">不包含</div><ul>
+      <li>资源实体（只在后端槽位表里）</li>
+      <li>app / imgui / GLFW（门禁强制）</li>
+      <li><b>实话</b>：9 个文件仍 include <code>glad</code>（遗留 GL 路径）</li>
+    </ul></div>
+  </div>
 
-<pre><span class="c">// 示意：形状对，签名以代码为准</span>
-<span class="k">if</span> (!dev-&gt;beginFrame()) <span class="k">return</span>;          <span class="c">// 没图像 → 整帧跳过</span>
-<span class="k">for</span> (pass : passes) {
-    cl = dev-&gt;createCommandList();          <span class="c">// 附加列表</span>
-    pass-&gt;record(cl);                       <span class="c">// 各 pass 自己录</span>
-}
-overlayFn(cl);                              <span class="c">// ImGui 录进同一帧</span>
-dev-&gt;endFrame();                            <span class="c">// 提交</span>
-dev-&gt;present();                             <span class="c">// 呈现</span></pre>
-
-  <p>八个词，就是一条帧。这里有两个细节值得停一下：</p>
-
-  <p><b>一、<code>beginFrame()</code> 返回 <code>bool</code>。</b> 交换链正在重建、或者窗口最小化，这一帧根本没有可画的图像。返回 <code>false</code> 让上层直接跳过录制——少了这个 bool，你会在 acquire 失败之后继续录一堆没人执行的命令，然后在下一轮莫名其妙地崩。这是一个「用返回值表达状态」而不是「抛异常 / 断言」的选择，很工程。</p>
-
-  <p><b>二、<code>endFrame()</code> 只提交，<code>present()</code> 单独一个。</b> 因为提交和呈现是两个不同的时刻，中间还夹着信号量。这跟 GL 用 <code>SwapBuffers</code> 一把做完不一样——两个后端要共用一套语义，就得按最严格的那个（Vulkan）来切。</p>
+  <details>
+    <summary>一帧的形状<span class="sm">8 行</span></summary>
+    <div class="body">
+<pre><span class="c">// 形状对，签名以代码为准</span>
+<span class="k">if</span> (!dev-&gt;beginFrame()) <span class="k">return</span>;      <span class="c">// 没图像 → 整帧跳过</span>
+<span class="k">for</span> (pass : passes) { cl = dev-&gt;createCommandList(); pass-&gt;record(cl); }
+overlayFn(cl);                            <span class="c">// ImGui 录进同一帧</span>
+dev-&gt;endFrame();                          <span class="c">// 提交</span>
+dev-&gt;present();                           <span class="c">// 呈现</span></pre>
+      <p><b><code>beginFrame()</code> 返回 bool</b>：交换链重建或窗口最小化时没有可画的图，返回 false 让上层跳过录制。<b><code>endFrame()</code> 只提交，<code>present()</code> 单独一步</b>：中间夹着信号量，按最严格的 Vulkan 切。</p>
+    </div>
+  </details>
 
   <div class="note">
-    <span class="nl">怎么验证这一层没漏</span>
-    在 <code>RenderSystem.cpp</code> 里搜 <code>vk</code> 和 <code>gl</code>，应该搜不到任何东西。搜得到，就说明编排层偷偷知道了后端是谁——这是分层的第一个裂缝。
+    <span class="nl">自查</span>
+    在 <code>RenderSystem.cpp</code> 里搜 <code>vk</code> 和 <code>gl</code>，应该搜不到。搜得到，就是渲染系统偷偷知道了后端是谁。
   </div>
-</section>
+</div>
 
-<section id="s3">
-  <div class="sec-head"><span class="sec-num">L3</span><span class="sec-title">契约层：把「意思」翻译成「ID 和参数」</span></div>
-  <div class="depth"><span>宿主</span><span>编排</span><span class="on" style="background:var(--l3)">契约</span><span>后端</span><span>驱动</span><span>同步</span></div>
-
-  <p class="lead">从这里开始，「一套接口支持两种后端」才成立。契约层只干两件事，别的都不干。</p>
-
-  <p><b>第一件事：把物体变成 ID。</b> 上层说「我要一块 1MB 的数据存顶点」，契约层还一张 <code>BufferHandle</code>——一个 <code>{id, gen}</code> 的两字段结构。之后上层永远只说「用 3 号 buffer」，不会碰 <code>VkBuffer</code>。</p>
-
-  <p><b>第二件事：把「画」变成命令录制。</b> 上层说 <code>drawIndexed(...)</code>，契约层的 <code>IRHICommandList</code> 就把它记进一个命令列表。注意是「记进」，不是「画掉」。这个区别就是 Vulkan 和 OpenGL 的全部差别。</p>
+<!-- ============ L3 ============ -->
+<div class="panel" id="p3">
+  <div class="pan-head"><span class="pnum">L3</span><span class="ptitle">RHI 抽象层：意思 → ID 和参数</span></div>
+  <p class="lead">只干两件事：把物体变成 ID，把「画」变成命令录制。是「记进」，不是「画掉」——这就是 VK 和 GL 的全部差别。</p>
 
   <div class="peel">
-    <div class="pcell"><div class="plab">输入</div><div class="ptxt">编排层给的语义：目标、管线、流、纹理、矩阵。</div></div>
-    <div class="pcell"><div class="plab">决定</div><div class="ptxt">句柄分配、代际校验、参数打包成 Desc、命令写进哪个列表。</div></div>
-    <div class="pcell"><div class="plab">输出</div><div class="ptxt">6 个句柄 + 8 个 Desc + 15 条录制方法。对上层来说，两个后端长得一模一样。</div></div>
-    <div class="pcell"><div class="plab">这一层不懂</div><div class="ptxt">谁真的在画。它只知道自己有两个子类要填。</div></div>
+    <div class="pcell"><div class="plab">输入</div><div class="ptxt">目标、管线、流、纹理、矩阵。</div></div>
+    <div class="pcell"><div class="plab">决定</div><div class="ptxt">句柄分配、代际校验、参数打包、写进哪个列表。</div></div>
+    <div class="pcell"><div class="plab">输出</div><div class="ptxt">6 句柄 + 8 Desc + 15 方法，两个后端长得一样。</div></div>
+    <div class="pcell"><div class="plab">不懂</div><div class="ptxt">谁真的在画。</div></div>
   </div>
 
-  <p>这一层只有 12 个对象，但<b>只有 2 个需要多态</b>：<code>IRHIDevice</code> 和 <code>IRHICommandList</code>。剩下 6 个是纯数据句柄，8 个是创建时一次填好就再也不改的 Desc。</p>
+  <div class="roster" style="--c:var(--l3)">
+    <div class="rc"><div class="rh">包含</div><ul>
+      <li><code>RhiTypes.h</code>：<code>RhiHandle{id,gen}</code> 派生 6 个 + 8 个 Desc</li>
+      <li><code>IRHIDevice</code>、<code>IRHICommandList</code></li>
+      <li><code>RHIFactory</code>：<b>全仓唯一运行期后端分支</b></li>
+      <li><code>HandleTable</code>、<code>DeletionQueue</code>、<code>FrameUniformRing</code></li>
+    </ul></div>
+    <div class="rc"><div class="rh">持有</div><ul>
+      <li>接口本身<b>零状态</b>：全纯虚 + 默认实现</li>
+      <li><code>HandleTable</code>：<code>_slots</code>（值 + gen + alive）、<code>_freeSlots</code></li>
+      <li><code>DeletionQueue</code>：<code>kLagFrames = 2</code> + 闭包</li>
+      <li><code>FrameUniformRing</code>：一块显存 + 游标</li>
+    </ul></div>
+    <div class="rc"><div class="rh">不包含</div><ul>
+      <li><code>Vk*</code>/<code>GLuint</code>（<b>例外</b>：<code>FrameUniformRing.h</code>）</li>
+      <li>render / app / GLFW / imgui</li>
+      <li>「第几帧、在哪个 pass」这类运行状态</li>
+    </ul></div>
+  </div>
+
+  <details>
+    <summary>两条靠人记的硬规则<span class="sm">写不进类型里</span></summary>
+    <div class="body">
+      <p><b>一、录制顺序 = 提交顺序。</b>VK 提交固定「附加列表（按创建顺序）→ 主列表」。GL 没有提交：<code>createCommandList()</code> 返回主列表、即刻执行，所以多列表在 GL 上只能退化成串行。</p>
+      <p><b>二、一条列表同一时刻只给一个线程。</b>多线程并行录制只对 VK 成立。</p>
+      <p>两条都写进了 <code>docs/4-RHI接口契约.md</code> 与 <code>IRHIDevice.h</code> 的 <code>createCommandList</code> 注释。</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>为什么句柄不做成 class<span class="sm">一条设计红线</span></summary>
+    <div class="body">
+      <p>句柄没有行为，只有身份。一旦它有方法，上层就会「顺手」调 <code>texture-&gt;lock()</code>、<code>buffer-&gt;upload()</code>，抽象立刻漏。<b>有行为的留在 device 上，句柄只回答「是谁」。</b></p>
+      <p>代价：销毁必须走 <code>destroy*</code>，句柄不会自己死。<code>destroy</code> 把槽 <code>gen+1</code>（立刻失效），并把 GPU 删除排进队列。</p>
+    </div>
+  </details>
+</div>
+
+<!-- ============ L4 ============ -->
+<div class="panel" id="p4">
+  <div class="pan-head"><span class="pnum">L4</span><span class="ptitle">RHI 实现：同一句话，两种落法</span></div>
+  <p class="lead">唯一真正「两份代码」的层，也是唯一该有 <code>#ifdef</code> 的地方。</p>
+
+  <div class="roster" style="--c:var(--l4)">
+    <div class="rc"><div class="rh">包含 · VK</div><ul>
+      <li><code>VkDevice</code>（只编排）、<code>VkDeviceInit</code>（实例/设备/队列）</li>
+      <li><code>VkCaps</code>、<code>VkSwapchain</code>、<code>VkFrames</code></li>
+      <li><code>VkDescriptors</code>、<code>VkPipelines</code>、<code>VkShaderReflect</code></li>
+      <li><code>VkMemoryAllocator</code>、<code>VkCommandList</code>、<code>VkCommon</code></li>
+    </ul></div>
+    <div class="rc"><div class="rh">包含 · GL</div><ul>
+      <li><code>GLDevice</code>、<code>GLCommandList</code>、<code>GLProgram</code></li>
+      <li>GL 侧不建上下文，只要求宿主已 current</li>
+    </ul></div>
+    <div class="rc"><div class="rh">不包含</div><ul>
+      <li>render 层任何类型</li>
+      <li>GLFW、imgui</li>
+      <li><b>例外一条</b>：<code>GLCommandList.cpp</code> 依赖 <code>DrawUniforms</code></li>
+    </ul></div>
+  </div>
+
+  <details>
+    <summary>同一句 bindTexture，两种落法<span class="sm">模型差异</span></summary>
+    <div class="body">
+      <div class="two">
+        <div class="col vk"><div class="ch">Vulkan</div><ol>
+          <li>不立刻绑：记下「set1 第 slot 个 = 这张纹理的 set」</li>
+          <li>draw 时才 <code>vkCmdBindDescriptorSets</code></li>
+          <li>连续 5 个 draw 组合相同就跳过重绑</li>
+        </ol></div>
+        <div class="col gl"><div class="ch">OpenGL</div><ol>
+          <li>立刻 <code>glActiveTexture</code> + <code>glBindTexture</code></li>
+          <li>全局状态机：绑了就是绑了，没有录制</li>
+          <li>必须配 <code>GLStateSnapshot</code>：进 pass 存、出 pass 还原</li>
+        </ol></div>
+      </div>
+      <p>不是风格问题，是两个 API 的模型不同；契约层吸收掉，上层写一遍就够。</p>
+    </div>
+  </details>
+
+  <details open>
+    <summary>四个时刻：什么时候能删、什么时候能交<span class="sm">同步纪律</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>要回答</th><th>谁回答</th><th>在哪</th></tr>
+        <tr><td>这批命令 GPU 跑完没</td><td>fence，每槽一个</td><td><code>VkFrames</code></td></tr>
+        <tr><td>这张图能交给显示引擎没</td><td><code>renderDone</code>，每图一个</td><td><code>VkSwapchain</code></td></tr>
+        <tr><td>这个删除排到第几帧</td><td><code>DeletionQueue</code> + <code>_frameCount</code></td><td><code>DeletionQueue.h</code> · <code>VkDevice</code></td></tr>
+        <tr><td>帧内建的纹理本帧能采样吗</td><td><code>layout</code> 是否 <code>UNDEFINED</code></td><td><code>VkDevice::textureSet</code></td></tr>
+      </table>
+      <ol class="seq">
+        <li><code>beginFrame</code><span class="why">等本槽 fence → flush 到期删除 → 帧号 +1 → 描述符环归零</span></li>
+        <li><code>createTexture</code><span class="why">帧内创建走 <code>deferGpuWork</code>，上传推到下一帧；本帧采样退白纹理</span></li>
+        <li><code>destroy*</code><span class="why">句柄 <code>gen+1</code> 立刻失效，删除闭包入队，写「帧号 + 2」</span></li>
+        <li class="end"><code>endFrame / present</code><span class="why">提交 → signal 该图 <code>renderDone</code> → 等它才交图</span></li>
+      </ol>
+      <p><b>为什么两帧：</b>你在第 N 帧删，GPU 可能还在跑 N-2 帧的命令。所以 <code>kLagFrames = 2</code>，且必须挂在 fence 之后——先 flush 再 <code>++_frameCount</code>，反了等于没等。</p>
+      <div class="warn">
+        <span class="nl">从 GL 带来的习惯，在 VK 上是错的</span>
+        GL 上 <code>glDeleteTextures</code> 后驱动自己会推迟释放，随手删是对的；VK 上 <code>vkDestroyImageView</code> 立刻释放，而 GPU 还在用——而且不一定当场崩，可能三帧后花屏。
+      </div>
+    </div>
+  </details>
 
   <div class="note">
-    <span class="nl">为什么句柄不做成 class</span>
-    句柄没有行为，只有身份。一旦它变成有方法的对象，上层就会「顺手」调它——<code>texture-&gt;lock()</code>、<code>buffer-&gt;upload()</code>，抽象立刻漏。有行为的东西留在 device 上，句柄只负责「是谁」。这条写死在 <code>RhiTypes.h</code> 的文件头注释里。
+    <span class="nl">验收标准</span>
+    这一层允许出现 <code>vk*</code>、<code>gl*</code>、<code>VkBuffer</code>、<code>GLuint</code>，别处出现就是漏。运行期分支<b>只允许一处</b>：<code>RHIFactory::createDevice</code>。
+  </div>
+</div>
+
+<!-- ============ 创建链 ============ -->
+<div class="panel" id="p5">
+  <div class="pan-head"><span class="pnum">06</span><span class="ptitle">创建链：每层用下一层造了什么、什么参数</span></div>
+  <p class="lead">反直觉的一条：<b>创建向下，持有向上。</b>造完只有 <code>{id, gen}</code> 回到上面，实体留在下面。所以「谁创建」和「谁持有」常不是同一层。</p>
+
+  <details open>
+    <summary>① L1 应用：只填一张 DeviceDesc<span class="sm">buildDeviceDesc</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>字段</th><th>实参来源</th></tr>
+        <tr><td>backend</td><td><code>RHI_BACKEND</code> → Vulkan / OpenGL（<b>默认 GL</b>）</td></tr>
+        <tr><td>appName</td><td><code>"my_app"</code></td></tr>
+        <tr><td>width / height</td><td><code>glfwGetFramebufferSize</code> 的<b>像素</b>尺寸</td></tr>
+        <tr><td>window.type / handle</td><td>Win32 / Cocoa / Xlib + <code>(void*)_window</code></td></tr>
+        <tr><td>window.swapBuffers</td><td><code>swapAdapter</code> + <code>_window</code>（GL present 用）</td></tr>
+        <tr><td>createSurface</td><td>lambda：<code>glfwCreateWindowSurface(instance, win)</code> → <code>uint64</code></td></tr>
+        <tr><td>shaderRootPath</td><td>可执行目录 + <code>res/shaders/</code>；VK 换 <code>shaders_vk/</code></td></tr>
+        <tr><td>其余</td><td><code>offscreen=false</code>、<code>enableValidation=true</code>、<code>msaaSamples=1</code>、<code>swapchainImageCount=0</code></td></tr>
+      </table>
+    </div>
+  </details>
+
+  <details>
+    <summary>② L2 渲染系统：用这张表把 device 造出来<span class="sm">RenderSystem::init</span></summary>
+    <div class="body">
+<pre><span class="c">// InitDesc 两种模式：给了 device 就借用，没给就自建</span>
+<span class="k">if</span> (desc.device) { m_rhiDevice = desc.device; }
+<span class="k">else</span> {
+    m_ownedDevice = rhi::RHIFactory::createDevice(desc.deviceDesc, &amp;devErr);
+    <span class="k">if</span> (!m_ownedDevice) <span class="k">return</span> false;
+    m_rhiDevice = m_ownedDevice.get();
+}</pre>
+      <p><b>app 用的是模式 2</b>：传 desc，不传设备。所以 device 由 L2 创建、由 <code>shutdown()</code> 里的 <code>m_ownedDevice.reset()</code> 销毁——那时窗口和上下文还活着。</p>
+      <p>日志会自报是哪一种：<code>device: engine-owned</code> / <code>borrowed from host</code>。</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>③ L3 工厂：唯一的后端分支<span class="sm">RHIFactory</span></summary>
+    <div class="body">
+<pre><span class="k">case</span> Backend::Vulkan:  <span class="k">return</span> std::make_unique&lt;VkDevice&gt;(desc, outError);
+<span class="k">case</span> Backend::OpenGL:  <span class="k">return</span> std::make_unique&lt;GLDevice&gt;(desc, outError);</pre>
+      <p>只做三件事：<b>转发 desc（一个字段不改）</b>、选子类、兜失败（<code>nullptr</code> + <code>outError</code>，不抛异常）。</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>④ L2 用 create* 造 L4 里的资源<span class="sm">拿回句柄</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>调用</th><th>实参</th><th>存哪</th></tr>
+        <tr><td>createPipeline 拾取</td><td><code>vert_pick_rhi</code>+<code>frag_pick_rhi</code>；stride <code>8*float</code>；instanceStride <code>sizeof(Matrix)</code>；7 条属性（顶点率 Float3@0/12、Float2@24；实例率 Float4@0/16/32/48）；Back；depth <code>{true,true}</code></td><td><code>m_pickPipeline</code></td></tr>
+        <tr><td>createPipeline 阴影</td><td>同上，<code>colorCount=0</code> + <code>Depth32F</code> → 纯深度管线</td><td><code>m_shadowPipeline</code></td></tr>
+        <tr><td>createBuffer VB/IB</td><td><code>BUF_VERTEX</code> + 顶点数组（<b>先 sRGB→线性</b>）；<code>BUF_INDEX</code> + <code>{0,1,2}</code></td><td><code>m_smokeVB/IB</code></td></tr>
+        <tr><td>createRenderTarget 拾取</td><td><code>framebufferSize()</code>；<code>BGRA8_SRGB</code>；<code>Depth32F</code></td><td><code>m_pickRT</code></td></tr>
+        <tr><td>createRenderTarget 阴影</td><td>1024×1024；<code>hasColor=false</code>；再 <code>renderTargetDepthTexture()</code> 取可采样深度图</td><td><code>m_shadowRT/tex</code></td></tr>
+        <tr><td>createUniformBlock</td><td>256 字节</td><td><code>m_quadUB</code></td></tr>
+        <tr><td>createTexture</td><td>图片 / cubemap 6 面 / 字体图集</td><td>各自成员</td></tr>
+      </table>
+      <p><b>L2 里没有一个 <code>new</code> 资源，也没有一个 <code>delete</code> 资源。</b>造靠 <code>create*</code>，删靠 <code>destroy*</code>。</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>⑤ L4 用图形 API 造真实 GPU 对象<span class="sm">vkCreate*</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>调用</th><th>关键参数</th></tr>
+        <tr><td>vkCreateInstance</td><td><code>apiVersion = VK_API_VERSION_1_0</code>（刻意最低，真实版本靠 <code>VkCaps</code> 探测）；扩展 = surface + 平台面 + 按能力追加；layer <code>VK_LAYER_KHRONOS_validation</code>（Debug 默认开）</td></tr>
+        <tr><td>VkCaps 探能力</td><td>版本、扩展、队列族、limits</td></tr>
+        <tr><td>vkCreateDevice</td><td>1 个 queue（图形 + 能建面的族）；devExts = swapchain + 按能力追加；features + featureChain</td></tr>
+        <tr><td>vkCreateSwapchainKHR</td><td><code>B8G8R8A8_SRGB</code>；<code>SRGB_NONLINEAR</code>；extent = <code>caps.currentExtent</code>（<code>UINT32_MAX</code> 时回退 desc）；usage COLOR_ATTACHMENT｜TRANSFER_SRC；EXCLUSIVE；<code>preTransform=caps.currentTransform</code>；OPAQUE；<code>FIFO</code>；clipped</td></tr>
+        <tr><td>每图一遍</td><td>imageView + 深度 + 可选 MSAA；<b>每图一个 <code>renderDone</code></b></td></tr>
+        <tr><td>描述符</td><td>2 个 setLayout + pipelineLayout；set0 帧 UBO 环（256B 动态偏移）；set1 纹理；<code>kMaxTexSlots=8</code> 再按设备裁；池 256 sets / 1024 samplers</td></tr>
+        <tr><td>管线</td><td><code>vkCreatePipelineCache</code> 落盘 <code>pipeline_cache.bin</code>；状态全部创建期烘焙</td></tr>
+      </table>
+      <p>这些真实对象的名字<b>不出现在 L4 的对外身份上</b>——它们在各模块内部，外面只看见一个 <code>IRHIDevice*</code>。</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>⑥ 墙外：把 handle 变成 GPU 上下文<span class="sm">我们不看它</span></summary>
+    <div class="body">
+      <p>驱动只做一件我们关心的事：把 instance + device 变成真的 GPU 上下文（ICD、队列、显存）。我们不读它，只在失败时收到 <code>VkResult</code>。</p>
+      <p><b>斜率：</b>L1 给 1 张 Desc → L2 给 8 种 Desc → L3 一个字段不改 → L4 摊成几十个结构体字段 → 墙外只还一个结果码。<b>越往下参数越多、人越少。</b></p>
+    </div>
+  </details>
+
+  <div class="warn">
+    <span class="nl">创建顺序三条硬的</span>
+    <b>一、</b>窗口 → surface → 物理设备 → device → swapchain（挑卡要问 surface 支不支持呈现）。<br>
+    <b>二、</b>descriptorSetLayout → pipelineLayout → pipeline。<br>
+    <b>三、</b>device → ImGui 的 descriptor pool。
   </div>
 
-  <p>另一条隐形的规则，必须靠人去记：<b>录制顺序必须等于提交顺序</b>。Vulkan 那边你录进 A、B 两个列表，提交时也按 A、B，那就是对的。GL 那边没有「提交」这个东西——<code>createCommandList()</code> 返回的就是主列表本身，调用即刻生效。所以多列表录制在 GL 上只能退化成串行，而且一旦你录的顺序和提交顺序不一致，画面会错，但不报错。<code>docs/4-RHI接口契约.md</code> 与 <code>IRHIDevice.h</code> 的 <code>createCommandList</code> 注释里，这两条都已经写进去了（硬约束一、二）。</p>
-</section>
+  <p>还有一类创建是<b>每帧</b>的：<code>createCommandList</code> 的附加列表、上传用的 staging buffer、<code>deferGpuWork</code> 回调。寿命一到两帧。</p>
+</div>
 
-<section id="s4">
-  <div class="sec-head"><span class="sec-num">L4</span><span class="sec-title">后端层：同一句话，两种落法</span></div>
-  <div class="depth"><span>宿主</span><span>编排</span><span>契约</span><span class="on" style="background:var(--l4)">后端</span><span>驱动</span><span>同步</span></div>
+<!-- ============ 设备参数 ============ -->
+<div class="panel" id="pdev">
+  <div class="pan-head"><span class="pnum">07</span><span class="ptitle">设备参数：11 个字段，各自变成了什么调用</span></div>
+  <p class="lead">这张表是 L1 唯一能交给下层的东西。<b>11 个顶层字段里，6 个只有 Vulkan 读，2 个现在根本没人读</b>。所以这章不解释“参数含义”，只追一个问题：<b>它最后进了哪个 <code>vk*</code> / <code>gl*</code> 调用，不填会怎样</b>。</p>
 
-  <p class="lead">这一层是整套设计里唯一真正「两份代码」的地方，也是唯一该有 <code>#ifdef</code> 的地方。挑一个最普通的方法看，就能看出两个后端的性格差异。</p>
+  <div class="chips">
+    <button class="chip" data-goto="f-table">总表</button>
+    <button class="chip" data-goto="f-window">window</button>
+    <button class="chip" data-goto="f-bind">绑定到窗口</button>
+    <button class="chip" data-goto="f-present">present 原理</button>
+    <button class="chip" data-goto="f-size">width / height</button>
+    <button class="chip" data-goto="f-msaa">msaaSamples</button>
+    <button class="chip" data-goto="f-val">enableValidation</button>
+    <button class="chip" data-goto="f-escape">三个逃生口</button>
+    <button class="chip" data-goto="f-dead">两个死字段</button>
+  </div>
 
-  <p>看 <code>bindTexture(slot, tex)</code> 这一句：</p>
+  <div class="fgrp" id="f-table">
+    <details open>
+      <summary>字段去哪了<span class="sm">11 行</span></summary>
+      <div class="body">
+        <table>
+          <tr><th>字段</th><th>Vulkan</th><th>OpenGL</th></tr>
+          <tr><td>backend</td><td>唯一分支点：<code>RHIFactory::createDevice</code> 的 <code>switch</code> 选出 <code>VkDevice</code>。选完再没人看它</td><td>同一个 <code>switch</code> 选出 <code>GLDevice</code></td></tr>
+          <tr><td>window</td><td><b>造 surface 的地址</b>：<code>type</code> 定平台扩展，<code>handle</code>/<code>display</code> 填进 <code>Vk*SurfaceCreateInfoKHR</code>。<code>swapBuffers</code> 完全忽略</td><td><b>换帧的钩子</b>：只读 <code>swapBuffers</code>/<code>swapUser</code>，<code>present()</code> 直接调；<code>handle</code> 不认——GL 不知道 HWND 是什么</td></tr>
+          <tr><td>width / height</td><td>swapchain 的 <code>currentExtent</code> 兜底 + <code>onResize</code> 重建</td><td>存 <code>_size</code>：<code>framebufferSize()</code>、readback、RT 尺寸都靠它</td></tr>
+          <tr><td>msaaSamples</td><td><b>指令</b>：传给 <code>VkSwapchain::create</code>，建 MSAA 彩图 + resolve</td><td><b>声明</b>：只和 <code>glGetIntegerv(GL_SAMPLES)</code> 比对，不一致就报错</td></tr>
+          <tr><td>shaderRootPath</td><td>SPIR-V 根（<code>shaders_vk/</code>），管线创建时按名字找 <code>.spv</code></td><td>GLSL 根（<code>shaders/</code>），<code>GLProgram</code> 编译时找 <code>.vert/.frag</code></td></tr>
+          <tr><td>enableValidation</td><td><code>wantValidation</code> 的初值，决定要不要 <code>VK_LAYER_KHRONOS_validation</code></td><td>不读：GL 没有校验层这回事</td></tr>
+          <tr><td>instanceExtensions</td><td>非空 → 直接用宿主的列表；空 → 按 <code>window.type</code> 推导</td><td>不读</td></tr>
+          <tr><td>createSurface</td><td>拿到 <code>VkInstance</code> 后回调宿主建面；返回非 0 则 RHI <b>接管并销毁</b></td><td>不读（GL 没有 surface）</td></tr>
+          <tr><td>externalSurface</td><td>直接用宿主的 surface，RHI <b>不销毁</b></td><td>不读</td></tr>
+          <tr><td>offscreen</td><td colspan="2">两边都直接拒绝，报 <code>not supported yet</code>（见死字段）</td></tr>
+          <tr><td>appName</td><td colspan="2">没人读（见死字段）</td></tr>
+          <tr><td>swapchainImageCount</td><td colspan="2">没人读（见死字段）</td></tr>
+        </table>
+      </div>
+    </details>
+  </div>
 
-  <div class="two">
-    <div class="col vk">
-      <div class="ch">Vulkan · VkCommandList</div>
-      <ol>
-        <li>不立刻绑。把「set1 的第 slot 个 = 这张纹理的 descriptor set」记下来。</li>
-        <li>等到 <code>draw</code> 的时候，才一次性 <code>vkCmdBindDescriptorSets</code>。</li>
-        <li>如果连续 5 个 draw 的 set 组合完全相同，跳过重绑——省的是驱动层的工作。</li>
-      </ol>
+  <div class="fgrp" id="f-window">
+    <div class="fg-h">window：一个结构体，干了两种完全不同的活<code>NativeWindow</code></div>
+    <p>字段名叫 <code>window</code>，其实是两套东西拼在一起：<b>前三样是给 Vulkan 造 surface 用的坐标</b>，<b>后两样是给 OpenGL 换帧用的钩子</b>。两个后端各取所需，互相不认识。</p>
+    <table>
+      <tr><th>window.type</th><th>Vulkan 加的平台扩展</th><th>填进哪个结构体</th></tr>
+      <tr><td>Win32</td><td><code>VK_KHR_win32_surface</code></td><td><code>VkWin32SurfaceCreateInfoKHR</code>：<code>hwnd = (HWND)handle</code>，<code>hinstance</code> 自己取</td></tr>
+      <tr><td>Xlib</td><td><code>VK_KHR_xlib_surface</code></td><td><code>VkXlibSurfaceCreateInfoKHR</code>：<code>dpy = (Display*)display</code>，<code>window = (Window)handle</code></td></tr>
+      <tr><td>Xcb</td><td><code>VK_KHR_xcb_surface</code></td><td><code>VkXcbSurfaceCreateInfoKHR</code>：<code>connection = display</code>，<code>window</code> 从 handle 转成 <code>xcb_window_t</code></td></tr>
+      <tr><td>Wayland</td><td><code>VK_KHR_wayland_surface</code></td><td><code>VkWaylandSurfaceCreateInfoKHR</code>：<code>display</code> + <code>surface = (wl_surface*)handle</code></td></tr>
+      <tr><td>MetalLayer</td><td><code>VK_EXT_metal_surface</code></td><td><code>VkMetalSurfaceCreateInfoEXT</code>：<code>pLayer = handle</code></td></tr>
+      <tr><td>Cocoa</td><td>同上，但<b>不能自建</b></td><td>handle 是 NSView，要 NSView → CAMetalLayer 的转换，引擎不碰 ObjC++ → 必须走宿主的 <code>createSurface</code> 回调</td></tr>
+    </table>
+    <p>所以 <code>GlfwHost::buildDeviceDesc</code> 在 macOS 下只填 <code>type=Cocoa</code> 和一个 <code>createSurface</code> lambda，里面调 <code>glfwCreateWindowSurface</code>；Windows 下连回调都不用给，引擎自己 <code>vkCreateWin32SurfaceKHR</code>。</p>
+
+    <p><b>它的一生（VK 只用到第 3 步，GL 只用到第 6 步）：</b></p>
+    <ol class="seq">
+      <li>搭窗口<span class="why">GL 模式：<code>glfwWindowHint</code> 3.3 core + <code>GLFW_SRGB_CAPABLE</code> → <code>glfwCreateWindow</code> → <code>makeContextCurrent</code> → <code>gladLoadGLLoader</code>。VK 模式：只加一个 <code>GLFW_NO_API</code>，<b>根本没有 GL 上下文</b>，窗口退化成一块能往上贴图的 OS 表面</span></li>
+      <li>填表<span class="why"><code>buildDeviceDesc</code> 只搬四样：<code>type</code>（编译期平台宏）、<code>handle</code>（<code>(void*)_window</code>）、<code>swapBuffers</code>=<code>swapAdapter</code>、<code>swapUser</code>=<code>_window</code>。此刻它还是原样的 OS 句柄，没被翻译</span></li>
+      <li>变成 surface<span class="why">仅 VK。按 <code>type</code> 挑平台扩展 + 挑一个 <code>vkCreate*SurfaceKHR</code> → <b>surface 就是 window 在 Vulkan 世界里的替身</b>，造出来以后，下面所有调用都不再碰 window</span></li>
+      <li>挑卡<span class="why"><code>vkGetPhysicalDeviceSurfaceSupportKHR</code>：队列族既要 <code>GRAPHICS</code> 又要能呈现给这块 surface。<b>没有 surface 就挑不出卡</b>——这就是为什么 surface 必须早于物理设备</span></li>
+      <li>定交换链<span class="why"><code>vkGetPhysicalDeviceSurfaceCapabilitiesKHR</code> 拿 <code>currentExtent</code> 和 <code>currentTransform</code>，<code>SurfaceFormatsKHR</code> 挑 <code>B8G8R8A8_SRGB</code>，<code>PresentModesKHR</code> 挑 FIFO。尺寸、朝向、格式、呈现模式全是从 surface 问出来的，不是从窗口</span></li>
+      <li>出图交图<span class="why">VK：每帧 <code>vkQueuePresentKHR</code> 仍然带着这个 surface。GL：<code>present()</code> 调 <code>swapBuffers(swapUser)</code> → <code>glfwSwapBuffers</code>，把上下文的后备缓冲推上屏</span></li>
+      <li class="end">收尾<span class="why">RHI 自建的 surface 在设备析构时 <code>vkDestroySurfaceKHR</code>，<b>必须早于 instance</b>；窗口归宿主，必须晚于 device 销毁（<code>shutdown</code> 在 <code>glfwTerminate</code> 之前）</span></li>
+    </ol>
+
+    <div class="warn">
+      <span class="nl">一句话记住两边相反</span>
+      <b>VK：</b>window 只活到 surface 造出来，之后是 surface 在干活。<b>GL：</b>window 活到最后一次 <code>present</code> —— 因为 GL 的默认帧缓冲是<b>上下文的附属物</b>，不是 RHI 创建的对象，只能由宿主那一下 <code>swapBuffers</code> 交出去。
     </div>
-    <div class="col gl">
-      <div class="ch">OpenGL · GLCommandList</div>
-      <ol>
-        <li>立刻绑：<code>glActiveTexture</code> + <code>glBindTexture</code>。</li>
-        <li>因为 GL 是全局状态机，「绑了就是绑了」，没有录制这回事。</li>
-        <li>所以必须配一套 <code>GLStateSnapshot</code>：进 pass 存状态，出 pass 恢复，否则上一个 pass 的设置会漏到下一个。</li>
-      </ol>
+    <div class="warn">
+      <span class="nl">不填的后果不一样</span>
+      <b>GL：</b>构造时就检查 <code>window.valid()</code> 和 <code>swapBuffers</code>，缺一个立刻报 <code>invalid or missing swapBuffers callback</code>，工厂返回空。<br>
+      <b>VK：</b><code>platformInstanceExtensions</code> 对 <code>type=None</code> 返回 false，报 <code>no platform instance extension for window type</code>；<code>type</code> 对了但平台宏没编进去，也会落到“没有平台 surface 路径”那个分支。<br>
+      <b>为什么 GL 要 <code>swapBuffers</code> 而 VK 不要：</b>VK 交图是 <code>vkQueuePresentKHR</code>，驱动知道 image 该给谁；GL 只知道“当前 framebuffer”，推上屏得靠宿主，因为 <b>GL 的默认帧缓冲是上下文的一部分，不是 RHI 创建的对象</b>。
     </div>
   </div>
 
-  <p>同一句调用，VK 那边是「攒着」，GL 那边是「立即 + 事后还原」。这不是实现风格问题，是<b>两个 API 的模型不同</b>，而契约层把这种不同吸收掉，所以上层写一遍就够。</p>
+  <div class="fgrp" id="f-bind">
+    <div class="fg-h">渲染到窗口：没有“把画面贴到窗口”这个操作</div>
+    <p>两边都只做一件事：<b>把画面画进一块「能被合成器取走」的缓冲，然后交给系统</b>。区别只在这块缓冲归谁、叫什么名字。</p>
+    <div class="two">
+      <div class="col gl"><div class="ch">OpenGL：0 号帧缓冲</div><ol>
+        <li><code>beginRenderPass</code> 里 <code>renderTarget</code> 无效 → <code>glBindFramebuffer(GL_FRAMEBUFFER, 0)</code>。这一句就是“绑到窗口”</li>
+        <li>0 号 FBO 是上下文创建时驱动生成的，背后就是窗口的 drawable。<b>窗口不是用句柄绑的，是用“当前上下文”绑的</b>——谁 current 就画到谁</li>
+        <li>视口用 <code>_device-&gt;framebufferSize()</code>（像素值），不回查窗口系统</li>
+        <li>交图：<code>present()</code> → <code>swapBuffers(swapUser)</code> → <code>glfwSwapBuffers</code>，驱动把后备缓冲 flip 给合成器</li>
+      </ol></div>
+      <div class="col vk"><div class="ch">Vulkan：swapchain 第 i 张图</div><ol>
+        <li>窗口在<b>建 surface 那天</b>就绑完了，此后每帧不再出现窗口参数</li>
+        <li><code>beginFrame</code> → <code>vkAcquireNextImageKHR</code>，拿到的 <code>_imageIndex</code> 就是本帧要画的那张</li>
+        <li><code>vkCmdBeginRendering</code> 的 <code>imageView = currentColorView()</code>；MSAA 时渲进 <code>msaaColorView()</code>、再 resolve 回它</li>
+        <li>收尾 <code>endRenderPass</code> 把这张图转成 <code>PRESENT_SRC_KHR</code>，<code>present()</code> 用同一 index + surface 调 <code>vkQueuePresentKHR</code></li>
+      </ol></div>
+    </div>
+    <table>
+      <tr><th></th><th>OpenGL</th><th>Vulkan</th></tr>
+      <tr><td>渲染目标</td><td>默认帧缓冲 <code>0</code></td><td>swapchain 第 i 张图的 <code>VkImageView</code></td></tr>
+      <tr><td>“绑定”那一下</td><td><code>glBindFramebuffer(GL_FRAMEBUFFER, 0)</code></td><td><code>vkCmdBeginRendering</code> 里的 <code>pColorAttachments[0].imageView</code></td></tr>
+      <tr><td>窗口藏在哪</td><td>当前上下文（谁 current 画谁）</td><td>surface，启动时绑死，之后只认 surface</td></tr>
+      <tr><td>每帧三件事</td><td>画 → <code>swapBuffers</code></td><td><code>acquire</code> → 画 → 屏障 → <code>present</code></td></tr>
+      <tr><td>尺寸从哪来</td><td><code>framebufferSize()</code> 的记录值</td><td><code>surface</code> 的 <code>caps.currentExtent</code></td></tr>
+    </table>
+    <div class="warn">
+      <span class="nl">四个最常见的坑</span>
+      <b>GL：</b>pass 结束时没把 FBO 绑回 <code>0</code>，后面的 overlay 就画进了离屏 RT——屏幕黑的，但 RT 里有内容。<br>
+      <b>GL：</b>多窗口时 <code>glfwMakeContextCurrent</code> 没切对，画到另一个看不见的窗口里，不报错。<br>
+      <b>VK：</b><code>present</code> 用了上一帧的 <code>_imageIndex</code>，校验层报 VUID；resize 后不重建 swapchain，就按旧 extent 出图，黑边或拉伸。<br>
+      <b>两边：</b>sRGB 的编码端不是一个地方——GL 靠 <code>GL_FRAMEBUFFER_SRGB</code> 开关 + 默认帧缓冲的 encoding 探测，VK 靠 swapchain 格式本身是 <code>B8G8R8A8_SRGB</code>，写进去就编码。
+    </div>
+  </div>
 
-  <table>
-    <tr><th>动作</th><th>Vulkan 后端</th><th>OpenGL 后端</th></tr>
-    <tr><td>开始一帧</td><td>等 fence、拿图像、重置 fence、uniform 环游标归零</td><td>基本无事，清一下状态缓存</td></tr>
-    <tr><td>进入 pass</td><td>开始一个 dynamic rendering，写清屏、写目标</td><td>绑 FBO、设视口、清屏</td></tr>
-    <tr><td>绑纹理</td><td>记进 set 数组，延迟到 draw</td><td>立即 <code>glBindTexture</code></td></tr>
-    <tr><td>绘制</td><td><code>vkCmdDrawIndexed</code></td><td><code>glDrawElements</code></td></tr>
-    <tr><td>结束一帧</td><td>屏障 → 结束录制 → 提交 → 挂 fence</td><td>无（命令早已执行）</td></tr>
-    <tr><td>呈现</td><td><code>vkQueuePresentKHR</code></td><td><code>SwapBuffers</code></td></tr>
-  </table>
+  <div class="fgrp" id="f-present">
+    <div class="fg-h">present：GL 的最后一步根本不在 GL 里</div>
+    <p>三段调用，<b>第三段是平台 API，不是 <code>gl*</code> 函数</b>：</p>
+    <div class="chain">
+      <div class="cg"><div class="cn">1</div><div class="cb"><code>GLDevice::present()</code>：<code>if (_window.swapBuffers) _window.swapBuffers(_window.swapUser);</code> —— 就两行，RHI 到这里交棒</div></div>
+      <div class="cg"><div class="cn">2</div><div class="cb"><code>GlfwHost::swapAdapter(void* user)</code>：<code>glfwSwapBuffers((GLFWwindow*)user)</code>。为什么绕一个裸函数指针：<code>rhi/gl</code> 不许 include GLFW</div></div>
+      <div class="cg"><div class="cn">3</div><div class="cb"><code>glfwSwapBuffers</code> 的平台实现：Win32 <code>SwapBuffers(hdc)</code> / X11 <code>glXSwapBuffers</code> / Wayland <code>eglSwapBuffers</code> / macOS <code>[NSOpenGLContext flushBuffer]</code>。<b>没有一个是 OpenGL 规范里的函数</b>，全是窗口系统的</div></div>
+    </div>
+    <p>这就是 RHI 做不了 present 的原因：<b>GL 规范里没有“把画面上屏”这个 API</b>，只有“当前上下文 + 默认帧缓冲”。上屏属于平台层，必须问宿主。</p>
+
+    <details>
+      <summary>底下是什么：双缓冲与交换<span class="sm">flip</span></summary>
+      <div class="body">
+<pre>           ┌──────────────────────────────┐
+  屏幕  ◀── │ front buffer（合成器读的是它）│
+           └──────────────────────────────┘
+                   ▲ swapBuffers 交换这两块
+           ┌──────────────────────────────┐
+           │ back  buffer（glDraw* 只写它） │
+           └──────────────────────────────┘</pre>
+        <p>上下文一建好就有两块缓冲。<b>所有绘制只进 back</b>，front 是别人正在看的。交换那一下（flip，或 copy+blit，看驱动/合成器）把 back 交出去。<b>于是“画到哪个窗口”这件事的答案就是：front 是哪块，窗口就显示哪块。</b></p>
+        <p>GL 里永远只有<b>一张</b> back buffer 在画 —— 你无法“指定第几张图”，那是 VK 才有的事。这也是两边架构差异的源头。</p>
+        <p><b>vsync</b> 就挂在交换上：<code>glfwSwapInterval(1)</code> = 驱动把交换推迟到下一次垂直消隐。本仓库不是建窗时写死，而是由 <code>DebugPanel::draw</code> 里 <code>glfwSwapInterval(settings.vsync ? 1 : 0)</code> 实时切。</p>
+        <p>所以 <b>GL 的限帧发生在 present，不在绘制</b>：<code>swapBuffers</code> 在队列满或 vsync 未到时通常直接阻塞。你拿不到“GPU 落后几帧”的任何信息——驱动内部有私有队列，帧延迟是隐式的。</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>同一件事在 Vulkan 被拆成三个 API + 两个信号量<span class="sm">对照</span></summary>
+      <div class="body">
+        <table>
+          <tr><th>要做的事</th><th>OpenGL</th><th>Vulkan</th></tr>
+          <tr><td>申请一帧的目标</td><td>没有这个概念，只有那张 back buffer</td><td><code>vkAcquireNextImageKHR</code>（signal <code>imageAvailable</code>）</td></tr>
+          <tr><td>提交命令</td><td>没有提交：命令录制即执行</td><td><code>vkQueueSubmit</code>（wait <code>imageAvailable</code>，signal <code>renderDone</code>）</td></tr>
+          <tr><td>交图前转布局</td><td>驱动内部做</td><td>必须自己 <code>vkCmdPipelineBarrier</code> 到 <code>PRESENT_SRC_KHR</code></td></tr>
+          <tr><td>上屏</td><td><code>swapBuffers</code>：平台 API，阻塞在 vsync</td><td><code>vkQueuePresentKHR</code>（wait <code>renderDone</code>）</td></tr>
+          <tr><td>图从哪来</td><td>上下文自带两块，数量不可调</td><td>swapchain：<code>max(2, caps.minImageCount)</code>，Windows 上常是 3 张</td></tr>
+          <tr><td>vsync</td><td><code>glfwSwapInterval(0/1)</code></td><td><code>presentMode = FIFO</code>（本仓库固定；MAILBOX 要改代码）</td></tr>
+          <tr><td>控延迟</td><td>只能靠阻塞，没有别的旋钮</td><td>等 fence、减少 image 数、选 IMMEDIATE/MAILBOX</td></tr>
+        </table>
+        <p><b>共同点</b>：最终都由系统的 presentation engine 决定什么时候上屏。区别是 GL 把它藏起来，VK 把它摊开成你可以排队的 API。</p>
+      </div>
+    </details>
+
+    <p><b>这个差异直接决定了架构，五条：</b></p>
+    <ol class="seq">
+      <li><code>present()</code> 在 GL 是转发、在 VK 是真动作<span class="why">所以接口签名只能是无参无返回值的“通知”，不能表达“排第几帧”</span></li>
+      <li>GL 没有 acquire → 主 pass 的目标用“无效句柄”当哨兵<span class="why"><code>beginRenderPass</code> 里那句 <code>desc.renderTarget.valid()</code> 就是这两条路的分叉点；VK 内部换成 <code>currentColorView()</code></span></li>
+      <li>GL 没有 swapchain → resize 由窗口系统自动重建 drawable<span class="why">VK 必须重建 swapchain，所以 <code>beginFrame()</code> 要返回 bool 让上层跳过这一帧</span></li>
+      <li>GL 的限帧在 present，VK 的在 acquire/fence<span class="why">压测对比时两边帧率行为天然不同，<code>RHI_CHURN</code> 的数字不能直接互比</span></li>
+      <li>GL 必须单线程 current，VK 可以并行录制<span class="why">这就是“多列表录制顺序规则只对 VK 成立”的根</span></li>
+    </ol>
+
+    <div class="warn">
+      <span class="nl">四个必须在 present 之前做完的事</span>
+      <b>一、</b>overlay（ImGui）必须在 <code>present</code> 之前画进 0 号 FBO；放到后面，那帧就丢了。<br>
+      <b>二、</b>回读（<code>RHI_PROBE</code>/<code>RHI_DUMP</code>）必须在 <code>present</code> 之前。交换之后 back buffer 已变成“上一帧的 front”，<code>glReadPixels</code> 读到的是未定义内容——本仓库放在 <code>GLDevice::endFrame()</code>，顺序是对的。<br>
+      <b>三、</b><code>vsync=false</code> 时 <code>swapBuffers</code> 不阻塞，不限帧就是几千 FPS；<code>RHI_EXIT_AFTER</code> 这类按帧计数的测试会在几十毫秒内跑完，别以为是引擎快了。<br>
+      <b>四、</b><code>glfwSwapBuffers</code> 会顺手把该窗口的上下文设为 current，所以多窗口时 present 不会串窗口；但<b>绘制</b>仍依赖 <code>createWindow</code> 里那次 <code>glfwMakeContextCurrent</code>。
+    </div>
+  </div>
+
+  <div class="fgrp" id="f-size">
+    <div class="fg-h">width / height：名字是“帧缓冲像素”，不是窗口尺寸</div>
+    <p>DPI 缩放下两者不等。L1 两个都取了：<code>glfwGetFramebufferSize</code> 进 <code>DeviceDesc</code>，<code>glfwGetWindowSize</code> 进 <code>InitDesc.windowWidth/Height</code>——后者只给拾取做坐标换算（鼠标是逻辑坐标，图是像素）。</p>
+    <table>
+      <tr><th>后端</th><th>用它干什么</th><th>填 0 会怎样</th></tr>
+      <tr><td>VK</td><td><code>vkCreateSwapchainKHR</code> 的 <code>extent</code>：<code>caps.currentExtent</code> 是 <code>UINT32_MAX</code>（组合器说“你自己定”）时才回退到它；<code>onResize</code> 重建 swapchain 时也用它</td><td>extent 为 0 → 创建失败</td></tr>
+      <tr><td>GL</td><td>存 <code>_size</code>；<code>framebufferSize()</code> 返回它；readback 与 RT 尺寸跟它走</td><td>RT 创建直接报 <code>width==0 || height==0</code></td></tr>
+    </table>
+    <p>注意 VK 的 extent <b>优先用 caps</b>，你填的值只是兜底——这是 Vulkan 的规矩，不是引擎的选择。<code>onResize</code> 只是更新这个字段，重建发生在下一帧 <code>beginFrame</code>。</p>
+  </div>
+
+  <div class="fgrp" id="f-msaa">
+    <div class="fg-h">msaaSamples：VK 里是指令，GL 里只是声明</div>
+    <div class="two">
+      <div class="col vk"><div class="ch">Vulkan：说了算</div><ol>
+        <li>传给 <code>VkSwapchain::create</code>，跟着建 MSAA 彩图 + resolve 附件</li>
+        <li>所有画到主帧缓冲的管线必须声明同样的 samples，否则该 pass 报错并跳过</li>
+        <li>改它 → 交换链对象整套重建</li>
+      </ol></div>
+      <div class="col gl"><div class="ch">OpenGL：说了不算</div><ol>
+        <li>GL 的默认帧缓冲采样数在<b>上下文创建那一刻</b>就定了（<code>glfwWindowHint(GLFW_SAMPLES)</code>）</li>
+        <li>RHI 改不了，只能 <code>glGetIntegerv(GL_SAMPLES)</code> 读回来比对</li>
+        <li>不一致 → 打 ERROR，<b>故意不静默按实际值出图</b></li>
+      </ol></div>
+    </div>
+    <p>所以 GL 下想真开 MSAA 得去改宿主建窗参数，改 <code>DeviceDesc</code> 只会得到一条错误日志。这个“不静默”是刻意的：静默了你会以为设置生效了。</p>
+  </div>
+
+  <div class="fgrp" id="f-val">
+    <div class="fg-h">enableValidation：只在 VK 有意义</div>
+    <p>VK 拿它当 <code>wantValidation</code> 的初值：真 → 尝试启用 <code>VK_LAYER_KHRONOS_validation</code>（可用 <code>RHI_VK_VALIDATION</code> 覆盖）；假 → 明确不启用。GL 完全不读，GL 没有校验层，调试手段只有 <code>glGetError</code> 和 KHR_debug。</p>
+    <p>默认值是 <code>true</code>，所以 demo 默认就带校验层跑。它属于“构建允许就开”的字段，不是性能开关。</p>
+  </div>
+
+  <div class="fgrp" id="f-escape">
+    <div class="fg-h">三个逃生口：宿主接管 Vulkan 的时机<code>instanceExtensions / createSurface / externalSurface</code></div>
+    <p>公共头里不许出现 <code>Vk</code> 类型（<code>RhiTypes.h</code> 不 include <code>vulkan.h</code>），所以这三个入口都用 <code>uint64</code> 传句柄，宿主自己 <code>reinterpret_cast</code>。三个有优先级：</p>
+    <ol class="seq">
+      <li><code>externalSurface != 0</code><span class="why">直接用，<code>_surfaceOwned = false</code>，析构时不动它 → 宿主负责销毁</span></li>
+      <li><code>createSurface</code> 有值<span class="why">拿 <code>VkInstance</code> 回调宿主；返回非 0 则 <code>_surfaceOwned = true</code>，RHI 销毁</span></li>
+      <li class="end">都没给<span class="why">按 <code>window.type</code> 自建，RHI 销毁</span></li>
+    </ol>
+    <p><code>instanceExtensions</code> 同样优先：非空就一个不加地照用，空才按 <code>window.type</code> 推导。想加 <code>VK_EXT_debug_utils</code> 之类又不想改引擎，就从这里塞。</p>
+    <div class="note">
+      <span class="nl">为什么非要留这个口</span>
+      macOS 的 NSView → CAMetalLayer 要 ObjC++，GLFW 内部已经做过这件事；引擎一旦自己去碰，就得为“不碰 GLFW”这条规矩开例外。逃生口把这段搬回宿主，代价只是多一个 <code>std::function</code> 字段。
+    </div>
+  </div>
+
+  <div class="fgrp" id="f-dead">
+    <div class="fg-h">三个“写着但没生效”的字段</div>
+    <table>
+      <tr><th>字段</th><th>实际情况</th><th>想让它生效要改哪</th></tr>
+      <tr><td>appName</td><td><code>GlfwHost</code> 填了 <code>"my_app"</code>；但 <code>VkDeviceInit::createInstance</code> 里 <code>app.pApplicationName = "my_app"</code> 是写死的，字段没人读</td><td><code>VkDeviceInit.cpp</code> 的 <code>createInstance</code></td></tr>
+      <tr><td>swapchainImageCount</td><td>全仓无人读。注释写“0 = 后端默认”，实际是“永远是默认”：VK 按 <code>caps.minImageCount</code> 决定</td><td><code>VkSwapchain::create</code> 取 <code>minImageCount</code> 那一步</td></tr>
+      <tr><td>offscreen</td><td><code>RHIFactory</code> 直接返回 <code>offscreen device creation not supported yet (C4/F1)</code>；<code>VulkanDevice</code> 构造里也先拦一次</td><td>没有 swapchain 的 device 路径，要做就是真活</td></tr>
+    </table>
+    <p>前两个是<b>字段留了但没接上</b>，第三个是<b>开关留了但明确失败</b>。三个都算“诚实的坑”：注释写了状态，用了会明确报错或明确不生效，不会假装支持。</p>
+  </div>
 
   <div class="note">
-    <span class="nl">这一层的验收标准</span>
-    后端层允许出现 <code>vk*</code>、<code>gl*</code>、<code>VkBuffer</code>、<code>GLuint</code>。除此之外任何地方出现，都是漏。<b>只允许一处</b>运行期分支：<code>RHIFactory::createDevice</code>。别的地方写 <code>if (backend == VK)</code>，就是在把两套实现搅在一起。
+    <span class="nl">这条链上唯一不能做的事</span>
+    L1 填 → L2 原样塞进 <code>InitDesc</code> → L3 一个字段不改 → L4 逐字段消费。<b>L3 的职责里包含“不改”</b>：工厂或契约层一旦替宿主补默认值、纠正参数，你就再也无法从“L1 填了什么”推出最终行为。要补默认值，就补在 <code>DeviceDesc</code> 的成员初始化上（那里本来就是默认值）。
   </div>
-</section>
+</div>
 
-<section id="s5">
-  <div class="sec-head"><span class="sec-num">L5</span><span class="sec-title">驱动层：整个 Vulkan 其实就这十几个调用</span></div>
-  <div class="depth"><span>宿主</span><span>编排</span><span>契约</span><span>后端</span><span class="on" style="background:var(--l5)">驱动</span><span>同步</span></div>
+<!-- ============ 墙外 ============ -->
+<div class="panel" id="p6">
+  <div class="pan-head"><span class="pnum">08</span><span class="ptitle">墙外：一帧的十几个调用</span></div>
 
-  <p class="lead">「跑通 Vulkan」听起来像三百件事。实际上一帧的调用链只有十几环，顺序固定。把下面这张表从上往下背下来，你就跑通了。</p>
+  <div class="warn">
+    <span class="nl">这一节不是一层</span>
+    零文件、零 include 边，只有 <code>&lt;vulkan/vulkan.h&gt;</code> 和 <code>&lt;glad/glad.h&gt;</code> 被 <code>rhi/vk</code>、<code>rhi/gl</code> 引进来。我们<b>不写</b>它，只排顺序、填参数。
+  </div>
 
   <ol class="seq">
-    <li><code>vkWaitForFences</code><span class="why">等这个槽位上一帧真的干完。前提：fence 是「挂起」状态，所以必须先 reset 过</span></li>
-    <li><code>vkAcquireNextImageKHR</code><span class="why">问交换链要一张可以画的图，同时 signal imageAvailable</span></li>
-    <li><code>vkResetFences</code><b> ← 必须在 acquire 成功之后</b><span class="why">acquire 失败时 early return，fence 不能已经被重置，否则下一帧会等一个永远不会 signal 的东西，直接卡死</span></li>
-    <li><code>（无 API）环游标归零</code><span class="why">每帧槽位一条 uniform 环，游标回到 0 号偏移；不调 vkResetDescriptorPool，描述符创建期写一次后不再改</span></li>
-    <li><code>vkBeginCommandBuffer</code> × N<span class="why">每个附加列表 + 主列表各一个</span></li>
-    <li><code>vkCmdBeginRendering</code><span class="why">dynamic rendering：目标格式、清屏值都在这时候说</span></li>
-    <li><code>vkCmdBindPipeline</code> / <code>vkCmdBindDescriptorSets</code> / <code>vkCmdBindVertexBuffers</code> / <code>vkCmdBindIndexBuffer</code><span class="why">四个绑定。描述符因为是动态偏移的，这里带 offset</span></li>
-    <li><code>vkCmdDrawIndexed</code><span class="why">真正的绘制：indexCount、instanceCount、firstIndex、vertexOffset</span></li>
-    <li><code>vkCmdEndRendering</code><span class="why">收一个 pass</span></li>
-    <li><code>vkCmdPipelineBarrier</code><span class="why">COLOR_ATTACHMENT_OUTPUT → PRESENT_SRC_KHR。dynamic rendering 不会替你写 finalLayout，<b>漏了就是黑屏</b></span></li>
-    <li><code>vkEndCommandBuffer</code><span class="why">结束录制</span></li>
-    <li><code>vkQueueSubmit</code><span class="why">按「附加 → 主」顺序提交；等 imageAvailable，waitStage 用 <b>COLOR_ATTACHMENT_OUTPUT</b>（不是 TOP_OF_PIPE）；signal 这张图的 renderDone</span></li>
-    <li class="end"><code>vkQueuePresentKHR</code><span class="why">等 renderDone，然后交给显示引擎</span></li>
+    <li><code>vkWaitForFences</code><span class="why">等本槽上一帧干完（fence 必须先 reset 过）</span></li>
+    <li><code>vkAcquireNextImageKHR</code><span class="why">要一张能画的图，signal imageAvailable</span></li>
+    <li><code>vkResetFences</code><span class="why"><b>必须在 acquire 成功之后</b>：失败就 early return，否则下一帧等一个永不 signal 的东西，卡死</span></li>
+    <li>环游标归零<span class="why">不调 <code>vkResetDescriptorPool</code>：描述符创建期写一次就不改</span></li>
+    <li><code>vkBeginCommandBuffer</code> × N<span class="why">每个附加列表 + 主列表</span></li>
+    <li><code>vkCmdBeginRendering</code><span class="why">dynamic rendering：目标格式、清屏值在这时说</span></li>
+    <li><code>vkCmdBindPipeline</code> / <code>BindDescriptorSets</code> / <code>BindVertexBuffers</code> / <code>BindIndexBuffer</code><span class="why">描述符是动态偏移，这里带 offset</span></li>
+    <li><code>vkCmdDrawIndexed</code><span class="why">indexCount、instanceCount、firstIndex、vertexOffset</span></li>
+    <li><code>vkCmdEndRendering</code></li>
+    <li><code>vkCmdPipelineBarrier</code><span class="why">COLOR_ATTACHMENT_OUTPUT → PRESENT_SRC_KHR。dynamic rendering 不替你写 finalLayout，<b>漏了就是黑屏</b></span></li>
+    <li><code>vkEndCommandBuffer</code></li>
+    <li><code>vkQueueSubmit</code><span class="why">按「附加 → 主」提交；等 imageAvailable，waitStage 用 <b>COLOR_ATTACHMENT_OUTPUT</b>；signal 该图 renderDone</span></li>
+    <li class="end"><code>vkQueuePresentKHR</code><span class="why">等 renderDone 再交给显示引擎</span></li>
   </ol>
 
+  <p>真正算我们写的只有三样：<b>① 函数指针表</b>（<code>vkGetDeviceProcAddr</code> 取 <code>vkCmdBeginRenderingKHR</code>，取不到当场报错）；<b>② 着色器</b>（GL 侧 <code>GLProgram</code>，VK 侧构建期 <code>glslangValidator</code>）；<b>③ 同步策略</b>。</p>
+
   <div class="note">
-    <span class="nl">这一层，我们写不写代码</span>
-    <b>不写这一层。</b>驱动 API 属于 SDK，不属于我们——我们的活是「按正确顺序调用它、把参数填对」。真正算我们自己写的只有三样：<b>① 函数指针表</b>（扩展函数比如 <code>vkCmdBeginRenderingKHR</code>，header 里只有声明，必须用 <code>vkGetDeviceProcAddr</code> 取地址，取不到就得当场报错）；<b>② 着色器编译</b>（GLSL 到 SPIR-V，构建期 <code>glslangValidator</code>）；<b>③ 同步策略</b>（什么时候等 fence、什么时候能删、删几帧）。<br><br>
-    所以越往下，代码越少、责任越大：L5 近乎零行，L6（同步）才是真正费脑子的那层。
+    <span class="nl">三个症状，九成在墙这边</span>
+    <b>启动就崩</b>：空指针建资源，或验证层报错你没看。<br>
+    <b>全程黑屏</b>：先查第 10 步屏障；再查 viewport 的 y 轴（VK 朝下、深度 0..1，跟 GL 相反）。<br>
+    <b>几十帧后卡死</b>：先查第 3 步顺序，再查 waitStage 是不是 TOP_OF_PIPE。
   </div>
-  <p>资源创建那一半（instance、物理设备、队列、swapchain、描述符布局、SPIR-V 管线、fence 和信号量）只在启动时跑一次，是另一条独立的路。日常跑帧，就是上面这十三步。</p>
+</div>
 
-  <div class="warn">
-    <span class="nl">三个症状，九成出在这一层</span>
-    <b>启动就崩</b>：几乎都是拿空指针去建资源，或者 validation layer 报了你没看。<br>
-    <b>全程黑屏</b>：先查第 10 步的屏障有没有写；再查 viewport 的 y 轴——Vulkan 的 y 朝下，深度范围是 0 到 1，跟 GL 正好相反。<br>
-    <b>跑几十帧后卡死</b>：先查第 3 步顺序，再查 waitStage 是不是 TOP_OF_PIPE。
-  </div>
-</section>
-
-<section id="s6">
-  <div class="sec-head"><span class="sec-num">L6</span><span class="sec-title">同步与显存：这一层最不直观，也最容易出事</span></div>
-  <div class="depth"><span>宿主</span><span>编排</span><span>契约</span><span>后端</span><span>驱动</span><span class="on" style="background:var(--l6)">同步</span></div>
-
-  <p class="lead">这一层不画东西，只回答一个问题：<b>这个资源现在还有人在用吗。</b> 回答错了，画面会花、会崩，而且崩的位置跟你写错的地方没关系。</p>
-
-  <p>四个东西，各管一件事，不要混：</p>
+<!-- ============ 排错 ============ -->
+<div class="panel" id="p7">
+  <div class="pan-head"><span class="pnum">09</span><span class="ptitle">排错：症状对层，别瞎猜</span></div>
 
   <table>
-    <tr><th>东西</th><th>管什么</th><th>不这么做会怎样</th></tr>
-    <tr><td>VkFence<br>每槽位一个</td><td>这个槽位的命令，GPU 干完没有</td><td>还没干完就复用命令缓冲 → 内容和预期不符、随机崩</td></tr>
-    <tr><td>imageAvailable<br>每槽位一个</td><td>交换链给的图，可以开始画没有</td><td>抢在呈现之前写 → 撕裂、闪烁</td></tr>
-    <tr><td>renderDone<br>每张图一个</td><td>这张图，我画完了没有</td><td>present 读到没画完的图 → validation 报 VUID 00067；用一张图一个信号量就是为躲这个</td></tr>
-    <tr><td>延迟销毁队列<br><code>DeletionQueue</code></td><td>这个资源，真的没人用了吗</td><td>CPU 侧 delete 立刻释放 → GPU 还在读，use-after-free</td></tr>
+    <tr><th>层</th><th>它看到的</th><th>它错了会怎样</th></tr>
+    <tr><td>L1</td><td>什么都看不到</td><td>窗口不刷新、白屏黑屏，程序不崩</td></tr>
+    <tr><td>L2</td><td><code>drawIndexed(ibo, count, pipeline, 矩阵)</code></td><td>少画、顺序错、深度不对</td></tr>
+    <tr><td>L3</td><td>三个句柄 + 一堆参数</td><td>gen 不匹配 → 断言；用 0 号 → 断言。这里出错通常早于这一帧</td></tr>
+    <tr><td>L4</td><td><code>VkPipeline</code>、描述符数组</td><td>set 布局与 pipelineLayout 不一致 → 校验层报错；没开校验就是黑屏</td></tr>
+    <tr><td>墙外</td><td><code>vkCmdDrawIndexed(ic,1,first,0,0)</code></td><td><code>indexCount</code> 传成顶点数 → 越界读，垃圾几何</td></tr>
   </table>
 
-  <p><b>为什么销毁要等两帧。</b> 你在第 N 帧决定「这张纹理不要了」。但 GPU 现在可能还在跑第 N-2 帧的命令，里面正读着它。所以 <code>DeletionQueue::kLagFrames = 2</code>：把释放动作排到两帧之后，而且必须挂在 fence 之后执行，顺序是「先 flush 队列，再 <code>++_frameCount</code>」——反了就等于没等。</p>
+  <details open>
+    <summary>五个开关，从粗到细<span class="sm">RHI_*</span></summary>
+    <div class="body">
+      <table>
+        <tr><th>开关</th><th>验什么</th></tr>
+        <tr><td><code>RHI_SMOKE=1</code></td><td>一帧内出图 → 验 L1→L4→墙 的接线</td></tr>
+        <tr><td><code>RHI_PROBE=1</code></td><td>第 30 帧回读中心像素 → 验 L4 屏障与 viewport</td></tr>
+        <tr><td><code>RHI_DUMP=1</code></td><td>导出 PPM → 验 L2 的编排</td></tr>
+        <tr><td><code>RHI_CHURN=N</code></td><td>反复创建销毁 → 验 L4 的延迟销毁纪律</td></tr>
+        <tr><td><code>RHI_TEX_CHURN</code> / <code>RHI_CMDLIST_CHURN</code></td><td>槽位数与列表数不涨 → 验 L3 的复用与回收</td></tr>
+      </table>
+      <p>两个后端各跑一遍，画面应该一样：<code>RHI_BACKEND=opengl</code> 与 <code>=vulkan</code>。</p>
+    </div>
+  </details>
 
-  <div class="warn">
-    <span class="nl">从 GL 带过来的习惯，在 VK 上是错的</span>
-    在 GL 上 <code>glDeleteTextures</code> 之后句柄立刻失效，但驱动会自己把真实释放推迟到没人用为止——你随手删是对的。搬到 VK 上，<code>vkDestroyImageView</code> 立刻释放，GPU 还在用。<b>而且它不一定当场崩</b>，可能三帧之后花屏，可能换个场景才崩。这类 bug 的代价是按小时计的。
+  <div class="note">
+    <span class="nl">最后一条最有用</span>
+    故意写错一次：删掉屏障，应该黑屏。改错了却什么都没发生，说明校验根本没开——那时候所有问题都变成「画面有点怪」。
   </div>
+</div>
 
-  <p>所以「Texture 能不能释放」的答案是：<b>能，但不能当场释放。</b> 契约层给你一个 <code>destroyTexture</code>，它做的只是把释放动作排进队列。上层觉得自己删干净了，实际上下层替你等了。</p>
-</section>
-
-<section id="s7">
-  <div class="sec-head"><span class="sec-num">07</span><span class="sec-title">回程：录完之后，怎么回到屏幕</span></div>
-  <p class="lead">前面六层是从上往下剥。但一帧真正的走向是「下 → 上 → 下 → 上」，四个转折。</p>
-
-  <div class="go">
-    <div class="gs down"><div class="gn">① 往下</div><div class="gt">录制</div><div class="gd">语义变成参数，参数写进命令缓冲。这一步 CPU 说了算。</div></div>
-    <div class="gs up"><div class="gn">② 往上</div><div class="gt">提交</div><div class="gd">命令缓冲交给队列。从这一刻起，GPU 说了算。</div></div>
-    <div class="gs down"><div class="gn">③ 往下</div><div class="gt">等待</div><div class="gd">fence 和信号量在底层把两边的节奏对上。</div></div>
-    <div class="gs up"><div class="gn">④ 往上</div><div class="gt">呈现</div><div class="gd">图像交给显示引擎。像素出现。</div></div>
-  </div>
-
-  <p>一句话记住方向：<b>往下是「决定」变成「参数」，往上是「参数」变成「像素」。</b> 中间那两次转折，就是同步对象存在的原因——它们不是 Vulkan 的麻烦，是两个执行者（CPU 和 GPU）必须有的接头。</p>
-</section>
-
-<section id="s8">
-  <div class="sec-head"><span class="sec-num">08</span><span class="sec-title">纵向切片：一次 drawIndexed 穿过六层</span></div>
-  <p class="lead">全景是横着看，这一节竖着切一刀。同一次绘制，在每一层眼里分别长什么样、错了会怎样。</p>
-
-  <table>
-    <tr><th>层</th><th>它看到的</th><th>它干的</th><th>它错了会怎样</th></tr>
-    <tr><td>L1 宿主</td><td>什么都看不到</td><td>只知道「这帧画完了」，继续下一圈</td><td>窗口不刷新、白屏或黑屏，但程序不崩</td></tr>
-    <tr><td>L2 编排</td><td><code>drawIndexed(ibo, indexCount, pipeline, 三组矩阵)</code></td><td>决定这个物体归哪个 pass，给什么管线</td><td>少画、画错顺序、深度不对</td></tr>
-    <tr><td>L3 契约</td><td>三个句柄 + 一堆参数</td><td>校验代际、写进命令列表、记下 set 组合</td><td>句柄 gen 不匹配 → 断言；用 0 号句柄 → 断言。这里出错通常是<b>早于</b>这一帧的</td></tr>
-    <tr><td>L4 VK 后端</td><td>句柄对应的 <code>VkPipeline</code>、描述符数组</td><td>draw 前补一次 <code>vkCmdBindDescriptorSets</code>（连续 5 个相同就跳过）</td><td>set 布局和 pipelineLayout 不一致 → 校验层报错；没开校验就是黑屏</td></tr>
-    <tr><td>L5 驱动</td><td><code>vkCmdDrawIndexed(ic, 1, first, 0, 0)</code></td><td>照做</td><td><code>indexCount</code> 传成顶点数 → 越界读，读到的全是垃圾几何</td></tr>
-    <tr><td>L6 同步</td><td>这条命令还挂在 GPU 上</td><td>保证它用的 buffer、纹理、描述符池都还没被释放</td><td><em>花屏、随机崩、崩在别的地方</em></td></tr>
-  </table>
-
-  <p>这张表最有用的地方是最后一列：<b>症状和层对得上，你就不用瞎猜。</b> 画面全黑但程序活着，往下三层找；程序崩了但崩得毫无关系，往上两层找销毁。</p>
-</section>
-
-<section id="s9">
-  <div class="sec-head"><span class="sec-num">09</span><span class="sec-title">边界：这套结构现在做不到什么</span></div>
-  <p class="lead">结构本身是通的——分层干净、逃生舱没变主路径（全仓库只有 <code>app/GlfwHost.cpp</code> 用原生句柄，就为给 ImGui）。问题都在契约字段和容器语义上，不在骨架上。</p>
-
-  <table>
-    <tr><th>级别</th><th>问题</th><th>为什么必须改</th></tr>
-    <tr><td>已关闭</td><td><code>createCommandList()</code> 泄列表</td><td><code>destroyCommandList</code> 已进接口：VK 端覆写、GL 端空实现。门禁里有 <code>RHI_CHURN</code> 一项盯着它</td></tr>
-    <tr><td>已关闭</td><td><code>RenderPassDesc::framebufferId</code></td><td>字段已删。契约层现在没有 GL 概念直通</td></tr>
-    <tr><td>已关闭</td><td><code>AttachmentLayout</code> 表达不了 MRT</td><td>已改成 <code>colorFormats[4] + colorCount</code>，只实现 color[0]；<code>colorCount&gt;1</code> 建管线时明确报错</td></tr>
-    <tr><td>已关闭</td><td><code>kMaxTexSlots = 4</code> 太少</td><td>已改成 8；descriptor 上限还要按设备裁（桌面 32、某些 Intel / MoltenVK 只有 8）</td></tr>
-    <tr><td>已关闭</td><td>句柄槽位不复用</td><td><code>HandleTable</code> 已有 <code>_freeSlots</code>，先出后进</td></tr>
-    <tr><td>已写</td><td>录制顺序 = 提交顺序；多线程录制只对 VK 成立</td><td>在 <code>docs/4-RHI接口契约.md</code> 与 <code>IRHIDevice.h</code> 里；GL 端 <code>createCommandList()</code> 返回主列表、立即执行，没有补救余地</td></tr>
-  </table>
-
-  <p>还有三件「到那天一定会逼你改结构」的事，现在不用做，但心里要有数：<b>bindless</b>（句柄模型会从「一个资源一个 id」变成「一段 id」）、<b>自动同步的 Render Graph</b>（同步从手写变成编译出来）、<b>真正的多线程录制</b>（VK 可以，GL 物理上不行，这一条会永久留在契约上）。</p>
-</section>
-
-<section id="s10">
-  <div class="sec-head"><span class="sec-num">10</span><span class="sec-title">怎么自己验证这份文档说的对不对</span></div>
-  <p class="lead">不用信我，跑四个开关就够。顺序很重要，从最粗到最细。</p>
-
-  <table>
-    <tr><th>开关</th><th>做什么</th><th>该看到什么</th></tr>
-    <tr><td>RHI_SMOKE=1</td><td>只跑到能出图</td><td>一帧内出图，能退出。这是在验 L1 到 L5 的接线</td></tr>
-    <tr><td>RHI_PROBE=1</td><td>第 30 帧回读屏幕中心像素</td><td>颜色不是纯黑/纯背景。这是在验 L5 的屏障和 viewport</td></tr>
-    <tr><td>RHI_DUMP=1</td><td>导出 PPM</td><td>能拿 Photoshop 打开，几何位置对。这是在验 L2 的编排</td></tr>
-    <tr><td>RHI_CHURN=N</td><td>反复创建销毁 N 轮</td><td>N 大也不崩、句柄数不涨。这是在验 L6 的延迟销毁</td></tr>
-    <tr><td>RHI_TEX_CHURN=N / RHI_CMDLIST_CHURN=N</td><td>纹理 / 附加列表反复创建销毁</td><td>前后槽位数、附加列表数不变。这是在验 L3 的句柄槽位复用与列表回收</td></tr>
-  </table>
-
-  <p>两个后端各跑一遍：<code>RHI_BACKEND=opengl</code> 和 <code>RHI_BACKEND=vulkan</code>，画面应该一样。不一样，就去看 L4 那张对照表里哪一行没对上。</p>
-
-  <p>最后一条最有用：<b>故意写错一次，确认你听得见报错。</b> 把屏障那一步删掉，应该黑屏；把 <code>kMaxTexSlots</code> 改小，应该报错。如果你改错了却什么都没发生，说明校验根本没开——那时候所有问题都会变成「画面有点怪」，而你会花几天去找一个本来有断言的地方。</p>
-</section>
-
-</main>
-
-<footer>
-  依据当前仓库代码 · 引用只到文件 + 符号名，不写行号（行号会漂移）
-</footer>
+<div class="foot">
+  依据当前仓库代码 · 只写文件 + 符号名，不写行号<br>
+  对象视角的完整清单见 <code>1-架构设计.html</code> 的「对象生命周期」一节
+</div>
 
 </div>
+
+<script>
+(function(){
+  var tabs=[].slice.call(document.querySelectorAll('.tab'));
+  var panels=[].slice.call(document.querySelectorAll('.panel'));
+  function show(id){
+    tabs.forEach(function(t){t.classList.toggle('on',t.getAttribute('data-p')===id)});
+    panels.forEach(function(p){p.classList.toggle('on',p.id===id)});
+  }
+  function jump(el){
+    var p=el.getAttribute('data-p');
+    if(p){ show(p); try{history.replaceState(null,'','#'+p)}catch(e){} }
+    var g=el.getAttribute('data-goto');
+    if(g){
+      var t=document.getElementById(g);
+      if(t){
+        var d=t.closest('details');
+        if(d){ d.open=true; }
+        t.scrollIntoView({block:'start'});
+      }
+    }
+  }
+  tabs.forEach(function(t){ t.addEventListener('click',function(){jump(t)}); });
+  [].slice.call(document.querySelectorAll('.trow,.chip')).forEach(function(e){
+    e.addEventListener('click',function(){jump(e)});
+  });
+  var h=(location.hash||'').replace('#','');
+  if(h){
+    var el=document.getElementById(h);
+    if(el && el.classList.contains('panel')) show(h);
+  }
+})();
+</script>
 </body>
 </html>
