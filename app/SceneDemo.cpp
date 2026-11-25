@@ -100,7 +100,9 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     objLight->setLightOpen(false);
     const auto lightPos = Light::GlobalLight().position;
     objLight->setPosition(0, {lightPos.x, lightPos.y, lightPos.z});
-    objLight->setScale(0, 0.5);
+    // 光源标记按模型原始尺寸的 2% 放（duck.dae 原生尺寸约 100+ 单位，
+    // 原来 0.5 = 上百单位，几乎是满屏一面墙；小尺寸才像"标记"）
+    objLight->setScale(0, 0.02);
 
     // 天空盒
     const auto skyboxPath = texPath / "skybox";
