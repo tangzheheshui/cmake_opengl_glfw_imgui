@@ -1,6 +1,7 @@
 #include "log/LogMacros.h"
 #include "RenderSystem.h"
 #include "render/scene.h"
+#include "render/Light.h"
 #include "object/Sky.h"
 #include "model/model.h"
 #include "pass/SkyPass.h"
@@ -667,8 +668,15 @@ void RenderSystem::ensureShadowResources() {
     if (!m_shadowRT.valid()) {
         ENGINE_LOG_ERROR("[SHADOW] shadow target create failed");
     } else {
+        m_shadowTex = device->renderTargetDepthTexture(m_shadowRT);
         ENGINE_LOG_INFO("[SHADOW] 1024x1024 depth target + depth-only pipeline ready");
     }
+}
+
+// V3-19：主场景绘制用的光空间矩阵（与阴影 Pass 完全一致）
+Matrix RenderSystem::shadowLightVP() const {
+    Matrix m = correctedLightVP();
+    return m;
 }
 
 void RenderSystem::recordShadowPass(rhi::IRHICommandList* cmd) {

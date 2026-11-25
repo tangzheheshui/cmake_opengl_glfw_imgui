@@ -31,6 +31,8 @@ struct MouseState {
     bool isMouseLeftPressed = false;
 };
 
+class Matrix;
+
 class RenderSystem {
 public:
 	static RenderSystem& getInstance();
@@ -64,6 +66,9 @@ public:
     // ---- RHI（引擎层，与 UI 解耦）----
     RenderSettings& settings() { return m_settings; }            // 渲染设置（UI 层可读写）
     rhi::IRHIDevice* rhiDevice() { return m_rhiDevice; }         // 只读借用（可能为空）
+    // V3-19：阴影贴图 + 光空间矩阵（MeshPass 主场景着色器采样用）
+    rhi::TextureHandle shadowTexture() const { return m_shadowTex; }
+    Matrix             shadowLightVP() const;
     // 资源预载（app 层显式调用，引擎不假设项目资源布局）
     void preloadTextures(const std::string& dirPath);
     // 叠加渲染回调（UI 合成点）：VK 在 render pass 内、场景之后调用；
@@ -117,6 +122,7 @@ private:
 	bool                    m_shadowInitTried = false;
 	void ensureShadowResources();
 	void recordShadowPass(rhi::IRHICommandList* cmd);
+	rhi::TextureHandle m_shadowTex;
 	struct PickRequest {
 		bool  pending = false;   // 已请求、待渲染
 		bool  rendered = false;  // 渲染完成、待回读

@@ -11,12 +11,15 @@ layout(set = 0, binding = 0) uniform FrameData {
     vec4 materialDiffuse;
     vec4 materialSpecular;
     vec4 materialParams;   // x=shininess y=strength z=has_normal w=has_specular
-    vec4 misc;             // D3：x=opacity（与 DrawUniforms.h 布局同步，176B）
+    vec4 misc;             // D3：x=opacity；V3-19：y=阴影开关
+    mat4 lightVP;          // V3-19：光空间矩阵（已做 Reversed-Z 修正；布局同步 240B）
 } fd;
 
 layout(set = 1, binding = 0) uniform sampler2D texture_diffuse0;
 layout(set = 2, binding = 0) uniform sampler2D texture_specular0;
 layout(set = 3, binding = 0) uniform sampler2D texture_normal0;
+// V3-19：阴影贴图固定在槽 4（set5）；未绑定时引擎填白纹理 + misc.y=0 不采样
+layout(set = 5, binding = 0) uniform sampler2D uShadowMap;
 
 // D8：高亮经 push constant offset 80（布局与 vert_model 的 PC 块一致：
 // mat4@0 + vec4@64 + vec4@80；前两项此着色器不消费，仅占位对齐）
@@ -76,6 +79,30 @@ void main()
                 specular = fd.lightSpecular.xyz * spec * vec3(texture(texture_specular0, fs_in.pTexCoord));
             }
             result += specular;
+        }
+    }
+
+    // V3-19：阴影（3x3 PCF）。阴影贴图按 Reversed-Z 写入（越大越近），
+    // 采样坐标做 Y 翻转（阴影 Pass 用负高度视口，纹理行序与 NDC 相反）
+    if (fd.misc.y > 0.5 && isOpen) {
+        vec4 ls = fd.lightVP * vec4(fs_in.pFragPos, 1.0);
+        if (ls.w > 0.0) {
+            vec3 proj = ls.xyz / ls.w;
+            vec2 uv = vec2(proj.x * 0.5 + 0.5, 0.5 - proj.y * 0.5);
+            if (uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0
+                && proj.z > 0.0 && proj.z < 1.0) {
+                vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+                float bias = 0.0015;
+                float litAcc = 0.0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        float d = texture(uShadowMap, uv + vec2(dx, dy) * texel).r;
+                        litAcc += (proj.z - bias <= d) ? 1.0 : 0.0;
+                    }
+                }
+                float lit = litAcc / 9.0;
+                result *= mix(0.45, 1.0, lit);   // 阴影区压暗到 45%
+            }
         }
     }
 

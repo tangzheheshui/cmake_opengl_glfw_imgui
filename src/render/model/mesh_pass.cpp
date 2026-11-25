@@ -6,6 +6,7 @@
 //
 
 #include "mesh_pass.h"
+#include <set>
 #include "RenderSystem.h"
 #include "rhi/IRHIDevice.h"
 #include "rhi/IRHICommandList.h"
@@ -527,7 +528,10 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     du.materialSpecular = m_material->specular;
     bool hasNormalTex = false, hasSpecularTex = false;
     du.materialParams = glm::vec4(m_material->shininess, m_material->shininess_strength, 0, 0);
-    du.misc = glm::vec4(opacity, 0.0f, 0.0f, 0.0f);   // D3：不透明度（首次提交，纹理标记稍后重提）
+    // V3-19：阴影——光空间矩阵 + 采样开关（y=1 才采样，没阴影贴图时保持原样）
+    const rhi::TextureHandle shadowTex = rs.shadowTexture();
+    du.lightVP = Matrix::toMatrix(rs.shadowLightVP());
+    du.misc = glm::vec4(opacity, shadowTex.valid() ? 1.0f : 0.0f, 0.0f, 0.0f);
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));
 
     // 材质纹理：槽位与 GL 路径一致（按材质纹理顺序即 GL 的 texture unit 序）
@@ -604,8 +608,14 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     }
     du.materialParams = glm::vec4(m_material->shininess, m_material->shininess_strength,
                                   hasNormalTex ? 1.0f : 0.0f, hasSpecularTex ? 1.0f : 0.0f);
-    du.misc = glm::vec4(opacity, 0.0f, 0.0f, 0.0f);   // D3：重提保持 opacity
+    // V3-19：重提时保持阴影开关（与首次提交一致）
+    du.misc = glm::vec4(opacity, rs.shadowTexture().valid() ? 1.0f : 0.0f, 0.0f, 0.0f);
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));   // 重提（含纹理标记）
+
+    // V3-19：阴影贴图固定占槽 4（set5），材质纹理只用槽 0..3
+    if (shadowTex.valid()) {
+        cmd->bindTexture(shadowTex, 4);
+    }
 
     cmd->bindVertexBuffer(m_rhiVB);
     if (m_rhiInstanceVB.valid()) {

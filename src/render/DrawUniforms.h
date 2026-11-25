@@ -26,9 +26,11 @@ struct DrawUniforms {
     glm::vec4 materialSpecular;          // uMaterail.specular
     glm::vec4 materialParams;            // x=uMaterail.shininess y=shininess_strength
                                          // z=has_normal_tex w=has_specular_tex
-    glm::vec4 misc;                      // D3：x=opacity（透明排序 <1 走 blend 管线）；yzw 预留
+    glm::vec4 misc;                      // D3：x=opacity；V3-19：y=阴影开关（1=采样阴影贴图）
+    // V3-19：光空间矩阵（已做 Reversed-Z 修正）。阴影贴图按它写入，着色器按同一约定比较
+    glm::mat4 lightVP;
 };
-static_assert(sizeof(DrawUniforms) == 176, "DrawUniforms layout must stay 176 bytes");
+static_assert(sizeof(DrawUniforms) == 240, "DrawUniforms layout must stay 240 bytes");
 
 } // namespace engine
 
