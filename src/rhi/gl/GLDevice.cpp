@@ -2,6 +2,9 @@
 //  GLDevice.cpp
 //
 #include "GLDevice.h"
+#include <filesystem>
+#include "fs/FilePathUtil.h"
+#include <cstdio>
 #include "GLCommandList.h"
 #include "rhi/FormatInfo.h"
 #include "log/LogMacros.h"
@@ -617,6 +620,47 @@ void GLDevice::waitIdle() {
 
 // V3-0：帧号推进 + 到期延迟销毁。GL 路径 RenderSystem 每帧调用一次；
 // 遗留叠加路径（drawSmokeTriangle 等）的额外调用幂等（flush 空队列无副作用）。
+void GLDevice::endFrame() {
+    // RHI_PROBE：第 30 帧回读两个像素（调试链路/阴影验证用）
+    static bool probeEnabled = (std::getenv("RHI_PROBE") != nullptr);
+    static int probeFrame = 0;
+    if (!probeEnabled || ++probeFrame != 30) return;
+    const int w = static_cast<int>(_size.width);
+    const int h = static_cast<int>(_size.height);
+    if (w <= 0 || h <= 0) return;
+    // 竖直中线扫 6 个点（地面阴影定位用）
+    char line[256]; int off = 0;
+    off += std::snprintf(line + off, sizeof(line) - off, "[GLPROBE]");
+    for (int i = 1; i <= 6; ++i) {
+        const int y = h * i / 8;
+        unsigned char p[4] = {0, 0, 0, 0};
+        glReadPixels(w / 2, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+        off += std::snprintf(line + off, sizeof(line) - off,
+                             " y%d=%d,%d,%d", y, p[0], p[1], p[2]);
+    }
+    ENGINE_LOG_INFO("%s", line);
+    // RHI_DUMP：整帧导出 PPM（与 VK 端同名设施；GL 原点是左下，导出时翻转行序）
+    if (std::getenv("RHI_DUMP")) {
+        std::vector<unsigned char> pix(static_cast<size_t>(w) * h * 4);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pix.data());
+        std::error_code ec;
+        auto tmpDir = std::filesystem::temp_directory_path(ec);
+        if (ec) tmpDir = ".";
+        FILE* fp = engine::fs::openWrite(tmpDir / "frame_gl.ppm");
+        if (fp) {
+            std::fprintf(fp, "P6\n%d %d\n255\n", w, h);
+            for (int y = h - 1; y >= 0; --y) {
+                const unsigned char* row = pix.data() + static_cast<size_t>(y) * w * 4;
+                for (int x = 0; x < w; ++x) {
+                    fwrite(row + x * 4, 1, 3, fp);
+                }
+            }
+            fclose(fp);
+        }
+    }
+    std::fflush(stdout);
+}
+
 bool GLDevice::beginFrame() {
     ++_frameCount;
     _delQueue.flush(_frameCount);

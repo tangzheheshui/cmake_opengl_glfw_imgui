@@ -154,6 +154,23 @@ bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint
             shader->setBool("uMaterail.has_specular_tex", has_specular_tex);
         }
         
+        // V3-21：阴影贴图（RHI 纹理绑到 GL 纹理单元 4）+ 光空间矩阵
+        {
+            auto& rs = RenderSystem::getInstance();
+            const rhi::TextureHandle shadowTex = rs.shadowTexture();
+            if (shadowTex.valid() && rs.settings().drawShadowPass) {
+                auto* dev = rs.rhiDevice();
+                if (dev && dev->commandList()) {
+                    dev->commandList()->bindTexture(shadowTex, 4);
+                }
+                shader->setInt("uShadowMap", 4);
+                shader->setMat4("uLightSpaceMatrix", rs.shadowLightVP());
+                shader->setInt("uShadowEnabled", 1);
+            } else {
+                shader->setInt("uShadowEnabled", 0);
+            }
+        }
+
         // 矩阵
         shader->setMat4("uViewProj", mtx);
         

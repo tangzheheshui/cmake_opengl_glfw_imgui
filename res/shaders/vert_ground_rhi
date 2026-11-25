@@ -1,0 +1,13 @@
+#version 330 core
+// V3-21：阴影接收面（GL 变体）：顶点即世界坐标
+layout (location = 0) in vec3 aPos;
+
+uniform mat4 uViewProj;
+
+out vec3 vWorld;
+
+void main()
+{
+    vWorld = aPos;
+    gl_Position = uViewProj * vec4(aPos, 1.0);
+}

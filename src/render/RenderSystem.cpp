@@ -109,7 +109,7 @@ bool RenderSystem::init(const InitDesc& desc, std::string* outError) {
     // 创建帧级 Pass（GL 专属实现：构造函数里就有 GL 调用如 FBO 创建，
     // 因此 Vulkan 模式下不创建——M4 中 Pass 逐步迁移到 RHI 后解除此限制）
     if (_backend == rhi::Backend::OpenGL) {
-        m_vec_renderpass.push_back(std::make_shared<CShadowPass>(mRenderContent));
+        // V3-21：阴影改由 RHI 阴影 Pass 承担（recordShadowPass），不再建遗留 CShadowPass
         m_vec_renderpass.push_back(std::make_shared<CNormalPass>(mRenderContent));
         m_vec_renderpass.push_back(std::make_shared<CSkyPass>(mRenderContent));
         m_vec_renderpass.push_back(std::make_shared<CPickPass>(mRenderContent));
@@ -220,7 +220,14 @@ void RenderSystem::renderFrame() {
     } else {
         // GL：线性工作流。默认帧缓冲以 GLFW_SRGB_CAPABLE 创建，写回时由硬件编码
         glEnable(GL_FRAMEBUFFER_SRGB);
+        // V3-21：GL 端阴影——先录 RHI 阴影 Pass（GL 立即执行），再跑遗留 Pass
+        recordShadowPass(m_rhiDevice->commandList());
         renderScenePasses();
+        // V3-21：RHI 地面（阴影接收面）画在遗留场景之后，深度测试正确遮挡
+        if (mCurScene && mCurScene->GetActiveCamera()) {
+            glDisable(GL_CULL_FACE);
+            recordGroundRHI(m_rhiDevice->commandList(), mCurScene->GetActiveCamera()->GetVPMatrix());
+        }
         drawSceneOverlays();            // RHI 叠加内容（并入主帧，不再自建 frame）
         selfTestAB();                   // M4.2 验证设施（GL 即时语义）
         runRenderTargetReadbackTest();
@@ -719,6 +726,10 @@ void RenderSystem::recordGroundRHI(rhi::IRHICommandList* cmd, const Matrix& view
     glm::mat4 lm = Matrix::toMatrix(correctedLightVP());
     cmd->setUniform("uLightMat", rhi::UniformValue::fromMat4(glm::value_ptr(lm)));
     cmd->bindTexture(m_shadowTex, 4);
+    // GL 后端采样器按名字绑定到纹理单元 4；VK 后端 set 索引固定，不需要
+    if (_backend == rhi::Backend::OpenGL) {
+        cmd->setUniform("uShadowMap", rhi::UniformValue::fromInt(4));
+    }
     cmd->bindVertexBuffer(m_groundVB);
     cmd->draw(6);
     cmd->popDebugLabel();

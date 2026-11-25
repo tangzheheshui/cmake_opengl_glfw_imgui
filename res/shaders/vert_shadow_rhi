@@ -1,0 +1,11 @@
+#version 330 core
+// V3-21：阴影 Pass 顶点着色器（GL 变体，深度专用）
+layout (location = 0) in vec3 aPos;
+layout (location = 3) in mat4 aInstanceMatrix;
+
+uniform mat4 uLightMat;   // 渲染侧已做 Reversed-Z 修正
+
+void main()
+{
+    gl_Position = uLightMat * aInstanceMatrix * vec4(aPos, 1.0);
+}

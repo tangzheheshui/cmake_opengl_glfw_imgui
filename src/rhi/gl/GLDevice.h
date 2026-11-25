@@ -116,7 +116,7 @@ public:
                          const ReadbackDesc& = {}) override;
 
     bool beginFrame() override;   // V3-0：帧号推进 + 延迟销毁队列 flush
-    void endFrame()   override {}
+    void endFrame()   override;   // RHI_PROBE 像素回读（调试设施）
     void waitIdle()   override;
 
     // ---- C1a：尺寸推送 + 呈现（RHI 不回查窗口系统）----
