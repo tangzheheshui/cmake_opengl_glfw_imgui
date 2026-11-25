@@ -43,6 +43,13 @@ cmake --build build
   Vulkan 后端启用但缺 `glslangValidator` 时 configure 直接报错
 - 多平台构建入口统一走 `CMakePresets.json`；`VULKAN_SDK` 环境变量会被自动探测
 
+### 打包
+
+```bash
+scripts/package_mac.sh        # macOS：dist/MyDuck.app
+powershell -ExecutionPolicy Bypass -File scripts/package_win.ps1   # Windows：dist/MyDuck-win(.zip)
+```
+
 ### 运行
 
 ```bash
