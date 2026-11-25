@@ -6,6 +6,9 @@
 //
 
 #include "mesh_pass.h"
+#include <unordered_map>
+#include <cmath>
+#include <cstdint>
 #include <set>
 #include "RenderSystem.h"
 #include "rhi/IRHIDevice.h"
@@ -435,6 +438,27 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     if (!m_rhiPipeline.valid() || !m_rhiVB.valid() || !m_rhiIB.valid()) return false;
     const auto& md = m_mesh_data;
 
+    // E4：LOD 选择——相机到本对象第一个实例的距离超过阈值时换简化网格
+    rhi::BufferHandle drawVB = m_rhiVB;
+    rhi::BufferHandle drawIB = m_rhiIB;
+    uint32_t drawIndexCount = static_cast<uint32_t>(md->indices.size());
+    {
+        const auto& st = rs.settings();
+        if (st.lodEnabled && !matModel.empty()) {
+            const float* m0 = matModel[0].buffer();
+            const glm::vec3 center(m0[12], m0[13], m0[14]);
+            const glm::vec3 cam = rs.activeCameraPos();
+            const glm::vec3 d = center - cam;
+            const float dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+            if (dist > st.lodDistance
+                && ensureLodGeometry(device)) {
+                drawVB = m_rhiVB1;
+                drawIB = m_rhiIB1;
+                drawIndexCount = m_lod1Tris * 3;
+            }
+        }
+    }
+
     auto* cmd = device->commandList();
 
     // 实例矩阵刷新（容量保护：超出初始容量不写入）
@@ -634,12 +658,12 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
         cmd->bindTexture(shadowTex, 4);
     }
 
-    cmd->bindVertexBuffer(m_rhiVB);
+    cmd->bindVertexBuffer(drawVB);
     if (m_rhiInstanceVB.valid()) {
         cmd->bindVertexBuffer(m_rhiInstanceVB, 1);
     }
-    cmd->bindIndexBuffer(m_rhiIB);
-    cmd->drawIndexed(static_cast<uint32_t>(md->indices.size()),
+    cmd->bindIndexBuffer(drawIB);
+    cmd->drawIndexed(drawIndexCount,
                      static_cast<uint32_t>(matModel.size()));
 
     // D5：着色+边线 —— 第二遍线框（深度偏移已在管线里，防止 z-fighting）
@@ -661,6 +685,101 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
 // ================= D2: RHI 拾取绘制 =================
 // pick 管线（vert_pick_rhi/frag_pick_rhi）：ID 编码色经 push constant 直出，
 // 无光照/纹理/FrameData。顶点布局与绘制管线一致（同一套 VB/IB/实例缓冲复用）。
+// E4：顶点聚簇简化——按格子把顶点合并成一个代表点，去掉退化三角形。
+// 输入输出都是 RHI 的交错布局（pos3+normal3+uv2）。
+static void clusterDecimate(const MeshData& md, float gridScale,
+                            std::vector<float>& outVerts,
+                            std::vector<unsigned int>& outIndices) {
+    const size_t vn = md.positions.size();
+    outVerts.clear();
+    outIndices.clear();
+    if (vn == 0 || md.indices.empty()) return;
+
+    glm::vec3 lo = md.positions[0], hi = md.positions[0];
+    for (const auto& p : md.positions) {
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    const glm::vec3 extent = hi - lo;
+    const float diag = std::sqrt(extent.x * extent.x + extent.y * extent.y + extent.z * extent.z);
+    const float grid = std::max(diag * gridScale, 1e-5f);
+    const float inv = 1.0f / grid;
+
+    std::unordered_map<uint64_t, uint32_t> cellToNew;
+    cellToNew.reserve(vn);
+    std::vector<uint32_t> remap(vn, 0);
+
+    auto cellKey = [inv](const glm::vec3& p, int32_t& x, int32_t& y, int32_t& z) {
+        x = static_cast<int32_t>(std::floor(p.x * inv));
+        y = static_cast<int32_t>(std::floor(p.y * inv));
+        z = static_cast<int32_t>(std::floor(p.z * inv));
+    };
+
+    for (size_t i = 0; i < vn; ++i) {
+        int32_t cx, cy, cz;
+        cellKey(md.positions[i], cx, cy, cz);
+        const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(cx) & 0x1FFFFF) << 42)
+                           | (static_cast<uint64_t>(static_cast<uint32_t>(cy) & 0x1FFFFF) << 21)
+                           | static_cast<uint64_t>(static_cast<uint32_t>(cz) & 0x1FFFFF);
+        auto it = cellToNew.find(key);
+        if (it != cellToNew.end()) {
+            remap[i] = it->second;
+            continue;
+        }
+        const uint32_t idx = static_cast<uint32_t>(outVerts.size() / 8);
+        cellToNew.emplace(key, idx);
+        remap[i] = idx;
+        const glm::vec3& p = md.positions[i];
+        const glm::vec3 n = i < md.normals.size() ? md.normals[i] : glm::vec3(0, 1, 0);
+        const glm::vec2 t = i < md.coords.size() ? md.coords[i] : glm::vec2(0);
+        outVerts.push_back(p.x); outVerts.push_back(p.y); outVerts.push_back(p.z);
+        outVerts.push_back(n.x); outVerts.push_back(n.y); outVerts.push_back(n.z);
+        outVerts.push_back(t.x); outVerts.push_back(t.y);
+    }
+
+    outIndices.reserve(md.indices.size());
+    for (size_t i = 0; i + 2 < md.indices.size(); i += 3) {
+        const uint32_t a = remap[md.indices[i]];
+        const uint32_t b = remap[md.indices[i + 1]];
+        const uint32_t c = remap[md.indices[i + 2]];
+        if (a == b || b == c || a == c) continue;   // 退化三角形
+        outIndices.push_back(a);
+        outIndices.push_back(b);
+        outIndices.push_back(c);
+    }
+}
+
+bool MeshPass::ensureLodGeometry(rhi::IRHIDevice* device) {
+    if (m_lodBuilt) return m_rhiVB1.valid() && m_rhiIB1.valid();
+    m_lodBuilt = true;
+    const auto& md = m_mesh_data;
+    if (!md || md->indices.empty()) return false;
+
+    std::vector<float> verts;
+    std::vector<unsigned int> idx;
+    clusterDecimate(*md, RenderSystem::getInstance().settings().lodRatio, verts, idx);
+    if (idx.empty() || verts.empty()) return false;
+
+    rhi::BufferDesc vb;
+    vb.size = static_cast<uint32_t>(verts.size() * sizeof(float));
+    vb.usage = rhi::BUF_VERTEX;
+    vb.initialData = verts.data();
+    m_rhiVB1 = device->createBuffer(vb);
+
+    rhi::BufferDesc ib;
+    ib.size = static_cast<uint32_t>(idx.size() * sizeof(unsigned int));
+    ib.usage = rhi::BUF_INDEX;
+    ib.initialData = idx.data();
+    m_rhiIB1 = device->createBuffer(ib);
+
+    m_lod0Tris = static_cast<uint32_t>(md->indices.size() / 3);
+    m_lod1Tris = static_cast<uint32_t>(idx.size() / 3);
+    ENGINE_LOG_INFO("[LOD] mesh tris %u -> %u (%.0f%%)",
+                    m_lod0Tris, m_lod1Tris,
+                    m_lod0Tris ? (m_lod1Tris * 100.0f / m_lod0Tris) : 0.0f);
+    return m_rhiVB1.valid() && m_rhiIB1.valid();
+}
+
 bool MeshPass::DrawShadowRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle shadowPipeline,
                              const Matrix& lightVP, const std::vector<Matrix>& matModel) {
     auto& rs = RenderSystem::getInstance();

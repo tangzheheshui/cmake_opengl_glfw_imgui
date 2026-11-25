@@ -38,6 +38,11 @@ struct RenderSettings {
     // ---- E3：CPU 视锥剔除（模型级 AABB 保守测试；像素结果不变，只省 draw）----
     bool frustumCull = true;
 
+    // ---- LOD（E4）：远处模型换用顶点聚簇简化网格 ----
+    bool  lodEnabled  = false;   // 默认关；RHI_LOD=1 或面板打开
+    float lodDistance = 12.0f;   // 相机到模型中心的距离阈值
+    float lodRatio    = 0.06f;   // 聚簇格子大小 = 包围盒对角线 × 该比例（越小越精细）
+
     // ---- CAD 选中高亮（D8）----
     // selectedId = 拾取命中的对象 ID（BaseDraw::GetID，0 = 无选中）；
     // 高亮颜色固定淡蓝，强度面板可调（0 = 关）

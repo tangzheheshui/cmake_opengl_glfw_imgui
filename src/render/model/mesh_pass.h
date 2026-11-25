@@ -73,6 +73,13 @@ public:
     rhi::PipelineHandle m_rhiPipelineWire;    // D5：线框变体（solid 着色器 + Line 模式，惰性建）
     rhi::GraphicsPipelineDesc _lastPipelineDesc;   // D3：blend 变体从 opaque desc 复制改状态
     rhi::UniformBlockHandle m_rhiUniformBlock;
+    // E4：LOD——顶点聚簇简化网格（惰性构建，首次需要时生成）
+    rhi::BufferHandle m_rhiVB1;
+    rhi::BufferHandle m_rhiIB1;
+    uint32_t          m_lod0Tris = 0;
+    uint32_t          m_lod1Tris = 0;
+    bool              m_lodBuilt = false;
+    bool ensureLodGeometry(rhi::IRHIDevice* device);
     bool m_rhiBuilt = false;
     std::map<std::string, rhi::TextureHandle> m_rhiTexCache;   // 材质纹理缓存（文件名 → RHI 纹理）
 };

@@ -93,6 +93,11 @@ bool RenderSystem::init(const InitDesc& desc, std::string* outError) {
     ENGINE_LOG_INFO("[RHI] backend = %s (device provided by host)",
                     _backend == rhi::Backend::Vulkan ? "Vulkan" : "OpenGL");
 
+    // E4：LOD 演示开关（默认关，不影响既有画面）
+    if (const char* e = std::getenv("RHI_LOD")) {
+        m_settings.lodEnabled = (std::atoi(e) != 0);
+    }
+
     // ������ɫ��
     // A4: rootPath 约定为 UTF-8；Windows 上 path(std::string) 按 ACP 解释会错，
     // 统一走 pathFromUtf8（引擎内路径字符串 = UTF-8）
@@ -736,6 +741,13 @@ void RenderSystem::recordGroundRHI(rhi::IRHICommandList* cmd, const Matrix& view
 }
 
 // V3-19：主场景绘制用的光空间矩阵（与阴影 Pass 完全一致）
+glm::vec3 RenderSystem::activeCameraPos() const {
+    if (mCurScene) {
+        if (auto cam = mCurScene->GetActiveCamera()) return cam->getPossition();
+    }
+    return Camera::GetCamera().getPossition();
+}
+
 Matrix RenderSystem::shadowLightVP() const {
     Matrix m = correctedLightVP();
     return m;

@@ -31,6 +31,7 @@ struct MouseState {
     bool isMouseLeftPressed = false;
 };
 
+#include <glm/glm.hpp>
 class Matrix;
 
 class RenderSystem {
@@ -68,6 +69,8 @@ public:
     rhi::IRHIDevice* rhiDevice() { return m_rhiDevice; }         // 只读借用（可能为空）
     // V3-19：阴影贴图 + 光空间矩阵（MeshPass 主场景着色器采样用）
     rhi::TextureHandle shadowTexture() const { return m_shadowTex; }
+    // E4：LOD 距离判定用——当前场景相机位置（无场景时退回全局相机）
+    glm::vec3 activeCameraPos() const;
     Matrix             shadowLightVP() const;
     // 资源预载（app 层显式调用，引擎不假设项目资源布局）
     void preloadTextures(const std::string& dirPath);
