@@ -874,24 +874,44 @@ void RenderSystem::runPickPass() {
     }
 
     auto colorTex = m_rhiDevice->renderTargetColorTexture(m_pickRT);
-    unsigned char px[4] = {0, 0, 0, 0};
-    rhi::ReadbackDesc rb;
-    // 行序镜像：VK row0 = 画面顶（鼠标原点），GL row0 = 画面底
     const auto fb = m_rhiDevice->framebufferSize();
     const int fbH = static_cast<int>(fb.height);
-    rb.x = m_pickReq.x;
-    rb.y = (m_rhiDevice->backend() == rhi::Backend::Vulkan)
-               ? m_pickReq.y
-               : (fbH > 0 ? static_cast<uint32_t>(fbH) - 1 - m_pickReq.y : m_pickReq.y);
-    rb.width = 1;
-    rb.height = 1;
-    if (!m_rhiDevice->readbackTexture(colorTex, px, sizeof(px), rb)) {
-        ENGINE_LOG_ERROR("[PICK] readback failed at (%u,%u)", rb.x, rb.y);
-        return;
+    const int fbW = static_cast<int>(fb.width);
+
+    // 回读单点（行序镜像：VK row0 = 画面顶/鼠标原点，GL row0 = 画面底）
+    auto readAt = [&](int x, int y, unsigned char out[4]) -> bool {
+        rhi::ReadbackDesc r;
+        r.x = static_cast<uint32_t>(x);
+        r.y = (m_rhiDevice->backend() == rhi::Backend::Vulkan)
+                  ? static_cast<uint32_t>(y)
+                  : (fbH > 0 ? static_cast<uint32_t>(fbH - 1 - y) : static_cast<uint32_t>(y));
+        r.width = 1; r.height = 1;
+        return m_rhiDevice->readbackTexture(colorTex, out, 4, r);
+    };
+
+    unsigned char px[4] = {0, 0, 0, 0};
+    bool hit = readAt(static_cast<int>(m_pickReq.x), static_cast<int>(m_pickReq.y), px) && px[3] >= 128;
+    // 容错：中心没命中时，回读 7x7 邻域找最近命中（鸭子形状不规则，点边缘/间隙也能选中）
+    if (!hit) {
+        for (int r = 1; r <= 3 && !hit; ++r) {
+            for (int dy = -r; dy <= r && !hit; ++dy) {
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    const int nx = static_cast<int>(m_pickReq.x) + dx;
+                    const int ny = static_cast<int>(m_pickReq.y) + dy;
+                    if (nx < 0 || nx >= fbW || ny < 0 || ny >= fbH) continue;
+                    unsigned char q[4] = {0, 0, 0, 0};
+                    if (readAt(nx, ny, q) && q[3] >= 128) {
+                        hit = true;
+                        px[0] = q[0]; px[1] = q[1]; px[2] = q[2]; px[3] = q[3];
+                    }
+                }
+            }
+        }
     }
-    if (px[3] < 128) {
+    if (!hit) {
         if (!m_pickReq.isHover) {
-            ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", rb.x, rb.y);
+            ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", m_pickReq.x, m_pickReq.y);
         }
         if (m_pickReq.isHover) {
             m_settings.hoverId = 0;   // 悬停落空 → 清除提示
