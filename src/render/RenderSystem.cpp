@@ -262,10 +262,10 @@ void RenderSystem::draw() {
     renderFrame();
 }
 
-// 惰性创建 secondary 列表（多线程录制；GL 退化为返回主列表，不加入）
+// 惰性创建附加 primary 列表（多线程录制拆批；GL 退化为返回主列表，不加入）
 void RenderSystem::ensureSecondaryLists(int count) {
     while (static_cast<int>(m_secondaryLists.size()) < count) {
-        rhi::IRHICommandList* l = m_rhiDevice->createSecondaryCommandList();
+        rhi::IRHICommandList* l = m_rhiDevice->createCommandList();
         if (!l || l == m_rhiDevice->commandList()) break;
         m_secondaryLists.push_back(l);
     }
@@ -280,16 +280,15 @@ void RenderSystem::drawRhiSceneContents() {
     // V3-18：先画阴影深度图（独立 Pass），再画主场景
     recordShadowPass(cmd);
 
-    rhi::RenderPassDesc rp;
-    rp.clearColor = true;
-    rp.clearDepth = true;
+    rhi::RenderPassDesc rpClear;
+    rpClear.clearColor = true;
+    rpClear.clearDepth = true;
     // B3c：清屏色按作者 sRGB 值给出；sRGB 附件按线性值编码，故先转线性
-    rp.clearColorValue[0] = color::srgbToLinear(0.2f);
-    rp.clearColorValue[1] = color::srgbToLinear(0.3f);
-    rp.clearColorValue[2] = color::srgbToLinear(0.3f);
-    rp.clearColorValue[3] = 1.0f;
-    cmd->beginRenderPass(rp);
-    cmd->pushDebugLabel("RhiScene");
+    rpClear.clearColorValue[0] = color::srgbToLinear(0.2f);
+    rpClear.clearColorValue[1] = color::srgbToLinear(0.3f);
+    rpClear.clearColorValue[2] = color::srgbToLinear(0.3f);
+    rpClear.clearColorValue[3] = 1.0f;
+    rhi::RenderPassDesc rpLoad;   // 后续批次/overlay：不 clear，保留颜色+深度
     static bool emptyScene = (std::getenv("RHI_EMPTY") != nullptr);   // 调试开关：仅清屏+UI（VK 面板排查用）
     static bool once = false;
     if (!once) { once = true; ENGINE_LOG_ERROR("[SCENE] emptyScene=%d objs=%zu", emptyScene ? 1 : 0, mCurScene->GetObjs().size()); }
@@ -317,8 +316,6 @@ void RenderSystem::drawRhiSceneContents() {
 
             auto drawSceneContent = [&](const Matrix& tileVP,
                                         const std::shared_ptr<Camera>& tileCam) {
-                // V3-20：阴影接收面（VK 模式的地面），每个 tile 各画一次
-                recordGroundRHI(cmd, tileVP);
                 g_stats.on = (std::getenv("RHI_FRAME_STATS") != nullptr);
                 const auto tCull0 = std::chrono::high_resolution_clock::now();
                 // D3：透明排序 + E3：视锥剔除——按 tile 相机计算（多相机下
@@ -349,44 +346,61 @@ void RenderSystem::drawRhiSceneContents() {
                         opaque.push_back(obj);
                 }
 
-                // 多线程录制不透明对象（RHI_MT=<N>；VK 后端 + 对象足够多才启用）
+                // 多线程拆批（方案 C：多个 primary 各自 begin/endRenderPass，深度 LOAD 连续）
                 static const int mtThreads = [] {
                     const char* e = std::getenv("RHI_MT");
                     return e ? std::atoi(e) : 0;
                 }();
                 if (mtThreads > 1 && opaque.size() > 64
-                    && m_rhiDevice->backend() == rhi::Backend::Vulkan) {
-                    ensureSecondaryLists(mtThreads - 1);
+                    && m_rhiDevice->backend() == rhi::Backend::Vulkan && !multi) {
+                    ensureSecondaryLists(mtThreads);
                     const size_t n = opaque.size();
                     const size_t perBatch = (n + mtThreads - 1) / mtThreads;
+                    // 批 0（附加列表 0）：begin(clear) + 地面 + 批0 + end
+                    {
+                        rhi::IRHICommandList* list = m_secondaryLists[0];
+                        list->beginRenderPass(rpClear);
+                        recordGroundRHI(list, tileVP);
+                        for (size_t i = 0; i < std::min(perBatch, n); ++i)
+                            opaque[i]->draw(list, tileVP);
+                        list->endRenderPass();
+                    }
+                    // 批 1..N-1（附加列表）：begin(load) + 批 + end（工作线程）
                     std::vector<std::thread> workers;
                     for (int b = 1; b < mtThreads; ++b) {
                         const size_t s = b * perBatch;
                         const size_t e = std::min(s + perBatch, n);
                         if (s >= e) continue;
-                        rhi::IRHICommandList* list = m_secondaryLists[b - 1];
-                        workers.emplace_back([list, &opaque, s, e, tileVP]() {
-                            rhi::RenderPassDesc rp;   // secondary 忽略内容（继承主 pass）
-                            list->beginRenderPass(rp);
+                        rhi::IRHICommandList* list = m_secondaryLists[b];
+                        workers.emplace_back([list, &opaque, s, e, tileVP, &rpLoad]() {
+                            list->beginRenderPass(rpLoad);
                             for (size_t i = s; i < e; ++i) opaque[i]->draw(list, tileVP);
-                            list->endRenderPass();   // secondary：vkEndCommandBuffer
+                            list->endRenderPass();
                         });
                     }
-                    // 主线程录第一批（主列表）
-                    for (size_t i = 0; i < std::min(perBatch, n); ++i)
-                        opaque[i]->draw(cmd, tileVP);
                     for (auto& t : workers) t.join();
-                } else {
-                    for (auto& obj : opaque) obj->draw(cmd, tileVP);
-                }
-
-                // 天空盒（RHI 路径，M4.3；调试面板开关生效）
-                if (m_settings.drawSkyPass) {
-                    if (auto sky = mCurScene->GetSkyBox()) {
-                        sky->drawRHI(cmd, tileCam->GetViewMatrix(), tileCam->GetProjectMatrix());
+                    // 主列表：begin(load) + 天空盒 + 透明 + end
+                    cmd->beginRenderPass(rpLoad);
+                    cmd->pushDebugLabel("RhiScene");
+                    if (m_settings.drawSkyPass) {
+                        if (auto sky = mCurScene->GetSkyBox())
+                            sky->drawRHI(cmd, tileCam->GetViewMatrix(), tileCam->GetProjectMatrix());
                     }
+                    for (auto& obj : transparent) obj->draw(cmd, tileVP);
+                    cmd->endRenderPass();
+                } else {
+                    // 单线程：主列表 begin(clear) + 地面 + 全部 + 天空盒 + 透明 + end
+                    cmd->beginRenderPass(rpClear);
+                    cmd->pushDebugLabel("RhiScene");
+                    recordGroundRHI(cmd, tileVP);
+                    for (auto& obj : opaque) obj->draw(cmd, tileVP);
+                    if (m_settings.drawSkyPass) {
+                        if (auto sky = mCurScene->GetSkyBox())
+                            sky->drawRHI(cmd, tileCam->GetViewMatrix(), tileCam->GetProjectMatrix());
+                    }
+                    for (auto& obj : transparent) obj->draw(cmd, tileVP);
+                    cmd->endRenderPass();
                 }
-                for (auto& obj : transparent) obj->draw(cmd, tileVP);
                 const auto tRec1 = std::chrono::high_resolution_clock::now();
                 g_stats.accum(std::chrono::duration<double, std::milli>(tCull1 - tCull0).count(),
                               std::chrono::duration<double, std::milli>(tRec1 - tCull1).count(),
@@ -424,12 +438,11 @@ void RenderSystem::drawRhiSceneContents() {
             }
         }
     }
-    // RHI 验证叠加内容（调试面板 / RHI_SMOKE / RHI_TEXQUAD 开关）
-    // 在同一个 render pass 内录制，不再自建 frame/pass
+    // RHI 验证叠加内容 + UI（独立 render pass，load 保留场景颜色与深度）
+    cmd->beginRenderPass(rpLoad);
     if (m_settings.rhiSmokeTriangle) recordSmokeTriangle(cmd);
     if (m_settings.rhiTexQuad)       recordTexturedQuad(cmd);
-    // UI 层叠加（ImGui Vulkan 等）在 render pass 内渲染。
-    // GL：关 sRGB 写编码，保持 ImGui 既有字节外观（VK 由附件格式驱动，no-op）
+    // UI 层叠加（ImGui Vulkan 等）。GL：关 sRGB 写编码，保持 ImGui 字节外观
     if (m_overlayFn) {
         cmd->setSrgbWrite(false);
         m_overlayFn(cmd);
