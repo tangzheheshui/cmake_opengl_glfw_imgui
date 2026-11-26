@@ -504,6 +504,9 @@ IRHICommandList* VulkanDevice::createCommandList() {
     }
     VkCommandList* raw = list.get();
     _extraLists.push_back(std::move(list));
+    // 若本帧已 begin（beginFrame 已过才创建），补一次 beginFrameSlot，
+    // 否则本帧录制会拿到"未 begin"的命令缓冲（VUID-vkCmd*-commandBuffer-recording）
+    if (_frameActive) raw->beginFrameSlot(_frames.index());
     return raw;
 }
 

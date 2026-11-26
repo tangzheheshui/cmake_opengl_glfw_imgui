@@ -277,9 +277,8 @@ void RenderSystem::drawRhiSceneContents() {
     auto* cmd = m_rhiDevice->commandList();
     if (!cmd) return;
 
-    // V3-18：先画阴影深度图（独立 Pass），再画主场景
-    recordShadowPass(cmd);
-
+    // 阴影深度图（独立 Pass）在拆批分支录制：多线程用附加列表（先提交），
+    // 单线程用主列表。这里先准备 render pass 描述。
     rhi::RenderPassDesc rpClear;
     rpClear.clearColor = true;
     rpClear.clearDepth = true;
@@ -289,6 +288,8 @@ void RenderSystem::drawRhiSceneContents() {
     rpClear.clearColorValue[2] = color::srgbToLinear(0.3f);
     rpClear.clearColorValue[3] = 1.0f;
     rhi::RenderPassDesc rpLoad;   // 后续批次/overlay：不 clear，保留颜色+深度
+    rpLoad.clearColor = false;
+    rpLoad.clearDepth = false;
     static bool emptyScene = (std::getenv("RHI_EMPTY") != nullptr);   // 调试开关：仅清屏+UI（VK 面板排查用）
     static bool once = false;
     if (!once) { once = true; ENGINE_LOG_ERROR("[SCENE] emptyScene=%d objs=%zu", emptyScene ? 1 : 0, mCurScene->GetObjs().size()); }
@@ -353,32 +354,36 @@ void RenderSystem::drawRhiSceneContents() {
                 }();
                 if (mtThreads > 1 && opaque.size() > 64
                     && m_rhiDevice->backend() == rhi::Backend::Vulkan && !multi) {
-                    ensureSecondaryLists(mtThreads);
+                    ensureSecondaryLists(mtThreads + 1);   // +1 = 阴影 pass 列表（先提交）
+                    // 阴影 pass 用第一个附加列表（提交顺序在批 0 之前）
+                    recordShadowPass(m_secondaryLists[0]);
                     const size_t n = opaque.size();
                     const size_t perBatch = (n + mtThreads - 1) / mtThreads;
-                    // 批 0（附加列表 0）：begin(clear) + 地面 + 批0 + end
+                    // 批 0（附加列表 1）：begin(clear) + 地面 + 批0 + end
                     {
-                        rhi::IRHICommandList* list = m_secondaryLists[0];
+                        rhi::IRHICommandList* list = m_secondaryLists[1];
                         list->beginRenderPass(rpClear);
                         recordGroundRHI(list, tileVP);
                         for (size_t i = 0; i < std::min(perBatch, n); ++i)
                             opaque[i]->draw(list, tileVP);
                         list->endRenderPass();
                     }
-                    // 批 1..N-1（附加列表）：begin(load) + 批 + end（工作线程）
-                    std::vector<std::thread> workers;
+                    // 批 1..N-1（附加列表 2..N）：begin(load) + 批 + end（线程池）
+                    if (!m_threadPool || m_threadPool->threadCount() < mtThreads - 1) {
+                        m_threadPool = std::make_unique<ThreadPool>(mtThreads - 1);
+                    }
                     for (int b = 1; b < mtThreads; ++b) {
                         const size_t s = b * perBatch;
                         const size_t e = std::min(s + perBatch, n);
                         if (s >= e) continue;
-                        rhi::IRHICommandList* list = m_secondaryLists[b];
-                        workers.emplace_back([list, &opaque, s, e, tileVP, &rpLoad]() {
+                        rhi::IRHICommandList* list = m_secondaryLists[b + 1];
+                        m_threadPool->submit([list, &opaque, s, e, tileVP, &rpLoad]() {
                             list->beginRenderPass(rpLoad);
                             for (size_t i = s; i < e; ++i) opaque[i]->draw(list, tileVP);
                             list->endRenderPass();
                         });
                     }
-                    for (auto& t : workers) t.join();
+                    m_threadPool->waitAll();
                     // 主列表：begin(load) + 天空盒 + 透明 + end
                     cmd->beginRenderPass(rpLoad);
                     cmd->pushDebugLabel("RhiScene");
@@ -389,7 +394,8 @@ void RenderSystem::drawRhiSceneContents() {
                     for (auto& obj : transparent) obj->draw(cmd, tileVP);
                     cmd->endRenderPass();
                 } else {
-                    // 单线程：主列表 begin(clear) + 地面 + 全部 + 天空盒 + 透明 + end
+                    // 单线程：阴影 + 主列表 begin(clear) + 地面 + 全部 + 天空盒 + 透明 + end
+                    recordShadowPass(cmd);
                     cmd->beginRenderPass(rpClear);
                     cmd->pushDebugLabel("RhiScene");
                     recordGroundRHI(cmd, tileVP);

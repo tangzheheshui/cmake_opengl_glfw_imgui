@@ -6,6 +6,7 @@
 #include <vector>
 #include <filesystem>
 #include <functional>
+#include "core/threadPool.h"
 #include "RenderSettings.h"
 #include "rhi/RhiTypes.h"
 
@@ -106,6 +107,7 @@ private:
 	void ensureSecondaryLists(int count);   // 惰性创建 secondary 列表（多线程录制）
 	std::function<void(rhi::IRHICommandList*)> m_overlayFn;
 	std::vector<rhi::IRHICommandList*> m_secondaryLists;   // 多线程录制 secondary 列表（惰性创建）
+	std::unique_ptr<ThreadPool> m_threadPool;              // 持久录制线程池（惰性创建）
 	// B4 验证设施（RHI_RT_TEST=1）：离屏 RT 渲染冒烟三角形 → 回读中心/角落像素。
 	// 两阶段状态机：第 N 帧渲染、第 N+1 帧回读（VK 上一帧已提交完成）
 	void runRenderTargetReadbackTest();

@@ -260,10 +260,8 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments    = &colorAtt;
     ri.pDepthAttachment     = &depthAtt;
-    // 主列表：本 pass 可能 execute secondary command buffer（多线程录制）
-    if (_primary) {
-        ri.flags = VK_RENDERING_CONTENTS_INLINE_BIT_KHR | VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
-    }
+    // 方案 C：多线程拆批用多个 primary（各自独立 render pass），不 execute secondary
+    ri.flags = 0;
 
     _device->recordBeginPassBarriers(commandBuffer(), desc.clearColor, desc.clearDepth);
     if (msaa) _device->recordMsaaBeginBarriers(commandBuffer());
