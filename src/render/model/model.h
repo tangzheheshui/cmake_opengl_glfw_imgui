@@ -81,6 +81,8 @@ public:
     void setMetallic(float v);
     void setRoughness(float v);
     void setAlbedo(const glm::vec3& c);
+    // PBR 贴图：type = albedo/normal/metalrough/ao；path 为空则移除该贴图（用标量兜底）
+    void setPbrTexture(const std::string& type, const std::string& path);
     // PBR：读当前材质（取第一个 mesh；面板实时显示用）
     float getMetallic() const { for (auto& m : m_mesh) if (auto mat = m->material()) return mat->metallic; return 0.0f; }
     float getRoughness() const { for (auto& m : m_mesh) if (auto mat = m->material()) return mat->roughness; return 0.5f; }

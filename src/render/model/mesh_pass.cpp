@@ -309,7 +309,7 @@ bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &mat
     du.materialAmbient = m_material->ambient;      // Material 字段本身为 vec4
     du.materialDiffuse = m_material->diffuse;
     du.materialSpecular = m_material->specular;
-    bool hasNormalTex = false, hasSpecularTex = false;
+    bool hasNormalTex = false, hasMetalroughTex = false, hasAoTex = false;
     du.materialParams = glm::vec4(m_material->metallic, m_material->roughness, 0, m_material->ao);
     // V3-19：阴影——光空间矩阵 + 采样开关（y=1 才采样，没阴影贴图时保持原样）
     const rhi::TextureHandle shadowTex = rs.shadowTexture();
@@ -317,10 +317,14 @@ bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &mat
     du.misc = glm::vec4(opacity, shadowTex.valid() ? 1.0f : 0.0f, 0.0f, 0.0f);
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));
 
-    // 材质纹理：槽位与 GL 路径一致（按材质纹理顺序即 GL 的 texture unit 序）
-    int slot = 0;
+    // 材质纹理：槽位按语义固定（albedo=0, metalrough/specular=1, normal=2, ao=3）
     for (const auto& tex : m_material->textures) {
-        if (slot >= 4) break;
+        int slot = -1;
+        if (tex.name == "texture_diffuse0")       slot = 0;
+        else if (tex.name == "texture_specular0" || tex.name == "texture_metalrough0") slot = 1;
+        else if (tex.name == "texture_normal0")   slot = 2;
+        else if (tex.name == "texture_ao0")       slot = 3;
+        if (slot < 0) continue;
         if (tex.name == "texture_normal0" && md->tangents.empty()) {
             // GL 路径同样不创建无切线的法线纹理绑定
             continue;
@@ -384,15 +388,16 @@ bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &mat
         }
         if (th.valid()) {
             cmd->bindTexture(th, slot, tex.name.c_str());
-            if (tex.name == "texture_normal0")   hasNormalTex = true;
-            if (tex.name == "texture_specular0") hasSpecularTex = true;
+            if (tex.name == "texture_normal0")     hasNormalTex = true;
+            if (tex.name == "texture_metalrough0") hasMetalroughTex = true;
+            if (tex.name == "texture_ao0")         hasAoTex = true;
         }
-        slot++;
     }
     du.materialParams = glm::vec4(m_material->metallic, m_material->roughness,
                                   hasNormalTex ? 1.0f : 0.0f, m_material->ao);
     // V3-19：重提时保持阴影开关（与首次提交一致）
-    du.misc = glm::vec4(opacity, rs.shadowTexture().valid() ? 1.0f : 0.0f, 0.0f, 0.0f);
+    du.misc = glm::vec4(opacity, rs.shadowTexture().valid() ? 1.0f : 0.0f,
+                        hasMetalroughTex ? 1.0f : 0.0f, hasAoTex ? 1.0f : 0.0f);
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));   // 重提（含纹理标记）
 
     // V3-19：阴影贴图固定占槽 4（set5），材质纹理只用槽 0..3

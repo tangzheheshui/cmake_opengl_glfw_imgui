@@ -631,6 +631,31 @@ void Model::setAlbedo(const glm::vec3& c) {
     for (auto& m : m_mesh) if (auto mat = m->material()) mat->diffuse = glm::vec4(c, 1.0f);
 }
 
+void Model::setPbrTexture(const std::string& type, const std::string& path) {
+    std::string uniformName;
+    if (type == "albedo")          uniformName = "texture_diffuse0";
+    else if (type == "normal")     uniformName = "texture_normal0";
+    else if (type == "metalrough") uniformName = "texture_metalrough0";
+    else if (type == "ao")         uniformName = "texture_ao0";
+    else return;
+    for (auto& m : m_mesh) {
+        auto mat = m->material();
+        if (!mat) continue;
+        bool found = false;
+        for (auto& t : mat->textures) {
+            if (t.name == uniformName) {
+                if (path.empty()) { t.filepath.clear(); t.data = nullptr; }
+                else { t.filepath = path; t.data = nullptr; }
+                found = true;
+                break;
+            }
+        }
+        if (!found && !path.empty()) {
+            mat->textures.push_back(Texture{uniformName, path, nullptr, 0, 0, 0});
+        }
+    }
+}
+
 void Model::setRotateX(int index, float angle) {
     if (index >= m_vec_modelMat.size() || index < 0) {
         return;

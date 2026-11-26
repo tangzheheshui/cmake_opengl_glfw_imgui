@@ -464,6 +464,9 @@ void GLCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, 
     // V3-19：阴影——光空间矩阵 + 采样开关（VK 从 UBO 同布局字段读取，GL 按名拆解）
     pipe.program->setMat4("uLightSpaceMatrix", &u->lightVP[0][0]);
     pipe.program->setInt("uShadowEnabled", u->misc.y > 0.5f ? 1 : 0);
+    // PBR：金属度-粗糙度贴图 / AO 贴图开关（misc.z / misc.w）
+    pipe.program->setBool("uHasMetalrough", u->misc.z > 0.5f);
+    pipe.program->setBool("uHasAo", u->misc.w > 0.5f);
 }
 
 void GLCommandList::draw(uint32_t vertexCount, uint32_t firstVertex) {

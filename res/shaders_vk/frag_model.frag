@@ -16,8 +16,9 @@ layout(set = 0, binding = 0) uniform FrameData {
 } fd;
 
 layout(set = 1, binding = 0) uniform sampler2D texture_diffuse0;
-layout(set = 2, binding = 0) uniform sampler2D texture_specular0;
+layout(set = 2, binding = 0) uniform sampler2D texture_metalrough0;   // PBR：metallic=B, roughness=G
 layout(set = 3, binding = 0) uniform sampler2D texture_normal0;
+layout(set = 4, binding = 0) uniform sampler2D texture_ao0;           // PBR：环境光遮蔽
 // V3-19：阴影贴图固定在槽 4（set5）；未绑定时引擎填白纹理 + misc.y=0 不采样
 layout(set = 5, binding = 0) uniform sampler2D uShadowMap;
 
@@ -81,6 +82,18 @@ void main()
     float ao        = fd.materialParams.w;
     bool has_normal_tex = fd.materialParams.z > 0.5;
     bool isOpen = fd.lightPosition_isOpen.w > 0.5;
+    bool has_metalrough = fd.misc.z > 0.5;
+    bool has_ao_tex     = fd.misc.w > 0.5;
+
+    // PBR 贴图覆盖（有贴图时从贴图读，否则用标量兜底）
+    if (has_metalrough) {
+        vec3 mr = texture(texture_metalrough0, fs_in.pTexCoord).rgb;
+        roughness = clamp(mr.g, 0.04, 1.0);
+        metallic  = mr.b;
+    }
+    if (has_ao_tex) {
+        ao = texture(texture_ao0, fs_in.pTexCoord).r;
+    }
 
     vec3 N = normalize(fs_in.pNormal);
     if (has_normal_tex) {

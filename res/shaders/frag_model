@@ -38,12 +38,15 @@ uniform vec4 uHighlight;   // D8：选中高亮 rgb 颜色 + a 强度（0 = 关�
 uniform vec4 uHover;       // 悬停高亮（更弱的提示色，不覆盖选中）
 uniform float uOpacity;    // D3：不透明度（1 = 不透明；<1 走 blend 管线）
 uniform sampler2D texture_diffuse0;
-uniform sampler2D texture_specular0;
+uniform sampler2D texture_metalrough0;   // PBR：metallic=B 通道，roughness=G 通道
 uniform sampler2D texture_normal0;
+uniform sampler2D texture_ao0;           // PBR：环境光遮蔽
 // V3-21：阴影（贴图固定在纹理单元 4；uShadowEnabled=0 时不采样）
 uniform sampler2D uShadowMap;
 uniform mat4 uLightSpaceMatrix;   // 已做 Reversed-Z 修正
 uniform int uShadowEnabled;
+uniform bool uHasMetalrough;      // misc.z：有金属度-粗糙度贴图
+uniform bool uHasAo;              // misc.w：有 AO 贴图
 
 const float PI = 3.14159265359;
 
@@ -85,6 +88,16 @@ void main()
     float metallic  = uMaterail.metallic;
     float roughness = clamp(uMaterail.roughness, 0.04, 1.0);
     float ao        = uMaterail.ao;
+
+    // PBR 贴图覆盖（有贴图时从贴图读，否则用标量兜底）
+    if (uHasMetalrough) {
+        vec3 mr = texture(texture_metalrough0, fs_in.pTexCoord).rgb;
+        roughness = clamp(mr.g, 0.04, 1.0);
+        metallic  = mr.b;
+    }
+    if (uHasAo) {
+        ao = texture(texture_ao0, fs_in.pTexCoord).r;
+    }
 
     vec3 N = normalize(fs_in.pNormal);
     if (uMaterail.has_normal_tex == 1) {
