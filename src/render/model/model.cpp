@@ -113,7 +113,10 @@ void Model::LoadFile(const std::string &path) {
     m_model_data = cached->data;   // 浅拷贝（内部全部 shared_ptr/vector）
     m_aabb = cached->localAabb;    // E3 剔除依赖：缓存/异步路径同样带回包围盒
     for (const auto& md : cached->meshDatas) {
-        m_mesh.push_back(std::make_shared<Mesh>(md, m_model_data.materials[md->index_material]));
+        // 克隆 material：缓存共享 ModelData/MeshData，但材质是每对象状态
+        //（PBR 参数/贴图各自独立，否则多个 Model 共享同一 material 会相互覆盖）
+        auto mat = std::make_shared<Material>(*m_model_data.materials[md->index_material]);
+        m_mesh.push_back(std::make_shared<Mesh>(md, mat));
     }
     m_clock = clock();
 }

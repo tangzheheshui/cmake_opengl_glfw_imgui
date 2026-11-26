@@ -129,13 +129,16 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
             m->LoadFile(engine::fs::utf8FromPath(
                 engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
             m->setCount(1);
-            m->setPosition(0, {(i - 2.5f) * 1.6f, 0.0f, 0.0f});
-            m->setScale(0, 0.011f);
+            m->setPosition(0, {(i - 2.5f) * 3.0f, 0.0f, 15.0f});
+            m->setScale(0, 0.04f);
             const std::string base = engine::fs::utf8FromPath(pbrDir / std::string(mats[i]));
             m->setPbrTexture("albedo",     base + "_Color.jpg");
             m->setPbrTexture("normal",     base + "_NormalGL.jpg");
             m->setPbrTexture("metalrough", base + "_MetalRough.jpg");
             m->setPbrTexture("ao",         base + "_AmbientOcclusion.jpg");  // 无则静默用标量
+            // 标量作为贴图 multiplier：默认 1.0 = 不缩放，面板滑杆可实时调
+            m->setMetallic(1.0f);
+            m->setRoughness(1.0f);
             pScene->AddObj(m);
         }
         ENGINE_LOG_INFO("[PBR_TEX] 6 ambientCG 材质：砖墙/金属/木×2/竹/瓷砖");
