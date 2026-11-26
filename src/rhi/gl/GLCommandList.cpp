@@ -456,10 +456,10 @@ void GLCommandList::setDrawUniforms(UniformBlockHandle block, const void* data, 
     pipe.program->setFloat3("uMaterail.ambient", u->materialAmbient.x, u->materialAmbient.y, u->materialAmbient.z);
     pipe.program->setFloat3("uMaterail.diffuse", u->materialDiffuse.x, u->materialDiffuse.y, u->materialDiffuse.z);
     pipe.program->setFloat3("uMaterail.specular", u->materialSpecular.x, u->materialSpecular.y, u->materialSpecular.z);
-    pipe.program->setFloat("uMaterail.shininess", u->materialParams.x);
-    pipe.program->setFloat("uMaterail.shininess_strength", u->materialParams.y);
+    pipe.program->setFloat("uMaterail.metallic", u->materialParams.x);
+    pipe.program->setFloat("uMaterail.roughness", u->materialParams.y);
     pipe.program->setBool("uMaterail.has_normal_tex", u->materialParams.z > 0.5f);
-    pipe.program->setBool("uMaterail.has_specular_tex", u->materialParams.w > 0.5f);
+    pipe.program->setFloat("uMaterail.ao", u->materialParams.w);
     pipe.program->setFloat("uOpacity", u->misc.x);   // D3：不透明度
     // V3-19：阴影——光空间矩阵 + 采样开关（VK 从 UBO 同布局字段读取，GL 按名拆解）
     pipe.program->setMat4("uLightSpaceMatrix", &u->lightVP[0][0]);

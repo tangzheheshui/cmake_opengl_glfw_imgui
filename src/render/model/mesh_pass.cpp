@@ -53,11 +53,11 @@ static glm::vec4 highlightValueOf(uint32_t flags) {
     return glm::vec4(0.25f, 0.55f, 1.0f, strength);
 }
 
-bool MeshPass::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags,
+bool MeshPass::Draw(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags,
                     int /*numViewpoit*/, float opacity) {
     // 去后端化：GL/VK 同一 RHI 路径。多视口由逐 tile viewport 重绘实现，
     // 旧着色器的 MULTI_VIEWPORT 标志在 RHI 路径不再需要。
-    return DrawRHI(matModel, mtx, flags & ~DrawOption::MULTI_VIEWPORT, opacity);
+    return DrawRHI(cmd, matModel, mtx, flags & ~DrawOption::MULTI_VIEWPORT, opacity);
 }
 
 // ================= M4.2: RHI 绘制路径 =================
@@ -161,7 +161,7 @@ void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     m_rhiBuilt = true;
 }
 
-bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity) {
+bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity) {
     auto& rs = RenderSystem::getInstance();
     auto* device = rs.rhiDevice();
     if (!device) return false;
@@ -201,7 +201,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
         }
     }
 
-    auto* cmd = device->commandList();
+    // cmd 由调用方传入（多线程录制：每批对象录到各自的命令列表）
 
     // 实例矩阵刷新（容量保护：超出初始容量不写入）
     const uint32_t instBytes = static_cast<uint32_t>(matModel.size() * sizeof(Matrix));
@@ -310,7 +310,7 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
     du.materialDiffuse = m_material->diffuse;
     du.materialSpecular = m_material->specular;
     bool hasNormalTex = false, hasSpecularTex = false;
-    du.materialParams = glm::vec4(m_material->shininess, m_material->shininess_strength, 0, 0);
+    du.materialParams = glm::vec4(m_material->metallic, m_material->roughness, 0, m_material->ao);
     // V3-19：阴影——光空间矩阵 + 采样开关（y=1 才采样，没阴影贴图时保持原样）
     const rhi::TextureHandle shadowTex = rs.shadowTexture();
     du.lightVP = Matrix::toMatrix(rs.shadowLightVP());
@@ -389,8 +389,8 @@ bool MeshPass::DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, u
         }
         slot++;
     }
-    du.materialParams = glm::vec4(m_material->shininess, m_material->shininess_strength,
-                                  hasNormalTex ? 1.0f : 0.0f, hasSpecularTex ? 1.0f : 0.0f);
+    du.materialParams = glm::vec4(m_material->metallic, m_material->roughness,
+                                  hasNormalTex ? 1.0f : 0.0f, m_material->ao);
     // V3-19：重提时保持阴影开关（与首次提交一致）
     du.misc = glm::vec4(opacity, rs.shadowTexture().valid() ? 1.0f : 0.0f, 0.0f, 0.0f);
     cmd->setDrawUniforms(m_rhiUniformBlock, &du, sizeof(du));   // 重提（含纹理标记）

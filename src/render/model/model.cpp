@@ -582,7 +582,7 @@ void Model::update() {
     }
 }
 
-bool Model::draw(const Matrix &mtx) {
+bool Model::draw(rhi::IRHICommandList* cmd, const Matrix &mtx) {
     // 去后端化：裁剪/混合状态由管线描述符管理（blend 变体），无 GL 状态调用
     uint32_t flags = 0;
     if (getLightOpen()) {
@@ -612,13 +612,23 @@ bool Model::draw(const Matrix &mtx) {
 
     for (auto mesh : m_mesh) {
         mesh->setBoneMat(m_FinalBoneMatrices);
-        mesh->Draw(m_vec_modelMat, mtx, flags, m_nMultiViewport, opacity);
+        mesh->Draw(cmd, m_vec_modelMat, mtx, flags, m_nMultiViewport, opacity);
     }
     return true;
 }
 
 void Model::setCount(int count) {
     m_vec_modelMat.resize(count, Matrix());
+}
+
+void Model::setMetallic(float v) {
+    for (auto& m : m_mesh) if (auto mat = m->material()) mat->metallic = v;
+}
+void Model::setRoughness(float v) {
+    for (auto& m : m_mesh) if (auto mat = m->material()) mat->roughness = v;
+}
+void Model::setAlbedo(const glm::vec3& c) {
+    for (auto& m : m_mesh) if (auto mat = m->material()) mat->diffuse = glm::vec4(c, 1.0f);
 }
 
 void Model::setRotateX(int index, float angle) {

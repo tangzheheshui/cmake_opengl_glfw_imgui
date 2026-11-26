@@ -58,7 +58,7 @@ public:
     // E5 流式加载：后台线程预解析进缓存（两端通用；解析纯 CPU，GPU 资源
     // 主线程惰性创建）。主线程随后的 LoadFile 命中缓存/等待解析完成。
     static void prefetchAsync(const std::string &path);
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(rhi::IRHICommandList* cmd, const Matrix &mtx) override;
     // D3：透明排序深度键 = 第一个实例的平移（多实例取代表；CAD 单件常用）
     glm::vec3 worldCenter() const override;
     // E3：世界空间 AABB（局部盒 8 角 × 全部实例矩阵变换取并集；视锥剔除用）
@@ -77,6 +77,13 @@ public:
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) override;
     // 模型的属�?
     void setCount(int count);
+    // PBR：材质参数（遍历所有 mesh 写入；供场景/面板调金属度、粗糙度）
+    void setMetallic(float v);
+    void setRoughness(float v);
+    void setAlbedo(const glm::vec3& c);
+    // PBR：读当前材质（取第一个 mesh；面板实时显示用）
+    float getMetallic() const { for (auto& m : m_mesh) if (auto mat = m->material()) return mat->metallic; return 0.0f; }
+    float getRoughness() const { for (auto& m : m_mesh) if (auto mat = m->material()) return mat->roughness; return 0.5f; }
     void setScale(int index, float scale);
     void setPosition(int index, const glm::vec3 &pos);
     void setRotateX(int index, float angle);

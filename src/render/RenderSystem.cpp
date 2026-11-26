@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 
 // ---- RHI 冒烟三角形几何（NDC 位置 + 颜色，交错存放）----
 namespace {
@@ -36,6 +37,25 @@ const float kIdentityMat4[16] = {
     0, 0, 1, 0,
     0, 0, 0, 1,
 };
+
+// 帧性能统计（RHI_FRAME_STATS=1）：细分「剔除+排序」vs「录制」，定位 CPU 瓶颈。
+// 累计 60 帧输出一次平均（多视口下每 tile 各累计一次，取和）。
+struct FrameStats {
+    bool   on = false;
+    double cullMs = 0, recordMs = 0;
+    size_t draws = 0;
+    int    frames = 0;
+    void accum(double cull, double record, size_t n) {
+        if (!on) return;
+        cullMs += cull; recordMs += record; draws += n;
+        if (++frames % 60 == 0) {
+            ENGINE_LOG_INFO("[STATS] cull+sort=%.2fms record=%.2fms draws=%zu",
+                            cullMs / 60.0, recordMs / 60.0, draws / 60);
+            cullMs = recordMs = 0.0; draws = 0;
+        }
+    }
+};
+FrameStats g_stats;
 } // namespace
 
 RenderSystem& RenderSystem::getInstance() {
@@ -289,10 +309,13 @@ void RenderSystem::drawRhiSceneContents() {
                                         const std::shared_ptr<Camera>& tileCam) {
                 // V3-20：阴影接收面（VK 模式的地面），每个 tile 各画一次
                 recordGroundRHI(cmd, tileVP);
+                g_stats.on = (std::getenv("RHI_FRAME_STATS") != nullptr);
+                const auto tCull0 = std::chrono::high_resolution_clock::now();
                 // D3：透明排序 + E3：视锥剔除——按 tile 相机计算（多相机下
                 // 各 tile 的可见集不同，剔除与排序必须逐 tile 做）
                 const auto drawList = mCurScene->getSortedDrawList(tileCam->getPossition(),
                                                                    tileVP.buffer());
+                const auto tCull1 = std::chrono::high_resolution_clock::now();
                 static bool sortLogged = false;
                 if (!sortLogged && std::getenv("RHI_ALPHA_DEMO")) {
                     sortLogged = true;
@@ -310,7 +333,7 @@ void RenderSystem::drawRhiSceneContents() {
                 // 它们的输出（透明被覆盖 = 混合结果丢失；overlay 被覆盖 = 全消失）。
                 for (auto& obj : drawList) {
                     if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) continue;
-                    obj->draw(tileVP);
+                    obj->draw(cmd, tileVP);
                 }
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
                 if (m_settings.drawSkyPass) {
@@ -320,9 +343,13 @@ void RenderSystem::drawRhiSceneContents() {
                 }
                 for (auto& obj : drawList) {
                     if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) {
-                        obj->draw(tileVP);
+                        obj->draw(cmd, tileVP);
                     }
                 }
+                const auto tRec1 = std::chrono::high_resolution_clock::now();
+                g_stats.accum(std::chrono::duration<double, std::milli>(tCull1 - tCull0).count(),
+                              std::chrono::duration<double, std::milli>(tRec1 - tCull1).count(),
+                              drawList.size());
             };
 
             if (multi && fw > 0 && fh > 0) {

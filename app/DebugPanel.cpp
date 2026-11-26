@@ -4,6 +4,9 @@
 //
 #include "DebugPanel.h"
 #include "rhi/IRHIDevice.h"
+#include "RenderSystem.h"
+#include "scene.h"
+#include "model/model.h"
 #include "imgui.h"
 #include "GLFW/glfw3.h"
 #include <cstdlib>
@@ -82,6 +85,32 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
         }
         ImGui::Checkbox("CPU 视锥剔除", &settings.frustumCull);
         ImGui::TextDisabled("模型级 AABB 保守测试；关闭对比性能");
+    }
+
+    // ---- PBR 材质（选中对象的金属度/粗糙度实时调）----
+    if (ImGui::CollapsingHeader("PBR 材质", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto scene = RenderSystem::getInstance().GetCurScene();
+        if (scene && settings.selectedId != 0) {
+            std::shared_ptr<Model> selModel;
+            for (auto& obj : scene->GetObjs()) {
+                if (obj->GetID() != settings.selectedId) continue;
+                selModel = std::dynamic_pointer_cast<Model>(obj);
+                break;
+            }
+            if (selModel) {
+                float metallic  = selModel->getMetallic();
+                float roughness = selModel->getRoughness();
+                if (ImGui::SliderFloat("金属度 Metallic", &metallic, 0.0f, 1.0f, "%.2f"))
+                    selModel->setMetallic(metallic);
+                if (ImGui::SliderFloat("粗糙度 Roughness", &roughness, 0.0f, 1.0f, "%.2f"))
+                    selModel->setRoughness(roughness);
+                ImGui::TextDisabled("选中对象的 PBR 参数；改动下帧生效");
+            } else {
+                ImGui::TextDisabled("选中的不是模型（无材质）");
+            }
+        } else {
+            ImGui::TextDisabled("点击模型选中后，可在此调金属度/粗糙度");
+        }
     }
 
     // ---- 全局 ----

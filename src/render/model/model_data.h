@@ -34,6 +34,10 @@ struct Material {
     std::vector<Texture> textures;
     float shininess = 0.f;
     float shininess_strength = 0.f;
+    // PBR（B1）：金属度/粗糙度/环境光遮蔽。默认非金属、中等粗糙、无遮蔽
+    float metallic  = 0.0f;
+    float roughness = 0.5f;
+    float ao        = 1.0f;
 };
 
 struct KeyPosition

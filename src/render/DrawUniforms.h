@@ -24,8 +24,7 @@ struct DrawUniforms {
     glm::vec4 materialAmbient;           // uMaterail.ambient
     glm::vec4 materialDiffuse;           // uMaterail.diffuse
     glm::vec4 materialSpecular;          // uMaterail.specular
-    glm::vec4 materialParams;            // x=uMaterail.shininess y=shininess_strength
-                                         // z=has_normal_tex w=has_specular_tex
+    glm::vec4 materialParams;            // PBR：x=metallic y=roughness z=has_normal_tex w=ao
     glm::vec4 misc;                      // D3：x=opacity；V3-19：y=阴影开关（1=采样阴影贴图）
     // V3-19：光空间矩阵（已做 Reversed-Z 修正）。阴影贴图按它写入，着色器按同一约定比较
     glm::mat4 lightVP;

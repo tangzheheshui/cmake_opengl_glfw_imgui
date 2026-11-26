@@ -16,9 +16,9 @@ Mesh::Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData
     m_pass = std::make_shared<MeshPass>(meshData, matData);
 }
 
-bool Mesh::Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity) {
+bool Mesh::Draw(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity) {
     if (m_pass) {
-         m_pass->Draw(matModel, mtx, flags, numViewpoit, opacity);
+         m_pass->Draw(cmd, matModel, mtx, flags, numViewpoit, opacity);
     }
     return true;
 }
@@ -29,6 +29,10 @@ void Mesh::setBoneMat(std::shared_ptr<std::vector<glm::mat4>> mat) {
 
 std::shared_ptr<MeshData> Mesh::meshData() const {
     return m_pass ? m_pass->m_mesh_data : nullptr;
+}
+
+std::shared_ptr<Material> Mesh::material() const {
+    return m_pass ? m_pass->m_material : nullptr;
 }
 
 bool Mesh::DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,

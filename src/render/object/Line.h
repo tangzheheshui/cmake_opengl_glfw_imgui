@@ -27,9 +27,9 @@ public:
     // 视口尺寸提示（framebuffer 像素）。仅在命令列表拿不到视口时兜底；
     // 默认 3200x1800 = 本 app 默认窗口（1600x900）在 macOS Retina 2x 下的尺寸。
     void setViewportSizeHint(uint32_t w, uint32_t h) { m_rhiViewportHintW = w; m_rhiViewportHintH = h; }
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(rhi::IRHICommandList* cmd, const Matrix &mtx) override;
 private:
-    bool drawRHI(const Matrix &mtx);
+    bool drawRHI(rhi::IRHICommandList* cmd, const Matrix &mtx);
     void ensureRHIResources(rhi::IRHIDevice* device);
     // ---- D1: 宽线展开路径 ----
     // 展开顶点：线段端点 A/B + 展开参数 + 像素→NDC 换算，共 12 float = 48B

@@ -19,7 +19,7 @@ class Sky : public BaseDraw {
 public:
     Sky() {}
     ~Sky() {}
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(rhi::IRHICommandList* cmd, const Matrix &mtx) override;
     // M4.3: RHI 路径（在活跃 render pass 内录制；两后端通用）
     bool drawRHI(rhi::IRHICommandList* cmd, const Matrix &viewMat, const Matrix &projMat);
     void setCubeImage(const std::array<std::string, 6>& imgs);

@@ -94,7 +94,7 @@ void CText::ensureRHIResources(rhi::IRHIDevice* device) {
     }
 }
 
-bool CText::drawRHI(const Matrix &mtx) {
+bool CText::drawRHI(rhi::IRHICommandList* cmd, const Matrix &mtx) {
     auto& rs = RenderSystem::getInstance();
     auto* device = rs.rhiDevice();
     auto font = _fontMng.lock();
@@ -137,7 +137,7 @@ bool CText::drawRHI(const Matrix &mtx) {
     }
     if (m_rhiVerts.empty()) return true;   // 空串：无事可画
 
-    auto* cmd = device->commandList();
+    // cmd 由调用方传入（多线程录制）
     if (!cmd) return false;
 
     // B3c：作者 sRGB 常量上传前转线性
@@ -158,9 +158,9 @@ bool CText::drawRHI(const Matrix &mtx) {
     return true;
 }
 
-bool CText::draw(const Matrix &mtx) {
+bool CText::draw(rhi::IRHICommandList* cmd, const Matrix &mtx) {
     // 两端同一实现：SDF 图集 RHI 路径
-    return drawRHI(mtx);
+    return drawRHI(cmd, mtx);
 }
 
 void CText::SetText(const std::string &str) {

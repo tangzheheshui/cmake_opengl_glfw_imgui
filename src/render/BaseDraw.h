@@ -26,7 +26,7 @@ public:
         _ID = _staticID.fetch_add(1, std::memory_order_relaxed);
     }
     virtual ~BaseDraw() = default;
-    virtual bool draw(const Matrix &mtx) = 0;
+    virtual bool draw(rhi::IRHICommandList* cmd, const Matrix &mtx) = 0;
     virtual void update() {}
     virtual bool isClick(const glm::vec3 &worldStart, const glm::vec3 &worldEnd, float &fDeep) { return false; }
 public:

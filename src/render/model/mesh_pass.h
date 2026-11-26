@@ -23,9 +23,9 @@ class MeshPass {
 public:
     MeshPass(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData);
     // 绘制入口（GL/VK 同一 RHI 路径）
-    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity = 1.0f);
+    bool Draw(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit, float opacity = 1.0f);
     // D3：opacity < 1 走 blend 管线变体（depthWrite 关 + srcAlpha 混合）
-    bool DrawRHI(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity = 1.0f);
+    bool DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, float opacity = 1.0f);
     // D2: RHI 拾取绘制（pick 管线 + ID 色直出；调用方管理 RT/pass）
     bool DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
                      const Matrix& viewProj, const std::vector<Matrix>& matModel,

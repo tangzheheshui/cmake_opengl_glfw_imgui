@@ -12,6 +12,8 @@
 #include <mutex>
 #include <map>
 #include <array>
+#include <memory>
+#include <vector>
 
 // 去后端化：本文件只负责「磁盘图片 → 内存解码缓存」。GL 上传已删
 // （两端统一走 RHI createTexture），GPU 侧资源由各绘制对象自持。

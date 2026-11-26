@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -74,6 +75,47 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
     objDuck->setPosition(3, {0, 0, -2});
     objDuck->setScale(3, 0.01);
     objDuck->setRotateY(3, 90);
+
+    // 压测场景（RHI_STRESS=N）：N 个独立鸭子 = N 次 draw call，量化 CPU 录制瓶颈。
+    // 配 RHI_FRAME_STATS=1 看 cull/record 分段；这里顺手关剔除，让全部对象都录制。
+    if (const char* stress = std::getenv("RHI_STRESS")) {
+        const int n = std::atoi(stress);
+        if (n > 0) {
+            RenderSystem::getInstance().settings().frustumCull = false;
+            const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n))));
+            for (int i = 0; i < n; ++i) {
+                auto m = std::make_shared<Model>();
+                m->LoadFile(engine::fs::utf8FromPath(
+                    engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+                m->setCount(1);
+                const int row = i / side, col = i % side;
+                m->setPosition(0, {(col - side * 0.5f) * 1.0f, 0.0f,
+                                   (row - side * 0.5f) * 1.0f});
+                m->setScale(0, 0.006f);
+                pScene->AddObj(m);
+            }
+            ENGINE_LOG_INFO("[STRESS] %d ducks (%d draw calls) in %dx%d grid, cull off",
+                            n, n, side, side);
+        }
+    }
+
+    // PBR 演示（RHI_PBR_DEMO=1）：一排不同金属度/粗糙度的鸭子，直观对比 PBR 效果
+    if (std::getenv("RHI_PBR_DEMO")) {
+        const float metallic[]  = {0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+        const float roughness[] = {0.9f, 0.3f, 0.05f, 0.3f, 0.05f};
+        for (int i = 0; i < 5; ++i) {
+            auto m = std::make_shared<Model>();
+            m->LoadFile(engine::fs::utf8FromPath(
+                engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+            m->setCount(1);
+            m->setPosition(0, {(i - 2) * 1.5f, 0.0f, 0.0f});
+            m->setScale(0, 0.01);
+            m->setMetallic(metallic[i]);
+            m->setRoughness(roughness[i]);
+            pScene->AddObj(m);
+        }
+        ENGINE_LOG_INFO("[PBR] 5 ducks: 粗糙木 -> 光滑塑料 -> 陶瓷 -> 金属 -> 镜面金属");
+    }
 
     // 光源模型
     auto objLight = std::make_shared<Model>();

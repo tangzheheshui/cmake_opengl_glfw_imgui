@@ -18,12 +18,12 @@ class CText : public BaseDraw {
 public:
     CText(std::weak_ptr<FontManager> fontMng);
     ~CText() {}
-    virtual bool draw(const Matrix &mtx) override;
+    virtual bool draw(rhi::IRHICommandList* cmd, const Matrix &mtx) override;
     bool isOverlayDraw() const override { return true; }   // D4：天空之后绘制
     void SetText(const std::string &str);
 private:
     // ---- D4: SDF 文字 RHI 路径（GL/VK 同一实现；图集 + 动态顶点 + blend 管线）----
-    bool drawRHI(const Matrix &mtx);
+    bool drawRHI(rhi::IRHICommandList* cmd, const Matrix &mtx);
     void ensureRHIResources(rhi::IRHIDevice* device);
 private:
     std::weak_ptr<FontManager> _fontMng;

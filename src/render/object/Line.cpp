@@ -29,9 +29,9 @@ void Line::setData(const std::vector<glm::vec3> &points, const std::vector<unsig
     m_rhiDirty = true;   // RHI 路径：变化后由展开重建 + 上传
 }
 
-bool Line::draw(const Matrix &mtx) {
+bool Line::draw(rhi::IRHICommandList* cmd, const Matrix &mtx) {
     // 去后端化：GL/VK 同一条 RHI 路径（宽线屏幕空间展开）
-    return drawRHI(mtx);
+    return drawRHI(cmd, mtx);
 }
 
 void Line::refreshRhiViewport() {
@@ -132,7 +132,7 @@ void Line::uploadRhiExpandData(rhi::IRHIDevice* device) {
     }
 }
 
-bool Line::drawRHI(const Matrix &mtx) {
+bool Line::drawRHI(rhi::IRHICommandList* cmd, const Matrix &mtx) {
     auto* device = RenderSystem::getInstance().rhiDevice();
     if (!device || m_points.empty() || m_indices.empty()) {
         return false;
@@ -158,7 +158,7 @@ bool Line::drawRHI(const Matrix &mtx) {
         return false;
     }
 
-    auto* cmd = device->commandList();
+    // cmd 由调用方传入（多线程录制：每批对象录到各自的命令列表）
     // 注：Line 在 NormalPass / RhiScene 的 render pass 内部被调用（GL 下状态机可嵌套；
     // Vulkan 后端时这里变为向当前 pass 录制，不再单独 beginRenderPass）
     cmd->bindPipeline(m_rhiPipeline);

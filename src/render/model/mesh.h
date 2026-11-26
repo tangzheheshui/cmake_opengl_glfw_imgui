@@ -25,10 +25,12 @@ class MeshPass;
 class Mesh {
 public:
     Mesh(std::shared_ptr<MeshData> meshData, std::shared_ptr<Material> matData);
-    bool Draw(const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit = 1, float opacity = 1.0f);
+    bool Draw(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matModel, const Matrix &mtx, uint32_t flags, int numViewpoit = 1, float opacity = 1.0f);
     void setBoneMat(std::shared_ptr<std::vector<glm::mat4>> mat);
     // 几何共享（合批前置）：模型解析缓存取回 MeshData 用
     std::shared_ptr<MeshData> meshData() const;
+    // PBR：取材质（供 Model::setMetallic/setRoughness 等写入 PBR 参数）
+    std::shared_ptr<Material> material() const;
     // D2: RHI 拾取绘制经 MeshPass（pick 管线由调用方传入）
     bool DrawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline,
                      const Matrix& viewProj, const std::vector<Matrix>& matModel, uint16_t pickID);

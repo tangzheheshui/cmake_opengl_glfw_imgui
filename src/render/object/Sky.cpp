@@ -33,7 +33,8 @@ static const float kSkyVertices[] = {
      1.0f, -1.0f, -1.0f,  -1.0f, -1.0f,  1.0f,   1.0f, -1.0f,  1.0f,
 };
 
-bool Sky::draw(const Matrix &mtx) {
+bool Sky::draw(rhi::IRHICommandList* cmd, const Matrix &mtx) {
+    (void)cmd; (void)mtx;   // Sky 走 drawRHI（RenderSystem 直接调），draw 仅占位
     return false;
 }
 
