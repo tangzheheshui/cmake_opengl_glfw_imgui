@@ -9,9 +9,10 @@
 
 namespace rhi {
 
-VkCommandList::VkCommandList(VulkanDevice* device, bool primary)
+VkCommandList::VkCommandList(VulkanDevice* device, bool primary, bool secondary)
     : _device(device)
-    , _primary(primary) {
+    , _primary(primary)
+    , _secondary(secondary) {
 }
 
 VkCommandList::~VkCommandList() {
@@ -41,7 +42,8 @@ bool VkCommandList::initCommandBuffers(uint32_t slots) {
     _cmdBuffers.resize(slots, VK_NULL_HANDLE);
     VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     ai.commandPool        = _pool;
-    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    ai.level              = _secondary ? VK_COMMAND_BUFFER_LEVEL_SECONDARY
+                                       : VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     ai.commandBufferCount = slots;
     if (vkAllocateCommandBuffers(_device->vkDeviceHandle(), &ai, _cmdBuffers.data()) != VK_SUCCESS) {
         ENGINE_LOG_ERROR("[VK] command list buffers alloc failed");
@@ -96,6 +98,23 @@ void VkCommandList::beginFrameSlot(uint32_t slot) {
     _used = false;
     if (vkResetCommandBuffer(_cmdBuffers[slot], 0) != VK_SUCCESS) return;
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    // secondary command buffer：继承主 pass 的 dynamic rendering 状态
+    VkCommandBufferInheritanceRenderingInfo inhRender{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO};
+    VkCommandBufferInheritanceInfo inh{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+    if (_secondary) {
+        const VkFormat colorFmt = _device->swapchainFormat();
+        const VkFormat depthFmt = _device->depthFormat();
+        const uint32_t samples  = _device->msaaSamples();
+        inhRender.colorAttachmentCount    = 1;
+        inhRender.pColorAttachmentFormats = &colorFmt;
+        inhRender.depthAttachmentFormat   = depthFmt;
+        inhRender.rasterizationSamples    = static_cast<VkSampleCountFlagBits>(samples);
+        inh.pNext = &inhRender;
+        bi.flags            = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+        bi.pInheritanceInfo = &inh;
+    }
+
     if (vkBeginCommandBuffer(_cmdBuffers[slot], &bi) != VK_SUCCESS) {
         ENGINE_LOG_ERROR("[VK] command list begin failed (slot %u)", slot);
         return;
@@ -117,6 +136,17 @@ void VkCommandList::beginFrameSlot(uint32_t slot) {
 
 void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     _used = true;
+    if (_secondary) {
+        // secondary 继承主 pass 的 rendering 状态，这里只标记，不 beginRendering。
+        // 但附件格式要继承（供 bindPipeline 的格式校验比对）
+        Format colorF = Format::BGRA8_SRGB;
+        Format depthF = Format::Depth32F;
+        FormatInfo::fromVkFormat(static_cast<uint32_t>(_device->swapchainFormat()), colorF);
+        FormatInfo::fromVkFormat(static_cast<uint32_t>(_device->depthFormat()), depthF);
+        recordPassFormats(true, colorF, true, depthF, _device->msaaSamples());
+        _inRenderPass = true;
+        return;
+    }
     // B4：离屏 RenderTarget 分支（dynamic rendering 附件来自 RT 资源）
     if (desc.renderTarget.valid()) {
         const VkRenderTargetRes& rt = _device->renderTargetRes(desc.renderTarget);
@@ -217,7 +247,8 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     depthAtt.imageView   = msaa ? _device->msaaDepthView() : _device->depthImageView();
     depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAtt.loadOp      = desc.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-    depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    // 多线程录制拆批：深度必须 STORE，后续批次的 LOAD 才能拿到连续深度
+    depthAtt.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
     // B3b Reversed-Z：VK 后端深度语义反转（1=近平面 / 0=远平面），清屏值固定 0（最远）。
     // GL 路径的 desc.depthClearValue=1 约定在此后端内转换，调用方无需感知。
     depthAtt.clearValue.depthStencil = {0.0f, 0};
@@ -229,6 +260,10 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments    = &colorAtt;
     ri.pDepthAttachment     = &depthAtt;
+    // 主列表：本 pass 可能 execute secondary command buffer（多线程录制）
+    if (_primary) {
+        ri.flags = VK_RENDERING_CONTENTS_INLINE_BIT_KHR | VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
+    }
 
     _device->recordBeginPassBarriers(commandBuffer(), desc.clearColor, desc.clearDepth);
     if (msaa) _device->recordMsaaBeginBarriers(commandBuffer());
@@ -258,6 +293,20 @@ void VkCommandList::beginRenderPass(const RenderPassDesc& desc) {
 
 void VkCommandList::endRenderPass() {
     if (!_inRenderPass) return;
+    // secondary 不拥有 render pass：只标记结束（命令缓冲的真正 end 在 endFrame）
+    if (_secondary) {
+        // secondary 不拥有 render pass：结束命令缓冲（execute 前必须 end）
+        _inRenderPass = false;
+        vkEndCommandBuffer(commandBuffer());
+        return;
+    }
+    // 主列表：先执行已录制的 secondary command buffer（多线程录制的内容）
+    {
+        const std::vector<VkCommandBuffer>& secs = _device->usedSecondaryBuffers();
+        if (!secs.empty()) {
+            vkCmdExecuteCommands(commandBuffer(), static_cast<uint32_t>(secs.size()), secs.data());
+        }
+    }
     // B4：离屏 RT 收尾 → 颜色附件转回 SHADER_READ_ONLY（采样/回读就绪）
     // V3-0：屏障必须记录在 vkCmdEndRendering 之后——rendering 实例内禁止
     // 图像布局转换（验证层 6 条 error 的来源），实例外记录即合法

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <thread>
 
 // ---- RHI 冒烟三角形几何（NDC 位置 + 颜色，交错存放）----
 namespace {
@@ -261,6 +262,15 @@ void RenderSystem::draw() {
     renderFrame();
 }
 
+// 惰性创建 secondary 列表（多线程录制；GL 退化为返回主列表，不加入）
+void RenderSystem::ensureSecondaryLists(int count) {
+    while (static_cast<int>(m_secondaryLists.size()) < count) {
+        rhi::IRHICommandList* l = m_rhiDevice->createSecondaryCommandList();
+        if (!l || l == m_rhiDevice->commandList()) break;
+        m_secondaryLists.push_back(l);
+    }
+}
+
 // Vulkan 场景帧内容（renderFrame 的 VK 分支；调用方已 beginFrame）
 void RenderSystem::drawRhiSceneContents() {
     if (!m_rhiDevice || !mCurScene) return;
@@ -331,21 +341,52 @@ void RenderSystem::drawRhiSceneContents() {
                 // D3/D4 顺序契约：不透明 → 天空盒 → overlay/透明（视深排序）。
                 // 透明与 overlay 不写深度，天空若在其后绘制会因深度测试覆盖
                 // 它们的输出（透明被覆盖 = 混合结果丢失；overlay 被覆盖 = 全消失）。
+                std::vector<std::shared_ptr<BaseDraw>> opaque, transparent;
                 for (auto& obj : drawList) {
-                    if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) continue;
-                    obj->draw(cmd, tileVP);
+                    if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw())
+                        transparent.push_back(obj);
+                    else
+                        opaque.push_back(obj);
                 }
+
+                // 多线程录制不透明对象（RHI_MT=<N>；VK 后端 + 对象足够多才启用）
+                static const int mtThreads = [] {
+                    const char* e = std::getenv("RHI_MT");
+                    return e ? std::atoi(e) : 0;
+                }();
+                if (mtThreads > 1 && opaque.size() > 64
+                    && m_rhiDevice->backend() == rhi::Backend::Vulkan) {
+                    ensureSecondaryLists(mtThreads - 1);
+                    const size_t n = opaque.size();
+                    const size_t perBatch = (n + mtThreads - 1) / mtThreads;
+                    std::vector<std::thread> workers;
+                    for (int b = 1; b < mtThreads; ++b) {
+                        const size_t s = b * perBatch;
+                        const size_t e = std::min(s + perBatch, n);
+                        if (s >= e) continue;
+                        rhi::IRHICommandList* list = m_secondaryLists[b - 1];
+                        workers.emplace_back([list, &opaque, s, e, tileVP]() {
+                            rhi::RenderPassDesc rp;   // secondary 忽略内容（继承主 pass）
+                            list->beginRenderPass(rp);
+                            for (size_t i = s; i < e; ++i) opaque[i]->draw(list, tileVP);
+                            list->endRenderPass();   // secondary：vkEndCommandBuffer
+                        });
+                    }
+                    // 主线程录第一批（主列表）
+                    for (size_t i = 0; i < std::min(perBatch, n); ++i)
+                        opaque[i]->draw(cmd, tileVP);
+                    for (auto& t : workers) t.join();
+                } else {
+                    for (auto& obj : opaque) obj->draw(cmd, tileVP);
+                }
+
                 // 天空盒（RHI 路径，M4.3；调试面板开关生效）
                 if (m_settings.drawSkyPass) {
                     if (auto sky = mCurScene->GetSkyBox()) {
                         sky->drawRHI(cmd, tileCam->GetViewMatrix(), tileCam->GetProjectMatrix());
                     }
                 }
-                for (auto& obj : drawList) {
-                    if (Scene::isTransparentDraw(obj) || obj->isOverlayDraw()) {
-                        obj->draw(cmd, tileVP);
-                    }
-                }
+                for (auto& obj : transparent) obj->draw(cmd, tileVP);
                 const auto tRec1 = std::chrono::high_resolution_clock::now();
                 g_stats.accum(std::chrono::duration<double, std::milli>(tCull1 - tCull0).count(),
                               std::chrono::duration<double, std::milli>(tRec1 - tCull1).count(),

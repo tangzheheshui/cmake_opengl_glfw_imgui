@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <set>
+#include <mutex>
 #include "RenderSystem.h"
 #include "rhi/IRHIDevice.h"
 #include "rhi/IRHICommandList.h"
@@ -65,6 +66,10 @@ bool MeshPass::Draw(rhi::IRHICommandList* cmd, const std::vector<Matrix> &matMod
 
 void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     if (m_rhiBuilt) return;
+    // 多线程录制：首次创建走共享缓存，加锁避免 s_geomCache/s_texCache 竞争
+    static std::mutex s_rhiResMutex;
+    std::lock_guard<std::mutex> lock(s_rhiResMutex);
+    if (m_rhiBuilt) return;   // double-check
 
     // 合批前置：同 MeshData 的几何资源全局共享（VB/IB/管线/纹理）。
     // 实例缓冲与绘制级 uniform block 是每对象状态，保持独立。
@@ -323,7 +328,7 @@ bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &mat
         if (tex.name == "texture_diffuse0")       slot = 0;
         else if (tex.name == "texture_specular0" || tex.name == "texture_metalrough0") slot = 1;
         else if (tex.name == "texture_normal0")   slot = 2;
-        else if (tex.name == "texture_ao0")       slot = 3;
+        else if (tex.name == "texture_ao0")       slot = 5;
         if (slot < 0) continue;
         if (tex.name == "texture_normal0" && md->tangents.empty()) {
             // GL 路径同样不创建无切线的法线纹理绑定
@@ -332,10 +337,16 @@ bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &mat
         rhi::TextureHandle th;
         // 合批前置：材质纹理按路径全局共享（同文件模型的纹理只建一次）
         static std::map<std::string, rhi::TextureHandle> s_rhiTexShared;
+        static std::mutex s_texSharedMutex;
         auto it = s_rhiTexShared.find(tex.filepath);
         if (it != s_rhiTexShared.end()) {
             th = it->second;
         } else {
+            std::lock_guard<std::mutex> lock(s_texSharedMutex);   // 多线程：写路径加锁
+            it = s_rhiTexShared.find(tex.filepath);              // double-check
+            if (it != s_rhiTexShared.end()) {
+                th = it->second;
+            } else {
             // 纹理数据源：优先材质自带数据；为空则取 TextureMng 预载数据
             // （模型外部纹理如 duckCM.tga 由 preloadTextures 递归加载）
             int tw = 0, thh = 0, ch = 0;
@@ -384,6 +395,7 @@ bool MeshPass::DrawRHI(rhi::IRHICommandList* cmd, const std::vector<Matrix> &mat
                 td.initialData = rgba.data();
                 th = device->createTexture(td);
                 s_rhiTexShared[tex.filepath] = th;
+            }
             }
         }
         if (th.valid()) {

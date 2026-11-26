@@ -114,6 +114,10 @@ public:
     // OpenGL 后端没有"延迟提交"，这里返回主列表本身，命令按调用顺序立即执行。
     virtual IRHICommandList* createCommandList() { return commandList(); }
 
+    // 多线程录制：secondary command buffer（继承主 render pass，被主列表
+    // vkCmdExecuteCommands 执行）。GL 后端退化为返回主列表（立即执行）。
+    virtual IRHICommandList* createSecondaryCommandList() { return commandList(); }
+
     // 结束一条附加列表的生命周期（必须是 createCommandList 的返回值；传主列表无效）。
     // 硬约束：附加列表由上层显式创建、显式销毁，不允许每帧隐式累积。
     // 若上层按帧创建，必须在该帧录制结束后配对调用本函数；设备会等 GPU 用完

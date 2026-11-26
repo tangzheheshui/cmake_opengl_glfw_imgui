@@ -86,6 +86,10 @@ public:
     IRHICommandList* commandList() override;
     // V3-6：附加命令列表（先于主列表提交；GL 后端返回主列表本身）
     IRHICommandList* createCommandList() override;
+    // 多线程录制：创建 secondary command buffer 列表（继承主 pass，被主列表 execute）
+    IRHICommandList* createSecondaryCommandList() override;
+    // 主列表 execute 用的：已录制的 secondary command buffer 集合
+    std::vector<VkCommandBuffer> usedSecondaryBuffers() const;
     // V3-9：结束附加列表生命周期（延迟到 GPU 用完再释放）
     void destroyCommandList(IRHICommandList* list) override;
     // 设备级命令池（一次性提交用；命令列表各自持有私有池）
@@ -267,6 +271,7 @@ private:
 
     std::unique_ptr<VkCommandList> _commandList;
     std::vector<std::unique_ptr<VkCommandList>> _extraLists;   // V3-6 附加列表
+    std::vector<std::unique_ptr<VkCommandList>> _secondaryLists;   // 多线程录制 secondary 列表
 
     // V3-6 自检（RHI_VK_MULTILIST=1）：附加列表写 0xAAAA、主列表写 0xBBBB，
     // 回读应为 0xBBBB（证明"附加列表先、主列表后"的提交顺序生效）

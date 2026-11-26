@@ -173,6 +173,7 @@ bool VulkanDevice::beginFrame() {
         // 命令列表各自归零本槽位的 uniform 环并开始录制
         if (_commandList) _commandList->beginFrameSlot(_frames.index());
         for (auto& l : _extraLists) l->beginFrameSlot(_frames.index());
+        for (auto& l : _secondaryLists) l->beginFrameSlot(_frames.index());
         multListSelfTest();
         commandListChurnTest();
         textureSlotChurnTest();
@@ -201,6 +202,7 @@ void VulkanDevice::endFrame() {
     if (_mlTest && _mlBuf) {
         vkCmdFillBuffer(cb, _mlBuf, 0, sizeof(uint32_t), 0xBBBBBBBBu);
     }
+    // secondary 已在录制线程 endRenderPass 里 end 命令缓冲（execute 前必须 end）
     recordPresentBarrier(cb);
     VK_CHECK(vkEndCommandBuffer(cb));
     cbs.push_back(cb);
@@ -503,6 +505,26 @@ IRHICommandList* VulkanDevice::createCommandList() {
     VkCommandList* raw = list.get();
     _extraLists.push_back(std::move(list));
     return raw;
+}
+
+// 多线程录制：secondary command buffer（继承主 pass，被主列表 vkCmdExecuteCommands 执行）
+IRHICommandList* VulkanDevice::createSecondaryCommandList() {
+    auto list = std::make_unique<VkCommandList>(this, /*primary=*/false, /*secondary=*/true);
+    if (!list->initCommandBuffers(_frames.slotCount())) {
+        ENGINE_LOG_WARN_ONCE("[VK] secondary command list init failed; fallback to primary");
+        return commandList();
+    }
+    VkCommandList* raw = list.get();
+    _secondaryLists.push_back(std::move(list));
+    return raw;
+}
+
+std::vector<VkCommandBuffer> VulkanDevice::usedSecondaryBuffers() const {
+    std::vector<VkCommandBuffer> out;
+    for (auto& l : _secondaryLists) {
+        if (l->used()) out.push_back(l->commandBuffer());
+    }
+    return out;
 }
 
 // 附加列表销毁：从列表集合摘除，对象（含命令缓冲）等 GPU 用完再释放。

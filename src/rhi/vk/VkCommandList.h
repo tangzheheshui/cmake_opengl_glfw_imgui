@@ -18,7 +18,7 @@ class VkCommandList final : public IRHICommandList {
 public:
     // primary=true 是设备的主列表（每帧最后提交）；false 是 createCommandList()
     // 拿到的附加列表（先于主列表提交）。
-    explicit VkCommandList(VulkanDevice* device, bool primary = true);
+    explicit VkCommandList(VulkanDevice* device, bool primary = true, bool secondary = false);
     ~VkCommandList() override;
 
     void beginRenderPass(const RenderPassDesc& desc) override;
@@ -69,6 +69,7 @@ private:
     // 通过 _device->pipelineLayout() 访问
 
     bool _primary = true;
+    bool _secondary = false;   // secondary command buffer：继承主 pass，多线程录制用
     // V3-14：每条列表自己的命令池。Vulkan 规定同一个命令池不能跨线程并发录制，
     // 多线程录制的前提就是"一线程一列表一命令池"。
     VkCommandPool _pool = VK_NULL_HANDLE;

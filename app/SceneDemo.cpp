@@ -117,6 +117,30 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         ENGINE_LOG_INFO("[PBR] 5 ducks: 粗糙木 -> 光滑塑料 -> 陶瓷 -> 金属 -> 镜面金属");
     }
 
+    // PBR 贴图演示（RHI_PBR_TEX=1）：6 个 ambientCG 材质（albedo/normal/metalrough/ao）
+    if (std::getenv("RHI_PBR_TEX")) {
+        const char* mats[] = {
+            "Bricks102_1K-JPG", "Metal048A_1K-JPG", "WoodSiding001_1K-JPG",
+            "Bamboo001C_1K-JPG", "Tiles001_1K-JPG", "WoodSiding006_1K-JPG",
+        };
+        const auto pbrDir = texPath / "pbr";
+        for (int i = 0; i < 6; ++i) {
+            auto m = std::make_shared<Model>();
+            m->LoadFile(engine::fs::utf8FromPath(
+                engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+            m->setCount(1);
+            m->setPosition(0, {(i - 2.5f) * 1.6f, 0.0f, 0.0f});
+            m->setScale(0, 0.011f);
+            const std::string base = engine::fs::utf8FromPath(pbrDir / std::string(mats[i]));
+            m->setPbrTexture("albedo",     base + "_Color.jpg");
+            m->setPbrTexture("normal",     base + "_NormalGL.jpg");
+            m->setPbrTexture("metalrough", base + "_MetalRough.jpg");
+            m->setPbrTexture("ao",         base + "_AmbientOcclusion.jpg");  // 无则静默用标量
+            pScene->AddObj(m);
+        }
+        ENGINE_LOG_INFO("[PBR_TEX] 6 ambientCG 材质：砖墙/金属/木×2/竹/瓷砖");
+    }
+
     // 光源模型
     auto objLight = std::make_shared<Model>();
     objLight->LoadFile(engine::fs::utf8FromPath(engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
