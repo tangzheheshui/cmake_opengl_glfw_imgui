@@ -634,6 +634,10 @@ void Model::setAlbedo(const glm::vec3& c) {
     for (auto& m : m_mesh) if (auto mat = m->material()) mat->diffuse = glm::vec4(c, 1.0f);
 }
 
+void Model::addMeshData(std::shared_ptr<MeshData> md, std::shared_ptr<Material> mat) {
+    if (md && mat) m_mesh.push_back(std::make_shared<Mesh>(md, mat));
+}
+
 void Model::setPbrTexture(const std::string& type, const std::string& path) {
     std::string uniformName;
     if (type == "albedo")          uniformName = "texture_diffuse0";

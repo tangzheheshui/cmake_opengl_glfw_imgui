@@ -67,6 +67,8 @@ public:
     // E5：解析缓存提取用（Model 为解析内核载体）
     const ModelData& getModelData() const { return m_model_data; }
     const std::vector<std::shared_ptr<Mesh>>& getMeshes() const { return m_mesh; }
+    // 注入程序生成的网格（如展示 PBR 纹理的立方体），不走 Assimp 加载
+    void addMeshData(std::shared_ptr<MeshData> md, std::shared_ptr<Material> mat);
     const AABB& getLocalAABB() const { return m_aabb; }
     // D2: RHI 拾取绘制（pick RT 内调用；调用方管理 pass 与回读）
     bool drawPickRHI(rhi::IRHICommandList* cmd, rhi::PipelineHandle pickPipeline, const Matrix& viewProj);

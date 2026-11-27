@@ -716,6 +716,7 @@ void GLDevice::endFrame() {
     // RHI_DUMP：整帧导出 PPM（与 VK 端同名设施；GL 原点是左下，导出时翻转行序）
     if (std::getenv("RHI_DUMP")) {
         std::vector<unsigned char> pix(static_cast<size_t>(w) * h * 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);   // 确保读默认帧缓冲（场景画面）
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pix.data());
         std::error_code ec;
         auto tmpDir = std::filesystem::temp_directory_path(ec);

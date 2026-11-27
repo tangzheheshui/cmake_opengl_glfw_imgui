@@ -17,9 +17,9 @@ public:
         light.position = {0.f, 10.0f, .0f};
         light.direction = -light.position;
         light.cosTheta = cos(degrees_to_radians(15));
-        float ambient = 0.4;
+        float ambient = 0.3;
         light.ambient = glm::vec3(ambient);
-        float diffuse = 0.7;
+        float diffuse = 1.0;   // PBR 直接光强度
         light.diffuse = glm::vec3(diffuse);
         float specular = 0;
         light.specular = glm::vec3(specular);

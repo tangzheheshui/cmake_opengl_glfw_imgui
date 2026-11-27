@@ -70,6 +70,8 @@ void MeshPass::ensureRHIResources(rhi::IRHIDevice* device) {
     static std::mutex s_rhiResMutex;
     std::lock_guard<std::mutex> lock(s_rhiResMutex);
     if (m_rhiBuilt) return;   // double-check
+    // setPbrTexture 在构造之后才加贴图，这里按当前材质重新判断是否走贴图着色器
+    m_textured = mathDataHasTexture(m_material);
 
     // 合批前置：同 MeshData 的几何资源全局共享（VB/IB/管线/纹理）。
     // 实例缓冲与绘制级 uniform block 是每对象状态，保持独立。

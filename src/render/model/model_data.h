@@ -28,9 +28,9 @@ struct MeshData {
 };
 
 struct Material {
-    glm::vec4 diffuse;
-    glm::vec4 specular;
-    glm::vec4 ambient;
+    glm::vec4 diffuse  = glm::vec4(1.0f);   // 白（albedo 乘数），否则贴图被垃圾值染色
+    glm::vec4 specular = glm::vec4(1.0f);
+    glm::vec4 ambient  = glm::vec4(1.0f);
     std::vector<Texture> textures;
     float shininess = 0.f;
     float shininess_strength = 0.f;

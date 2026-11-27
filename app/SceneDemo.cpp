@@ -22,6 +22,35 @@
 
 namespace SceneDemo {
 
+// 生成一个 UV 规整（0-1）的立方体 MeshData，展示 PBR 纹理用
+static std::shared_ptr<MeshData> makeCube(float size) {
+    auto md = std::make_shared<MeshData>();
+    const float h = size * 0.5f;
+    struct Face { glm::vec3 n, u, v; };
+    const Face faces[6] = {
+        {{ 1,0,0}, {0,0,-1}, {0,1,0}},
+        {{-1,0,0}, {0,0, 1}, {0,1,0}},
+        {{0, 1,0}, {1,0,0}, {0,0,1}},
+        {{0,-1,0}, {1,0,0}, {0,0,-1}},
+        {{0,0, 1}, {1,0,0}, {0,1,0}},
+        {{0,0,-1}, {-1,0,0}, {0,1,0}},
+    };
+    const glm::vec2 uvs[4] = {{0,0},{1,0},{1,1},{0,1}};
+    for (const auto& f : faces) {
+        const glm::vec3 corners[4] = {
+            (-f.u - f.v) * h, (f.u - f.v) * h, (f.u + f.v) * h, (-f.u + f.v) * h,
+        };
+        const uint32_t base = static_cast<uint32_t>(md->positions.size());
+        for (int i = 0; i < 4; ++i) {
+            md->positions.push_back(f.n * h + corners[i]);
+            md->normals.push_back(f.n);
+            md->coords.push_back(uvs[i]);
+        }
+        md->indices.insert(md->indices.end(), {base, base+1, base+2, base, base+2, base+3});
+    }
+    return md;
+}
+
 void buildScene(const std::string& rootPath, bool useVulkan) {
     (void)useVulkan;   // 地面已统一走 RHI（recordGroundRHI），此参数暂不再区分后端
     auto pScene = RenderSystem::getInstance().GetCurScene();
@@ -126,17 +155,17 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         const auto pbrDir = texPath / "pbr";
         for (int i = 0; i < 6; ++i) {
             auto m = std::make_shared<Model>();
-            m->LoadFile(engine::fs::utf8FromPath(
-                engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
+            // 用 UV 规整的立方体展示纹理（鸭子 UV 会把平面贴图扭曲，看不出砖缝/木纹）
+            auto mat = std::make_shared<Material>();
+            m->addMeshData(makeCube(1.6f), mat);
             m->setCount(1);
-            m->setPosition(0, {(i - 2.5f) * 3.5f, 0.0f, 15.0f});
-            m->setScale(0, 0.06f);
+            m->setPosition(0, {(i - 2.5f) * 2.6f, 0.0f, 15.0f});
+            m->setRotateY(0, 20.0f * (i - 2.5f));   // 稍转一点，看到两个面
             const std::string base = engine::fs::utf8FromPath(pbrDir / std::string(mats[i]));
             m->setPbrTexture("albedo",     base + "_Color.jpg");
             m->setPbrTexture("normal",     base + "_NormalGL.jpg");
             m->setPbrTexture("metalrough", base + "_MetalRough.jpg");
             m->setPbrTexture("ao",         base + "_AmbientOcclusion.jpg");  // 无则静默用标量
-            // 标量作为贴图 multiplier：默认 1.0 = 不缩放，面板滑杆可实时调
             m->setMetallic(1.0f);
             m->setRoughness(1.0f);
             pScene->AddObj(m);
