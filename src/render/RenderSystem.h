@@ -105,6 +105,7 @@ private:
 	void recordTexturedQuad(rhi::IRHICommandList* cmd);
 	void drawRhiSceneContents();    // 场景内容（GL/VK 同一套 RHI 序列）
 	void ensureSecondaryLists(int count);   // 惰性创建 secondary 列表（多线程录制）
+	void runAutoTest();                     // RHI_AUTOTEST=1：自动化交互自检（选中→换材质→点空白取消）
 	std::function<void(rhi::IRHICommandList*)> m_overlayFn;
 	std::vector<rhi::IRHICommandList*> m_secondaryLists;   // 多线程录制 secondary 列表（惰性创建）
 	std::unique_ptr<ThreadPool> m_threadPool;              // 持久录制线程池（惰性创建）

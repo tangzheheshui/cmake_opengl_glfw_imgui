@@ -240,6 +240,7 @@ void RenderSystem::renderFrame() {
     if (!m_rhiDevice->beginFrame()) return;
 
     // B4/D2 验证设施：渲染在帧内录制，回读推迟到下一帧（上一帧已提交）
+    runAutoTest();                  // RHI_AUTOTEST=1：交互自检
     runRenderTargetReadbackTest();
     runPickPass();
     drawRhiSceneContents();
@@ -269,6 +270,42 @@ void RenderSystem::ensureSecondaryLists(int count) {
         rhi::IRHICommandList* l = m_rhiDevice->createCommandList();
         if (!l || l == m_rhiDevice->commandList()) break;
         m_secondaryLists.push_back(l);
+    }
+}
+
+// RHI_AUTOTEST=1：自动化交互自检（选中 → 换材质 → 点空白取消选中）
+// 逐帧状态机；requestPick 异步（下一帧回读），帧号留有回读余量。
+void RenderSystem::runAutoTest() {
+    static bool enabled = (std::getenv("RHI_AUTOTEST") != nullptr);
+    static int frame = 0;
+    if (!enabled) return;
+    if (++frame == 40) {
+        requestPick(m_windowW / 2.0, m_windowH * 0.45);   // 点默认鸭子（屏幕中间）
+        ENGINE_LOG_INFO("[AUTOTEST] 点击鸭子");
+    } else if (frame == 44) {
+        ENGINE_LOG_INFO("[AUTOTEST] 选中结果 selectedId=%u", m_settings.selectedId);
+    } else if (frame == 46) {
+        if (m_settings.selectedId != 0 && mCurScene) {
+            for (auto& obj : mCurScene->GetObjs()) {
+                auto model = std::dynamic_pointer_cast<Model>(obj);
+                if (model && model->GetID() == m_settings.selectedId) {
+                    const std::string base = m_settings.assetRoot + "/res/textures/pbr/Bamboo001C_1K-JPG";
+                    model->setPbrTexture("albedo",     base + "_Color.jpg");
+                    model->setPbrTexture("normal",     base + "_NormalGL.jpg");
+                    model->setPbrTexture("metalrough", base + "_MetalRough.jpg");
+                    model->setPbrTexture("ao",         base + "_AmbientOcclusion.jpg");
+                    model->setMetallic(1.0f);
+                    model->setRoughness(1.0f);
+                    ENGINE_LOG_INFO("[AUTOTEST] 换材质(竹子)完成 id=%u", m_settings.selectedId);
+                    break;
+                }
+            }
+        }
+    } else if (frame == 50) {
+        requestPick(m_windowW * 0.97, m_windowH * 0.05);   // 点空白（右上角天空）
+        ENGINE_LOG_INFO("[AUTOTEST] 点击空白");
+    } else if (frame == 54) {
+        ENGINE_LOG_INFO("[AUTOTEST] 取消选中结果 selectedId=%u（应=0）", m_settings.selectedId);
     }
 }
 

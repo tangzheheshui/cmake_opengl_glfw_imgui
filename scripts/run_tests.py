@@ -111,6 +111,10 @@ def main():
     run({"RHI_BACKEND": "vulkan", "RHI_SMOKE": "1"}, "VK 冒烟三角形", forbid_log=[r"VK-VAL.*error"])
     run({"RHI_BACKEND": "vulkan", "RHI_RT_MSAA": "4"}, "VK 离屏MSAA", forbid_log=[r"VK-VAL.*error"])
 
+    # 8. 交互自检（选中 → 换材质 → 点空白取消）
+    run({"RHI_BACKEND": "vulkan", "RHI_AUTOTEST": "1", "RHI_EXIT_AFTER": "70"},
+        "交互自检(选中/换材质/取消)", must_log=["换材质(竹子)完成", "取消选中结果 selectedId=0"])
+
     # 报告
     print("\n" + "="*60)
     print(f"{'结果':6} 测试项")
