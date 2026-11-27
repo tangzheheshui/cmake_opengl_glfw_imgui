@@ -362,7 +362,8 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
 
     VkImageLayout curLayout = t.layout;   // lambda 内访问布局快照
     const VkImage image = t.image;
-    submitOneTime([this, image, curLayout, dst, w, h, mip = rb.mipLevel, layer = rb.arrayLayer, bytes](VkCommandBuffer cb) {
+    submitOneTime([this, image, curLayout, dst, w, h, mip = rb.mipLevel, layer = rb.arrayLayer,
+                   ox = rb.x, oy = rb.y, bytes](VkCommandBuffer cb) {
         // 当前布局（SHADER_READ_ONLY/UNDEFINED）→ TRANSFER_SRC
         VkImageMemoryBarrier toSrc{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -378,6 +379,8 @@ bool VulkanDevice::readbackTexture(TextureHandle tex, void* outData, size_t outS
                              0, nullptr, 0, nullptr, 1, &toSrc);
         VkBufferImageCopy region{};
         region.bufferRowLength = 0;   // 紧凑存放
+        // 关键：imageOffset 设为回读起点，否则总是从 (0,0) 复制（拾取坐标被忽略）
+        region.imageOffset = {static_cast<int32_t>(ox), static_cast<int32_t>(oy), 0};
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, layer, 1};
         region.imageExtent = {w, h, 1};
         vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, 1, &region);
