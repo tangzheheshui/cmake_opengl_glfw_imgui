@@ -45,6 +45,8 @@ struct RenderSettings {
     // 高亮颜色固定淡蓝，强度面板可调（0 = 关）
     uint16_t selectedId        = 0;
     float    highlightStrength = 0.40f;
+    // 拾取诊断：最近一次点击的结果（-1=未尝试, 0=未命中, >0=命中的对象 ID）
+    int      lastPickResult    = -1;
     // 悬停高亮（D8 扩展）：鼠标悬停对象淡提示色；hoverEnabled=false 关闭拾取开销
     bool     hoverEnabled      = true;
     uint16_t hoverId           = 0;

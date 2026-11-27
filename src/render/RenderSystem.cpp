@@ -891,20 +891,31 @@ void RenderSystem::runPickPass() {
 
     unsigned char px[4] = {0, 0, 0, 0};
     bool hit = readAt(static_cast<int>(m_pickReq.x), static_cast<int>(m_pickReq.y), px) && px[3] >= 128;
-    // 容错：中心没命中时，回读 7x7 邻域找最近命中（鸭子形状不规则，点边缘/间隙也能选中）
+    // 容错：中心没命中时，一次回读 21x21 邻域找最近命中（鸭子形状不规则，点边缘/间隙也能选中）
     if (!hit) {
-        for (int r = 1; r <= 3 && !hit; ++r) {
-            for (int dy = -r; dy <= r && !hit; ++dy) {
-                for (int dx = -r; dx <= r; ++dx) {
-                    if (dx == 0 && dy == 0) continue;
-                    const int nx = static_cast<int>(m_pickReq.x) + dx;
-                    const int ny = static_cast<int>(m_pickReq.y) + dy;
-                    if (nx < 0 || nx >= fbW || ny < 0 || ny >= fbH) continue;
-                    unsigned char q[4] = {0, 0, 0, 0};
-                    if (readAt(nx, ny, q) && q[3] >= 128) {
-                        hit = true;
-                        px[0] = q[0]; px[1] = q[1]; px[2] = q[2]; px[3] = q[3];
-                    }
+        const int R = 10;
+        const int cx = static_cast<int>(m_pickReq.x), cy = static_cast<int>(m_pickReq.y);
+        const int x0 = std::max(0, cx - R), y0 = std::max(0, cy - R);
+        const int x1 = std::min(fbW - 1, cx + R), y1 = std::min(fbH - 1, cy + R);
+        const int rw = x1 - x0 + 1, rh = y1 - y0 + 1;
+        std::vector<unsigned char> region(static_cast<size_t>(rw) * rh * 4);
+        rhi::ReadbackDesc rr;
+        rr.x = static_cast<uint32_t>(x0);
+        rr.y = (m_rhiDevice->backend() == rhi::Backend::Vulkan)
+                   ? static_cast<uint32_t>(y0)
+                   : static_cast<uint32_t>(fbH - 1 - y1);
+        rr.width = static_cast<uint32_t>(rw);
+        rr.height = static_cast<uint32_t>(rh);
+        if (m_rhiDevice->readbackTexture(colorTex, region.data(), region.size(), rr)) {
+            int best = 1 << 30;
+            for (int ry = 0; ry < rh; ++ry) {
+                for (int rx = 0; rx < rw; ++rx) {
+                    const unsigned char* q = &region[(static_cast<size_t>(ry) * rw + rx) * 4];
+                    if (q[3] < 128) continue;
+                    const int dx = (x0 + rx) - cx;
+                    const int dy = (y0 + ry) - cy;
+                    const int d = dx * dx + dy * dy;
+                    if (d < best) { best = d; px[0]=q[0]; px[1]=q[1]; px[2]=q[2]; px[3]=q[3]; hit = true; }
                 }
             }
         }
@@ -912,6 +923,7 @@ void RenderSystem::runPickPass() {
     if (!hit) {
         if (!m_pickReq.isHover) {
             ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", m_pickReq.x, m_pickReq.y);
+            m_settings.lastPickResult = 0;   // 诊断：未命中
         }
         if (m_pickReq.isHover) {
             m_settings.hoverId = 0;   // 悬停落空 → 清除提示
@@ -930,6 +942,7 @@ void RenderSystem::runPickPass() {
         if (model && model->GetID() == hitId) {
             ENGINE_LOG_INFO("[PICK] HIT id=%u (Model) -> selected", hitId);
             m_settings.selectedId = hitId;   // D8：选中高亮
+            m_settings.lastPickResult = static_cast<int>(hitId);   // 诊断：命中
             return;
         }
     }
@@ -1078,7 +1091,8 @@ void RenderSystem::onMouseLeftUp(double x, double y) {
     double distance = std::sqrt(dx * dx + dy * dy);
 
     // 判断是否为 Click（时间短 & 移动距离小）
-    if (duration < 200 && distance < 5) {  // 200ms内 & 移动距离 < 5 像素
+    ENGINE_LOG_INFO("[CLICK] release dur=%.1fms dist=%.1fpx at(%.0f,%.0f)", duration, distance, x, y);
+    if (duration < 300 && distance < 20) {  // 300ms内 & 移动 < 20 像素（放宽，点小模型手抖也能选中）
         ENGINE_LOG_INFO("Click detected at (%.1f, %.1f)", x, y);
         requestPick(x, y);   // D2: RHI 拾取（两端同一 ID 图路径）
     }

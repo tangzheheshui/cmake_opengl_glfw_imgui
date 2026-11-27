@@ -68,6 +68,12 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
             ImGui::TextDisabled("法线 (1,0,0)：保留 dot(n,p)+d >= 0 一侧");
         }
         ImGui::Separator();
+        if (settings.lastPickResult < 0)
+            ImGui::Text("最近拾取: 未点击");
+        else if (settings.lastPickResult == 0)
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "最近拾取: 未命中（点偏了）");
+        else
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "最近拾取: 命中 id=%d", settings.lastPickResult);
         ImGui::Text("选中对象 ID: %u%s", settings.selectedId,
                     settings.selectedId == 0 ? "（无）" : "");
         if (settings.selectedId != 0) {

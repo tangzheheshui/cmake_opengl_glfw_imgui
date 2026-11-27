@@ -129,8 +129,8 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
             m->LoadFile(engine::fs::utf8FromPath(
                 engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
             m->setCount(1);
-            m->setPosition(0, {(i - 2.5f) * 3.0f, 0.0f, 15.0f});
-            m->setScale(0, 0.04f);
+            m->setPosition(0, {(i - 2.5f) * 3.5f, 0.0f, 15.0f});
+            m->setScale(0, 0.06f);
             const std::string base = engine::fs::utf8FromPath(pbrDir / std::string(mats[i]));
             m->setPbrTexture("albedo",     base + "_Color.jpg");
             m->setPbrTexture("normal",     base + "_NormalGL.jpg");
