@@ -51,6 +51,58 @@ static std::shared_ptr<MeshData> makeCube(float size) {
     return md;
 }
 
+// 生成长方体，UV 按 tileSize（世界单位/每块纹理）平铺重复，用于院子地面/墙面
+static std::shared_ptr<MeshData> makeBox(const glm::vec3& size, float tileSize) {
+    auto md = std::make_shared<MeshData>();
+    const glm::vec3 h = size * 0.5f;
+    struct Face { glm::vec3 n, u, v; };
+    const Face faces[6] = {
+        {{ 1,0,0}, {0,0,-1}, {0,1,0}},
+        {{-1,0,0}, {0,0, 1}, {0,1,0}},
+        {{ 0,1,0}, {1,0,0},  {0,0,1}},
+        {{ 0,-1,0},{1,0,0},  {0,0,-1}},
+        {{ 0,0,1}, {1,0,0},  {0,1,0}},
+        {{ 0,0,-1},{-1,0,0}, {0,1,0}},
+    };
+    for (const auto& f : faces) {
+        const float hn = glm::dot(glm::abs(f.n), h);   // 沿法线半长
+        const float hu = glm::dot(glm::abs(f.u), h);   // 沿 u 半长
+        const float hv = glm::dot(glm::abs(f.v), h);   // 沿 v 半长
+        const glm::vec3 c = f.n * hn;                  // 面中心
+        const glm::vec3 corners[4] = {
+            c - f.u * hu - f.v * hv,
+            c + f.u * hu - f.v * hv,
+            c + f.u * hu + f.v * hv,
+            c - f.u * hu + f.v * hv,
+        };
+        const glm::vec2 uv = glm::vec2(2.0f * hu, 2.0f * hv) / tileSize;
+        const glm::vec2 uvs[4] = {{0,0},{uv.x,0},{uv.x,uv.y},{0,uv.y}};
+        const uint32_t base = static_cast<uint32_t>(md->positions.size());
+        for (int i = 0; i < 4; ++i) {
+            md->positions.push_back(corners[i]);
+            md->normals.push_back(f.n);
+            md->coords.push_back(uvs[i]);
+        }
+        md->indices.insert(md->indices.end(), {base, base+1, base+2, base, base+2, base+3});
+    }
+    return md;
+}
+
+// 贴满 ambientCG PBR 贴图的长方体 Model（base = 材质路径前缀，如 ".../pbr/Bricks102_1K-JPG"）
+static std::shared_ptr<Model> makePbrBox(const std::string& base, const glm::vec3& size,
+                                         const glm::vec3& pos, float tileSize) {
+    auto m = std::make_shared<Model>();
+    auto mat = std::make_shared<Material>();
+    m->addMeshData(makeBox(size, tileSize), mat);
+    m->setCount(1);
+    m->setPosition(0, pos);
+    m->setPbrTexture("albedo",     base + "_Color.jpg");
+    m->setPbrTexture("normal",     base + "_NormalGL.jpg");
+    m->setPbrTexture("metalrough", base + "_MetalRough.jpg");
+    m->setPbrTexture("ao",         base + "_AmbientOcclusion.jpg");  // 无 AO 贴图则静默用标量
+    return m;
+}
+
 void buildScene(const std::string& rootPath, bool useVulkan) {
     (void)useVulkan;   // 地面已统一走 RHI（recordGroundRHI），此参数暂不再区分后端
     auto pScene = RenderSystem::getInstance().GetCurScene();
@@ -173,6 +225,42 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         ENGINE_LOG_INFO("[PBR_TEX] 6 ambientCG 材质：砖墙/金属/木×2/竹/瓷砖");
     }
 
+    // 院子场景（RHI_COURTYARD=1）：石头铺地 + 砖/竹/木三面墙 + 金属摆件 + 木长凳，
+    // 直接用 ambientCG PBR 材质，无需点击选择
+    if (std::getenv("RHI_COURTYARD")) {
+        const auto pbrDir = texPath / "pbr";
+        auto pbrBase = [&](const char* name) {
+            return engine::fs::utf8FromPath(pbrDir / std::string(name));
+        };
+        // 光源斜打（上方偏相机方向），地面和墙面都被照亮；锥放宽到覆盖整个院子；
+        // 环境光调亮一点，让墙面（与光线几乎相切）也能看清纹理
+        Light::GlobalLight().setPosition({0.f, 16.0f, 26.0f});
+        Light::GlobalLight().cosTheta = cos(degrees_to_radians(40.0f));
+        Light::GlobalLight().ambient = glm::vec3(0.45f);
+        // 关掉默认阴影接收面（灰色棋盘格），别让它从石头地面下露出来
+        RenderSystem::getInstance().settings().drawShadowPass = false;
+
+        // 石头地面（瓷砖）
+        pScene->AddObj(makePbrBox(pbrBase("Tiles001_1K-JPG"),
+                                  {20.0f, 0.4f, 20.0f}, {0.f, -0.2f, 0.f}, 1.6f));
+        // 砖墙（后）
+        pScene->AddObj(makePbrBox(pbrBase("Bricks102_1K-JPG"),
+                                  {18.0f, 4.5f, 0.5f}, {0.f, 2.25f, -9.0f}, 1.5f));
+        // 竹墙（左）
+        pScene->AddObj(makePbrBox(pbrBase("Bamboo001C_1K-JPG"),
+                                  {0.5f, 4.5f, 18.0f}, {-9.0f, 2.25f, 0.f}, 1.5f));
+        // 木墙（右）
+        pScene->AddObj(makePbrBox(pbrBase("WoodSiding001_1K-JPG"),
+                                  {0.5f, 4.5f, 18.0f}, {9.0f, 2.25f, 0.f}, 1.5f));
+        // 金属摆件（中心偏前）
+        pScene->AddObj(makePbrBox(pbrBase("Metal048A_1K-JPG"),
+                                  {3.0f, 1.4f, 2.0f}, {0.f, 0.7f, 2.0f}, 1.5f));
+        // 深木长凳（近处左）
+        pScene->AddObj(makePbrBox(pbrBase("WoodSiding006_1K-JPG"),
+                                  {4.0f, 0.9f, 1.6f}, {-3.0f, 0.45f, 6.0f}, 1.5f));
+        ENGINE_LOG_INFO("[COURTYARD] 石头地面 + 砖/竹/木三面墙 + 金属摆件 + 木长凳");
+    }
+
     // 光源模型
     auto objLight = std::make_shared<Model>();
     objLight->LoadFile(engine::fs::utf8FromPath(engine::fs::pathFromUtf8(rootPath) / "res" / "model" / "duck.dae"));
@@ -209,11 +297,14 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         pScene->AddObj(objShadowCaster);
     }
 
-    pScene->AddObj(objDuck);
+    // 院子场景不叠加默认的鸭子群/坐标轴（只保留天空盒与光源标记）
+    if (!std::getenv("RHI_COURTYARD")) {
+        pScene->AddObj(objDuck);
+        pScene->AddObj(line_x);
+        pScene->AddObj(line_y);
+        pScene->AddObj(line_z);
+    }
     pScene->AddObj(objLight);
-    pScene->AddObj(line_x);
-    pScene->AddObj(line_y);
-    pScene->AddObj(line_z);
     pScene->SetSkyBox(objSky);
 
     // C2 收尾验证开关：RHI_VIEWPORT_CAMS=1 加三个辅助相机（配 RHI_VIEWPORTS=4
@@ -276,7 +367,10 @@ void buildScene(const std::string& rootPath, bool useVulkan) {
         auto fontMng = RenderSystem::getInstance().GetFontMng();
         auto objText = std::make_shared<CText>(std::weak_ptr<FontManager>(fontMng));
         objText->SetText("test");
-        pScene->AddObj(objText);
+        // 院子场景不放调试文字（"test" 红色大字会遮住材质展示）
+        if (!std::getenv("RHI_COURTYARD")) {
+            pScene->AddObj(objText);
+        }
     }
 }
 
