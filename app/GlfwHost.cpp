@@ -318,10 +318,12 @@ void GlfwHost::framebufferSizeCallback(GLFWwindow*, int width, int height) {
 }
 
 void GlfwHost::mouseCallback(GLFWwindow*, double xpos, double ypos) {
+    if (ImGui::GetIO().WantCaptureMouse) return;   // 鼠标在 UI 上，不透传给场景
     RenderSystem::getInstance().onMouseMove(xpos, ypos);
 }
 
 void GlfwHost::scrollCallback(GLFWwindow*, double xoffset, double yoffset) {
+    if (ImGui::GetIO().WantCaptureMouse) return;   // 鼠标在 UI 上，不透传给场景
     RenderSystem::getInstance().onMouseMiddleScroll(xoffset, yoffset);
 }
 
@@ -334,6 +336,8 @@ void GlfwHost::keyCallback(GLFWwindow* window, int key, int scancode, int action
 
 void GlfwHost::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
     (void)mods;
+    // ImGui 捕获鼠标（点菜单栏/面板）时，不透传给场景拾取/相机
+    if (ImGui::GetIO().WantCaptureMouse) return;
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
     auto& rs = RenderSystem::getInstance();
