@@ -47,8 +47,9 @@ struct RenderSettings {
     float    highlightStrength = 0.40f;
     // 拾取诊断：最近一次点击的结果（-1=未尝试, 0=未命中, >0=命中的对象 ID）
     int      lastPickResult    = -1;
-    // 悬停高亮（D8 扩展）：鼠标悬停对象淡提示色；hoverEnabled=false 关闭拾取开销
-    bool     hoverEnabled      = true;
+    // 悬停高亮（D8 扩展）：鼠标悬停对象淡提示色；默认关（频繁 vkQueueWaitIdle 回读
+    // 既卡又易崩）；需要时面板手动开
+    bool     hoverEnabled      = false;
     uint16_t hoverId           = 0;
     float    hoverStrength     = 0.18f;
 
