@@ -110,6 +110,7 @@ bool RenderSystem::init(const InitDesc& desc, std::string* outError) {
         m_rhiDevice = m_ownedDevice.get();
     }
     _backend    = m_rhiDevice->backend();
+    m_settings.assetRoot = desc.assetRoot;   // 面板换材质拼接贴图路径用
     m_frameW  = desc.frameWidth;
     m_frameH  = desc.frameHeight;
     m_windowW = desc.windowWidth  ? desc.windowWidth  : desc.frameWidth;
@@ -924,6 +925,7 @@ void RenderSystem::runPickPass() {
         if (!m_pickReq.isHover) {
             ENGINE_LOG_INFO("[PICK] no hit at (%u,%u)", m_pickReq.x, m_pickReq.y);
             m_settings.lastPickResult = 0;   // 诊断：未命中
+            m_settings.selectedId = 0;       // 点击空白 → 取消选中（清除高亮）
         }
         if (m_pickReq.isHover) {
             m_settings.hoverId = 0;   // 悬停落空 → 清除提示

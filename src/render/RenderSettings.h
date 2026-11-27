@@ -5,11 +5,15 @@
 //  原则：只放"渲染管线级"开关。业务层（相机/光照）参数下一阶段再接入。
 //
 #include <cstdint>
+#include <string>
 
 #ifndef RenderSettings_h
 #define RenderSettings_h
 
 struct RenderSettings {
+    // 资源根目录（含 res/ 的绝对路径；面板换材质时拼接贴图路径用）
+    std::string assetRoot;
+
     // ---- RHI ----
     bool rhiSmokeTriangle = false;  // RHI 冒烟测试三角形（验证抽象层链路）
     bool rhiTexQuad = false;        // RHI 贴图四边形（M4：验证纹理采样 + 描述符链路）

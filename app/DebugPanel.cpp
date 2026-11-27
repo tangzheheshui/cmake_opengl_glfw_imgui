@@ -84,7 +84,7 @@ void DebugPanel::draw(RenderSettings& settings, const rhi::IRHIDevice* device) {
             static int curMat = -1;
             if (ImGui::Combo("换材质", &curMat, matNames, 6)) {
                 if (curMat >= 0 && curMat < 6) {
-                    const std::string base = std::string("res/textures/pbr/") + matPrefix[curMat];
+                    const std::string base = settings.assetRoot + "/res/textures/pbr/" + matPrefix[curMat];
                     selModel->setPbrTexture("albedo",     base + "_Color.jpg");
                     selModel->setPbrTexture("normal",     base + "_NormalGL.jpg");
                     selModel->setPbrTexture("metalrough", base + "_MetalRough.jpg");
